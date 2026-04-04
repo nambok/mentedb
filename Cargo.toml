@@ -12,6 +12,7 @@ members = [
     "crates/mentedb-cognitive",
     "crates/mentedb-consolidation",
     "crates/mentedb-embedding",
+    "crates/mentedb-extraction",
     "crates/mentedb-replication",
 ]
 resolver = "2"
@@ -71,3 +72,4 @@ mentedb-server = { path = "crates/mentedb-server", version = "0.1.1" }
 mentedb-cognitive = { path = "crates/mentedb-cognitive", version = "0.1.1" }
 mentedb-consolidation = { path = "crates/mentedb-consolidation", version = "0.1.1" }
 mentedb-embedding = { path = "crates/mentedb-embedding", version = "0.1.1" }
+mentedb-extraction = { path = "crates/mentedb-extraction", version = "0.1.1" }
