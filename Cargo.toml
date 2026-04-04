@@ -46,6 +46,9 @@ lz4_flex = "0.11"
 # Hashing & Checksums
 crc32fast = "1"
 
+# Testing
+tempfile = "3"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = "0.3"
