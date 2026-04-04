@@ -7,6 +7,8 @@
 use mentedb_core::MemoryNode;
 use mentedb_core::memory::MemoryType;
 
+use crate::budget::estimate_tokens;
+
 /// A memory with an associated relevance score.
 #[derive(Debug, Clone)]
 pub struct ScoredMemory {
@@ -50,13 +52,43 @@ pub struct ContextBlock {
     pub estimated_tokens: usize,
 }
 
+/// Thresholds for classifying memories into attention zones.
+#[derive(Debug, Clone)]
+pub struct ZoneThresholds {
+    /// Minimum score to place a memory in the Critical zone (default: 0.8).
+    pub critical_score: f32,
+    /// Minimum salience to place a memory in the Critical zone (default: 0.7).
+    pub critical_salience: f32,
+    /// Minimum score to place a memory in the Primary zone (default: 0.5).
+    pub primary_score: f32,
+    /// Minimum score to place a memory in the Supporting zone (default: 0.2).
+    pub supporting_score: f32,
+}
+
+impl Default for ZoneThresholds {
+    fn default() -> Self {
+        Self {
+            critical_score: 0.8,
+            critical_salience: 0.7,
+            primary_score: 0.5,
+            supporting_score: 0.2,
+        }
+    }
+}
+
 /// Arranges memories into attention zones following the U-curve pattern.
 #[derive(Debug)]
-pub struct ContextLayout;
+pub struct ContextLayout {
+    thresholds: ZoneThresholds,
+}
 
 impl ContextLayout {
+    pub fn new(thresholds: ZoneThresholds) -> Self {
+        Self { thresholds }
+    }
+
     /// Arrange scored memories into attention-optimized zones.
-    pub fn arrange(memories: Vec<ScoredMemory>) -> Vec<ContextBlock> {
+    pub fn arrange(&self, memories: Vec<ScoredMemory>) -> Vec<ContextBlock> {
         let mut opening = Vec::new();
         let mut critical = Vec::new();
         let mut primary = Vec::new();
@@ -64,7 +96,7 @@ impl ContextLayout {
         let mut closing = Vec::new();
 
         for sm in memories {
-            let zone = Self::classify(&sm);
+            let zone = self.classify(&sm);
             match zone {
                 AttentionZone::Opening => opening.push(sm),
                 AttentionZone::Critical => critical.push(sm),
@@ -101,7 +133,7 @@ impl ContextLayout {
     }
 
     /// Classify a memory into an attention zone based on its type, salience, and score.
-    fn classify(sm: &ScoredMemory) -> AttentionZone {
+    fn classify(&self, sm: &ScoredMemory) -> AttentionZone {
         let mem = &sm.memory;
 
         // Anti-patterns and corrections go to Opening (highest attention)
@@ -111,17 +143,17 @@ impl ContextLayout {
         }
 
         // High salience + high score -> Critical
-        if sm.score >= 0.8 && mem.salience >= 0.7 {
+        if sm.score >= self.thresholds.critical_score && mem.salience >= self.thresholds.critical_salience {
             return AttentionZone::Critical;
         }
 
         // Moderate score -> Primary
-        if sm.score >= 0.5 {
+        if sm.score >= self.thresholds.primary_score {
             return AttentionZone::Primary;
         }
 
         // Low score but still included
-        if sm.score >= 0.2 {
+        if sm.score >= self.thresholds.supporting_score {
             return AttentionZone::Supporting;
         }
 
@@ -132,11 +164,14 @@ impl ContextLayout {
     fn estimate_block_tokens(memories: &[ScoredMemory]) -> usize {
         memories
             .iter()
-            .map(|sm| {
-                let words = sm.memory.content.split_whitespace().count();
-                ((words as f64) * 1.3).ceil() as usize
-            })
+            .map(|sm| estimate_tokens(&sm.memory.content))
             .sum()
+    }
+}
+
+impl Default for ContextLayout {
+    fn default() -> Self {
+        Self::new(ZoneThresholds::default())
     }
 }
 
@@ -159,40 +194,44 @@ mod tests {
 
     #[test]
     fn test_antipattern_goes_to_opening() {
+        let layout = ContextLayout::default();
         let memories = vec![ScoredMemory {
             memory: make_memory("never use eval", MemoryType::AntiPattern, 0.9),
             score: 0.95,
         }];
-        let blocks = ContextLayout::arrange(memories);
+        let blocks = layout.arrange(memories);
         let opening = blocks.iter().find(|b| b.zone == AttentionZone::Opening).unwrap();
         assert_eq!(opening.memories.len(), 1);
     }
 
     #[test]
     fn test_high_score_goes_to_critical() {
+        let layout = ContextLayout::default();
         let memories = vec![ScoredMemory {
             memory: make_memory("user prefers dark mode", MemoryType::Semantic, 0.9),
             score: 0.85,
         }];
-        let blocks = ContextLayout::arrange(memories);
+        let blocks = layout.arrange(memories);
         let critical = blocks.iter().find(|b| b.zone == AttentionZone::Critical).unwrap();
         assert_eq!(critical.memories.len(), 1);
     }
 
     #[test]
     fn test_low_score_goes_to_supporting() {
+        let layout = ContextLayout::default();
         let memories = vec![ScoredMemory {
             memory: make_memory("background info", MemoryType::Episodic, 0.3),
             score: 0.3,
         }];
-        let blocks = ContextLayout::arrange(memories);
+        let blocks = layout.arrange(memories);
         let supporting = blocks.iter().find(|b| b.zone == AttentionZone::Supporting).unwrap();
         assert_eq!(supporting.memories.len(), 1);
     }
 
     #[test]
     fn test_arrange_produces_all_zones() {
-        let blocks = ContextLayout::arrange(vec![]);
+        let layout = ContextLayout::default();
+        let blocks = layout.arrange(vec![]);
         assert_eq!(blocks.len(), 5);
     }
 }

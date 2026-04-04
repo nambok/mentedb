@@ -9,6 +9,7 @@ description = "Core data types for MenteDB"
 [dependencies]
 uuid = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 bytes = { workspace = true }
 bytemuck = { workspace = true }

@@ -50,6 +50,7 @@ crc32fast = "1"
 
 # Testing
 tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
 
 # Logging
 tracing = "0.1"

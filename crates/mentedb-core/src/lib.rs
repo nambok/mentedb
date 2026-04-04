@@ -1,6 +1,7 @@
 //! MenteDB Core — fundamental types for the mind database.
 
 pub mod agent;
+pub mod config;
 pub mod conflict;
 pub mod edge;
 pub mod error;
@@ -12,6 +13,7 @@ pub mod tier;
 pub mod types;
 
 pub use agent::{Agent, AgentRegistry};
+pub use config::MenteConfig;
 pub use conflict::{Conflict, ConflictResolver, ConflictVersion, Resolution};
 pub use edge::MemoryEdge;
 pub use error::MenteError;

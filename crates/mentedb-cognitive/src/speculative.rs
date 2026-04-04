@@ -1,7 +1,5 @@
 use mentedb_core::types::{MemoryId, Timestamp};
 
-const MAX_CACHE_SIZE: usize = 10;
-
 #[derive(Debug, Clone)]
 pub struct CacheEntry {
     pub topic: String,
@@ -23,6 +21,8 @@ pub struct CacheStats {
 pub struct SpeculativeCache {
     entries: Vec<CacheEntry>,
     stats: CacheStats,
+    max_size: usize,
+    hit_threshold: f32,
 }
 
 fn keyword_overlap_score(query: &str, topic: &str) -> f32 {
@@ -53,10 +53,12 @@ fn keyword_overlap_score(query: &str, topic: &str) -> f32 {
 }
 
 impl SpeculativeCache {
-    pub fn new() -> Self {
+    pub fn new(max_size: usize, hit_threshold: f32) -> Self {
         Self {
             entries: Vec::new(),
             stats: CacheStats::default(),
+            max_size,
+            hit_threshold,
         }
     }
 
@@ -78,7 +80,7 @@ impl SpeculativeCache {
 
             if let Some((context_text, memory_ids)) = builder(&topic) {
                 // Evict LRU if at capacity
-                if self.entries.len() >= MAX_CACHE_SIZE {
+                if self.entries.len() >= self.max_size {
                     self.evict_lru();
                 }
 
@@ -111,7 +113,7 @@ impl SpeculativeCache {
             }
         }
 
-        if best_score > 0.5 {
+        if best_score > self.hit_threshold {
             if let Some(idx) = best_idx {
                 self.entries[idx].hit_count += 1;
                 self.entries[idx].last_accessed = now;
@@ -156,7 +158,7 @@ impl SpeculativeCache {
 
 impl Default for SpeculativeCache {
     fn default() -> Self {
-        Self::new()
+        Self::new(10, 0.5)
     }
 }
 
@@ -166,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_pre_assemble_and_hit() {
-        let mut cache = SpeculativeCache::new();
+        let mut cache = SpeculativeCache::default();
         cache.pre_assemble(
             vec!["database schema design".to_string(), "API authentication".to_string()],
             |topic| Some((format!("Context for {}", topic), vec![uuid::Uuid::new_v4()])),
@@ -181,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_cache_miss() {
-        let mut cache = SpeculativeCache::new();
+        let mut cache = SpeculativeCache::default();
         cache.pre_assemble(
             vec!["database schema".to_string()],
             |topic| Some((format!("Context for {}", topic), vec![])),
@@ -194,20 +196,20 @@ mod tests {
 
     #[test]
     fn test_lru_eviction() {
-        let mut cache = SpeculativeCache::new();
+        let mut cache = SpeculativeCache::new(10, 0.5);
         for i in 0..12 {
             cache.pre_assemble(
                 vec![format!("topic {}", i)],
                 |topic| Some((format!("Context for {}", topic), vec![])),
             );
         }
-        assert!(cache.stats().cache_size <= MAX_CACHE_SIZE);
+        assert!(cache.stats().cache_size <= 10);
         assert!(cache.stats().evictions > 0);
     }
 
     #[test]
     fn test_evict_stale() {
-        let mut cache = SpeculativeCache::new();
+        let mut cache = SpeculativeCache::default();
         cache.pre_assemble(
             vec!["old topic".to_string()],
             |topic| Some((format!("Context for {}", topic), vec![])),

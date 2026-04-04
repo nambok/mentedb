@@ -86,7 +86,8 @@ impl ContextAssembler {
         let excluded_count = total_candidates - included_count;
 
         // 3. Arrange into attention zones
-        let blocks = ContextLayout::arrange(included);
+        let layout = ContextLayout::default();
+        let blocks = layout.arrange(included);
 
         // 4. Optionally append edge info to format
         let edge_section = if config.include_edges && !edges.is_empty() {
@@ -178,7 +179,8 @@ impl ContextAssembler {
         }
 
         let included_count = included.len();
-        let blocks = ContextLayout::arrange(included);
+        let layout = ContextLayout::default();
+        let blocks = layout.arrange(included);
         let total_tokens = budget.used_tokens;
 
         let fmt = DeltaFormat::new(delta_header);

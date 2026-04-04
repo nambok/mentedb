@@ -32,6 +32,27 @@ pub enum StreamAlert {
     },
 }
 
+/// Configuration for stream-based cognition alerts.
+#[derive(Debug, Clone)]
+pub struct StreamConfig {
+    /// Keyword overlap ratio above which a potential contradiction is flagged (default: 0.5).
+    pub contradiction_keyword_ratio: f32,
+    /// Keyword overlap ratio above which a reinforcement alert is emitted (default: 0.8).
+    pub reinforcement_threshold: f32,
+    /// Maximum number of tokens held in the ring buffer (default: 1000).
+    pub buffer_size: usize,
+}
+
+impl Default for StreamConfig {
+    fn default() -> Self {
+        Self {
+            contradiction_keyword_ratio: 0.5,
+            reinforcement_threshold: 0.8,
+            buffer_size: 1000,
+        }
+    }
+}
+
 struct StreamState {
     buffer: VecDeque<String>,
     accumulated: String,
@@ -40,16 +61,25 @@ struct StreamState {
 
 pub struct CognitionStream {
     state: Mutex<StreamState>,
+    config: StreamConfig,
 }
 
 impl CognitionStream {
     pub fn new(buffer_size: usize) -> Self {
+        Self::with_config(StreamConfig {
+            buffer_size,
+            ..StreamConfig::default()
+        })
+    }
+
+    pub fn with_config(config: StreamConfig) -> Self {
         Self {
             state: Mutex::new(StreamState {
-                buffer: VecDeque::with_capacity(buffer_size),
+                buffer: VecDeque::with_capacity(config.buffer_size),
                 accumulated: String::new(),
-                buffer_size,
+                buffer_size: config.buffer_size,
             }),
+            config,
         }
     }
 
@@ -89,7 +119,7 @@ impl CognitionStream {
             let ratio = matched as f32 / keywords.len() as f32;
 
             // High keyword overlap but not identical text = potential contradiction
-            if ratio > 0.5 && !full_lower.contains(&fact_lower) {
+            if ratio > self.config.contradiction_keyword_ratio && !full_lower.contains(&fact_lower) {
                 // Check for negation patterns that suggest contradiction
                 let has_negation = full_lower.contains("not ")
                     || full_lower.contains("never ")
@@ -105,12 +135,12 @@ impl CognitionStream {
                         ai_said: full_text.clone(),
                         stored: fact.clone(),
                     });
-                } else if ratio > 0.8 {
+                } else if ratio > self.config.reinforcement_threshold {
                     alerts.push(StreamAlert::Reinforcement {
                         memory_id: *memory_id,
                     });
                 }
-            } else if ratio > 0.8 {
+            } else if ratio > self.config.reinforcement_threshold {
                 alerts.push(StreamAlert::Reinforcement {
                     memory_id: *memory_id,
                 });

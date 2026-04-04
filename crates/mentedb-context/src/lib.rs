@@ -12,8 +12,8 @@ pub mod delta;
 pub mod serializer;
 pub mod assembler;
 
-pub use budget::{TokenBudget, BudgetAllocation};
-pub use layout::{ScoredMemory, AttentionZone, ContextBlock, ContextLayout};
+pub use budget::{TokenBudget, BudgetAllocation, ZoneBudgetConfig};
+pub use layout::{ScoredMemory, AttentionZone, ContextBlock, ContextLayout, ZoneThresholds};
 pub use delta::{DeltaTracker, DeltaResult};
 pub use serializer::{ContextSerializer, CompactFormat, StructuredFormat, DeltaFormat};
 pub use assembler::{ContextAssembler, AssemblyConfig, ContextWindow, AssemblyMetadata, OutputFormat};

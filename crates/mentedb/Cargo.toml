@@ -19,3 +19,9 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+criterion = { workspace = true }
+uuid = { workspace = true }
+
+[[bench]]
+name = "storage_bench"
+harness = false

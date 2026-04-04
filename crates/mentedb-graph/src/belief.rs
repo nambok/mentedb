@@ -8,11 +8,32 @@ use mentedb_core::types::MemoryId;
 
 use crate::csr::CsrGraph;
 
-const MAX_PROPAGATION_DEPTH: usize = 5;
-const CAUSED_DAMPENING: f32 = 0.9;
-const SUPPORTS_FACTOR: f32 = 0.5;
-const CONTRADICTS_FACTOR: f32 = 0.7;
-const SUPERSEDES_FLOOR: f32 = 0.1;
+/// Configuration for belief propagation.
+#[derive(Debug, Clone)]
+pub struct PropagationConfig {
+    /// Maximum BFS depth for propagation (default: 5).
+    pub max_depth: usize,
+    /// Dampening factor for Caused edges (default: 0.9).
+    pub caused_dampening: f32,
+    /// Factor for Supports edges (default: 0.5).
+    pub supports_factor: f32,
+    /// Factor for Contradicts edges (default: 0.7).
+    pub contradicts_factor: f32,
+    /// Floor multiplier for Supersedes edges (default: 0.1).
+    pub supersedes_floor: f32,
+}
+
+impl Default for PropagationConfig {
+    fn default() -> Self {
+        Self {
+            max_depth: 5,
+            caused_dampening: 0.9,
+            supports_factor: 0.5,
+            contradicts_factor: 0.7,
+            supersedes_floor: 0.1,
+        }
+    }
+}
 
 /// Propagate a confidence change through the graph.
 ///
@@ -22,6 +43,16 @@ pub fn propagate_update(
     graph: &CsrGraph,
     changed_id: MemoryId,
     new_confidence: f32,
+) -> Vec<(MemoryId, f32)> {
+    propagate_update_with_config(graph, changed_id, new_confidence, &PropagationConfig::default())
+}
+
+/// Propagate a confidence change through the graph with custom configuration.
+pub fn propagate_update_with_config(
+    graph: &CsrGraph,
+    changed_id: MemoryId,
+    new_confidence: f32,
+    config: &PropagationConfig,
 ) -> Vec<(MemoryId, f32)> {
     let Some(_) = graph.get_idx(changed_id) else {
         return Vec::new();
@@ -39,7 +70,7 @@ pub fn propagate_update(
     visited.insert(changed_id);
 
     while let Some((node, node_confidence, depth)) = queue.pop_front() {
-        if depth >= MAX_PROPAGATION_DEPTH {
+        if depth >= config.max_depth {
             continue;
         }
 
@@ -47,23 +78,23 @@ pub fn propagate_update(
             let new_conf = match edge.edge_type {
                 EdgeType::Caused => {
                     // child confidence = parent confidence * edge weight * dampening
-                    node_confidence * edge.weight * CAUSED_DAMPENING
+                    node_confidence * edge.weight * config.caused_dampening
                 }
                 EdgeType::Supports => {
                     // supported node confidence += delta * edge weight * factor
                     let current = confidences.get(&neighbor).copied().unwrap_or(1.0);
                     let delta = node_confidence - 1.0; // change from baseline
-                    (current + delta * edge.weight * SUPPORTS_FACTOR).clamp(0.0, 1.0)
+                    (current + delta * edge.weight * config.supports_factor).clamp(0.0, 1.0)
                 }
                 EdgeType::Contradicts => {
                     // contradicted node confidence -= delta * edge weight * factor
                     let current = confidences.get(&neighbor).copied().unwrap_or(1.0);
-                    (current - node_confidence * edge.weight * CONTRADICTS_FACTOR).clamp(0.0, 1.0)
+                    (current - node_confidence * edge.weight * config.contradicts_factor).clamp(0.0, 1.0)
                 }
                 EdgeType::Supersedes => {
                     // superseded node confidence = min(current, new * floor)
                     let current = confidences.get(&neighbor).copied().unwrap_or(1.0);
-                    current.min(node_confidence * SUPERSEDES_FLOOR)
+                    current.min(node_confidence * config.supersedes_floor)
                 }
                 // Other edge types don't propagate belief
                 _ => continue,

@@ -53,7 +53,7 @@ fn test_write_inference_contradiction() {
 
 #[test]
 fn test_trajectory_resume_context() {
-    let mut tracker = TrajectoryTracker::new();
+    let mut tracker = TrajectoryTracker::default();
 
     tracker.record_turn(TrajectoryNode {
         turn_id: 1,
@@ -89,7 +89,7 @@ fn test_trajectory_resume_context() {
 
 #[test]
 fn test_phantom_detection() {
-    let mut tracker = PhantomTracker::new();
+    let mut tracker = PhantomTracker::default();
     let known = vec!["React".to_string(), "Node".to_string()];
 
     let phantoms = tracker.detect_gaps(
@@ -115,7 +115,7 @@ fn test_phantom_detection() {
 
 #[test]
 fn test_pain_trigger_matching() {
-    let mut registry = PainRegistry::new();
+    let mut registry = PainRegistry::default();
 
     registry.record_pain(PainSignal {
         id: Uuid::new_v4(),
@@ -131,14 +131,14 @@ fn test_pain_trigger_matching() {
     assert_eq!(results.len(), 1);
     assert!(results[0].intensity > 0.9);
 
-    let warnings = PainRegistry::format_pain_warnings(&results);
+    let warnings = registry.format_pain_warnings(&results);
     assert!(warnings.contains("CAUTION"));
     assert!(warnings.contains("mongodb"));
 }
 
 #[test]
 fn test_speculative_cache() {
-    let mut cache = SpeculativeCache::new();
+    let mut cache = SpeculativeCache::default();
 
     cache.pre_assemble(
         vec![
@@ -172,7 +172,7 @@ fn test_interference_detection() {
     let a = make_memory("Project Alpha uses React framework", vec![1.0, 0.0, 0.0], MemoryType::Semantic);
     let b = make_memory("Project Beta uses Vue framework", vec![0.99, 0.1, 0.0], MemoryType::Semantic);
 
-    let detector = InterferenceDetector::new();
+    let detector = InterferenceDetector::default();
     let pairs = detector.detect_interference(&[a, b]);
 
     assert!(!pairs.is_empty(), "Expected interference pair for similar but different memories");

@@ -135,7 +135,7 @@ fn test_budget_constrains_assembly() {
 #[test]
 fn test_layout_zones_populated_correctly() {
     let memories = sample_memories();
-    let blocks = ContextLayout::arrange(memories);
+    let blocks = ContextLayout::default().arrange(memories);
 
     assert_eq!(blocks.len(), 5);
 
@@ -161,7 +161,7 @@ fn test_token_budget_integration() {
 #[test]
 fn test_serializer_trait_dispatch() {
     let memories = vec![make_scored("trait dispatch test", 0.9, 0.9, MemoryType::Semantic)];
-    let blocks = ContextLayout::arrange(memories);
+    let blocks = ContextLayout::default().arrange(memories);
 
     let compact_output = CompactFormat.serialize(&blocks);
     let structured_output = StructuredFormat.serialize(&blocks);

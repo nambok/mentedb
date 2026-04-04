@@ -12,7 +12,7 @@ pub mod csr;
 pub mod manager;
 pub mod traversal;
 
-pub use belief::propagate_update;
+pub use belief::{PropagationConfig, propagate_update, propagate_update_with_config};
 pub use contradiction::{detect_cycles, find_contradictions, find_superseded};
 pub use csr::{CsrGraph, StoredEdge};
 pub use manager::GraphManager;

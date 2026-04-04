@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use mentedb_core::types::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -21,14 +23,49 @@ pub struct PhantomMemory {
     pub resolved: bool,
 }
 
+/// Configuration for phantom memory detection.
+#[derive(Debug, Clone)]
+pub struct PhantomConfig {
+    /// Words to skip when detecting capitalized entity references.
+    pub stop_words: HashSet<String>,
+    /// Maximum number of warnings to include in formatted output.
+    pub max_warnings: usize,
+    /// Minimum word length for technical term detection.
+    pub min_word_length: usize,
+}
+
+impl Default for PhantomConfig {
+    fn default() -> Self {
+        let stop_words: HashSet<String> = [
+            "the", "a", "an", "is", "are", "was", "were", "it", "this", "that",
+            "we", "you", "they", "he", "she", "i", "my", "our", "but", "and",
+            "or", "if", "then", "when", "how", "what", "where", "who", "do",
+            "does", "did", "have", "has", "had", "be", "been", "being", "so",
+            "also", "just", "very", "too", "not", "no", "yes", "can", "will",
+            "should", "would", "could", "may", "might", "must", "shall",
+            "note", "see", "use", "make", "let", "new", "set", "get",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        Self {
+            stop_words,
+            max_warnings: 5,
+            min_word_length: 3,
+        }
+    }
+}
+
 pub struct PhantomTracker {
     phantoms: Vec<PhantomMemory>,
+    config: PhantomConfig,
 }
 
 impl PhantomTracker {
-    pub fn new() -> Self {
+    pub fn new(config: PhantomConfig) -> Self {
         Self {
             phantoms: Vec::new(),
+            config,
         }
     }
 
@@ -88,17 +125,10 @@ impl PhantomTracker {
                 }
 
                 let entity = entity_parts.join(" ");
-                // Skip common English words that happen to be capitalized (start of sentence)
-                let common = [
-                    "the", "a", "an", "is", "are", "was", "were", "it", "this", "that",
-                    "we", "you", "they", "he", "she", "i", "my", "our", "but", "and",
-                    "or", "if", "then", "when", "how", "what", "where", "who", "do",
-                    "does", "did", "have", "has", "had", "be", "been", "being", "so",
-                    "also", "just", "very", "too", "not", "no", "yes", "can", "will",
-                    "should", "would", "could", "may", "might", "must", "shall",
-                    "note", "see", "use", "make", "let", "new", "set", "get",
-                ];
-                if entity.split_whitespace().count() == 1 && common.contains(&entity.to_lowercase().as_str()) {
+                // Skip common words that happen to be capitalized (start of sentence)
+                if entity.split_whitespace().count() == 1
+                    && self.config.stop_words.contains(&entity.to_lowercase())
+                {
                     i = j;
                     continue;
                 }
@@ -111,9 +141,9 @@ impl PhantomTracker {
                 i = j;
             } else {
                 // Check for technical terms: contains hyphens/dots/underscores or ALL_CAPS
-                if !w.is_empty() && w.len() >= 3 {
+                if !w.is_empty() && w.len() >= self.config.min_word_length {
                     let is_technical = w.contains('-') || w.contains('.') || w.contains('_')
-                        || (w.len() >= 3 && w.chars().all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_'));
+                        || (w.len() >= self.config.min_word_length && w.chars().all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_'));
 
                     if is_technical
                         && !known_lower.contains(&w.to_lowercase())
@@ -178,7 +208,7 @@ impl PhantomTracker {
 
         active
             .iter()
-            .take(5)
+            .take(self.config.max_warnings)
             .map(|p| {
                 format!(
                     "WARNING: User referenced '{}' but no details stored. Consider asking.",
@@ -192,7 +222,7 @@ impl PhantomTracker {
 
 impl Default for PhantomTracker {
     fn default() -> Self {
-        Self::new()
+        Self::new(PhantomConfig::default())
     }
 }
 
@@ -202,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_detect_unknown_entities() {
-        let mut tracker = PhantomTracker::new();
+        let mut tracker = PhantomTracker::default();
         let known = vec!["React".to_string(), "TypeScript".to_string()];
         let phantoms = tracker.detect_gaps(
             "We need to deploy to the Kubernetes cluster using Terraform",
@@ -216,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_resolve_phantom() {
-        let mut tracker = PhantomTracker::new();
+        let mut tracker = PhantomTracker::default();
         let phantoms = tracker.detect_gaps("Check the Redis cache", &[], 1);
         assert!(!phantoms.is_empty());
         let pid = phantoms[0].id;
@@ -226,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_format_warnings() {
-        let mut tracker = PhantomTracker::new();
+        let mut tracker = PhantomTracker::default();
         tracker.detect_gaps("Deploy to Kubernetes using Helm", &[], 1);
         let warnings = tracker.format_phantom_warnings();
         assert!(warnings.contains("WARNING"));

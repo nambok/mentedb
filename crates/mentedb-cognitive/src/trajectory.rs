@@ -20,21 +20,23 @@ pub struct TrajectoryNode {
     pub timestamp: Timestamp,
 }
 
-const MAX_TURNS: usize = 100;
+const MAX_TURNS_DEFAULT: usize = 100;
 
 pub struct TrajectoryTracker {
     trajectory: Vec<TrajectoryNode>,
+    max_turns: usize,
 }
 
 impl TrajectoryTracker {
-    pub fn new() -> Self {
+    pub fn new(max_turns: usize) -> Self {
         Self {
             trajectory: Vec::new(),
+            max_turns,
         }
     }
 
     pub fn record_turn(&mut self, turn: TrajectoryNode) {
-        if self.trajectory.len() >= MAX_TURNS {
+        if self.trajectory.len() >= self.max_turns {
             self.trajectory.remove(0);
         }
         self.trajectory.push(turn);
@@ -131,7 +133,7 @@ impl TrajectoryTracker {
 
 impl Default for TrajectoryTracker {
     fn default() -> Self {
-        Self::new()
+        Self::new(MAX_TURNS_DEFAULT)
     }
 }
 
@@ -152,7 +154,7 @@ mod tests {
 
     #[test]
     fn test_record_and_resume() {
-        let mut tracker = TrajectoryTracker::new();
+        let mut tracker = TrajectoryTracker::default();
         tracker.record_turn(make_turn(1, "JWT auth design", DecisionState::Investigating, vec![]));
         tracker.record_turn(make_turn(
             2,
@@ -169,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_predict_topics() {
-        let mut tracker = TrajectoryTracker::new();
+        let mut tracker = TrajectoryTracker::default();
         tracker.record_turn(make_turn(
             1,
             "Database schema",
@@ -184,11 +186,11 @@ mod tests {
 
     #[test]
     fn test_fifo_eviction() {
-        let mut tracker = TrajectoryTracker::new();
+        let mut tracker = TrajectoryTracker::default();
         for i in 0..105 {
             tracker.record_turn(make_turn(i, &format!("turn {}", i), DecisionState::Investigating, vec![]));
         }
-        assert_eq!(tracker.get_trajectory().len(), MAX_TURNS);
+        assert_eq!(tracker.get_trajectory().len(), MAX_TURNS_DEFAULT);
         assert_eq!(tracker.get_trajectory()[0].turn_id, 5);
     }
 }

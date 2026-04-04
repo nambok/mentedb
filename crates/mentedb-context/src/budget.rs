@@ -2,7 +2,7 @@
 
 /// Estimates token count for a text string.
 /// Uses word count * 1.3 as a rough approximation for English text.
-fn estimate_tokens(text: &str) -> usize {
+pub fn estimate_tokens(text: &str) -> usize {
     let word_count = text.split_whitespace().count();
     ((word_count as f64) * 1.3).ceil() as usize
 }
@@ -46,31 +46,63 @@ impl TokenBudget {
     }
 }
 
+/// Configuration for zone budget percentages.
+#[derive(Debug, Clone)]
+pub struct ZoneBudgetConfig {
+    /// Fraction of total budget for system zone.
+    pub system_pct: f32,
+    /// Fraction of total budget for critical zone.
+    pub critical_pct: f32,
+    /// Fraction of total budget for primary zone.
+    pub primary_pct: f32,
+    /// Fraction of total budget for supporting zone.
+    pub supporting_pct: f32,
+    /// Fraction of total budget for reference zone.
+    pub reference_pct: f32,
+}
+
+impl Default for ZoneBudgetConfig {
+    fn default() -> Self {
+        Self {
+            system_pct: 0.10,
+            critical_pct: 0.25,
+            primary_pct: 0.35,
+            supporting_pct: 0.20,
+            reference_pct: 0.10,
+        }
+    }
+}
+
 /// Divides a total token budget across context zones.
 #[derive(Debug, Clone)]
 pub struct BudgetAllocation {
-    /// System zone: 10%
+    /// System zone
     pub system: usize,
-    /// Critical zone: 25%
+    /// Critical zone
     pub critical: usize,
-    /// Primary zone: 35%
+    /// Primary zone
     pub primary: usize,
-    /// Supporting zone: 20%
+    /// Supporting zone
     pub supporting: usize,
-    /// Reference zone: 10%
+    /// Reference zone
     pub reference: usize,
 }
 
 impl BudgetAllocation {
-    /// Allocate a total budget across zones with fixed percentages.
-    pub fn from_total(total: usize) -> Self {
+    /// Allocate a total budget across zones with the given percentages.
+    pub fn from_total_with_config(total: usize, config: &ZoneBudgetConfig) -> Self {
         Self {
-            system: total / 10,           // 10%
-            critical: total / 4,          // 25%
-            primary: total * 35 / 100,    // 35%
-            supporting: total / 5,        // 20%
-            reference: total / 10,        // 10%
+            system: (total as f32 * config.system_pct) as usize,
+            critical: (total as f32 * config.critical_pct) as usize,
+            primary: (total as f32 * config.primary_pct) as usize,
+            supporting: (total as f32 * config.supporting_pct) as usize,
+            reference: (total as f32 * config.reference_pct) as usize,
         }
+    }
+
+    /// Allocate a total budget across zones with default percentages.
+    pub fn from_total(total: usize) -> Self {
+        Self::from_total_with_config(total, &ZoneBudgetConfig::default())
     }
 
     /// Total allocated tokens (may differ slightly from input due to rounding).

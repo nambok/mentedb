@@ -15,12 +15,14 @@ pub struct PainSignal {
 
 pub struct PainRegistry {
     signals: Vec<PainSignal>,
+    max_warnings: usize,
 }
 
 impl PainRegistry {
-    pub fn new() -> Self {
+    pub fn new(max_warnings: usize) -> Self {
         Self {
             signals: Vec::new(),
+            max_warnings,
         }
     }
 
@@ -74,14 +76,14 @@ impl PainRegistry {
         decayed as f32
     }
 
-    pub fn format_pain_warnings(signals: &[&PainSignal]) -> String {
+    pub fn format_pain_warnings(&self, signals: &[&PainSignal]) -> String {
         if signals.is_empty() {
             return String::new();
         }
 
         signals
             .iter()
-            .take(5)
+            .take(self.max_warnings)
             .map(|s| {
                 format!(
                     "CAUTION: {} (pain: {:.2}). Triggers: [{}]",
@@ -97,7 +99,7 @@ impl PainRegistry {
 
 impl Default for PainRegistry {
     fn default() -> Self {
-        Self::new()
+        Self::new(5)
     }
 }
 
@@ -119,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_pain_trigger_matching() {
-        let mut registry = PainRegistry::new();
+        let mut registry = PainRegistry::default();
         registry.record_pain(make_signal(vec!["mongodb", "nosql"], 0.95));
         registry.record_pain(make_signal(vec!["python", "flask"], 0.5));
 
@@ -138,8 +140,9 @@ mod tests {
 
     #[test]
     fn test_format_warnings() {
+        let registry = PainRegistry::default();
         let s = make_signal(vec!["mongodb", "nosql"], 0.95);
-        let warnings = PainRegistry::format_pain_warnings(&[&s]);
+        let warnings = registry.format_pain_warnings(&[&s]);
         assert!(warnings.contains("CAUTION"));
         assert!(warnings.contains("0.95"));
     }

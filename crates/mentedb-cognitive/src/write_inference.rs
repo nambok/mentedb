@@ -50,11 +50,52 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-pub struct WriteInferenceEngine;
+/// Configuration for write-time inference thresholds.
+#[derive(Debug, Clone)]
+pub struct WriteInferenceConfig {
+    /// Similarity above which two memories may contradict (default: 0.95).
+    pub contradiction_threshold: f32,
+    /// Similarity above which an older memory is marked obsolete (default: 0.85).
+    pub obsolete_threshold: f32,
+    /// Minimum similarity for creating a Related edge (default: 0.6).
+    pub related_min: f32,
+    /// Maximum similarity for creating a Related edge (default: 0.85).
+    pub related_max: f32,
+    /// Minimum similarity for a Correction to supersede (default: 0.5).
+    pub correction_threshold: f32,
+    /// Multiplier applied to original confidence on correction (default: 0.5).
+    pub confidence_decay_factor: f32,
+    /// Minimum confidence after decay (default: 0.1).
+    pub confidence_floor: f32,
+}
+
+impl Default for WriteInferenceConfig {
+    fn default() -> Self {
+        Self {
+            contradiction_threshold: 0.95,
+            obsolete_threshold: 0.85,
+            related_min: 0.6,
+            related_max: 0.85,
+            correction_threshold: 0.5,
+            confidence_decay_factor: 0.5,
+            confidence_floor: 0.1,
+        }
+    }
+}
+
+pub struct WriteInferenceEngine {
+    config: WriteInferenceConfig,
+}
 
 impl WriteInferenceEngine {
     pub fn new() -> Self {
-        Self
+        Self {
+            config: WriteInferenceConfig::default(),
+        }
+    }
+
+    pub fn with_config(config: WriteInferenceConfig) -> Self {
+        Self { config }
     }
 
     pub fn infer_on_write(
@@ -74,7 +115,7 @@ impl WriteInferenceEngine {
             let sim = cosine_similarity(&new_memory.embedding, &existing.embedding);
 
             // Very high similarity: potential duplicate or contradiction
-            if sim > 0.95 {
+            if sim > self.config.contradiction_threshold {
                 if existing.agent_id == new_memory.agent_id
                     && existing.content != new_memory.content
                 {
@@ -90,7 +131,7 @@ impl WriteInferenceEngine {
             }
 
             // High similarity: mark older as obsolete if newer timestamp
-            if sim > 0.85 && new_memory.created_at > existing.created_at {
+            if sim > self.config.obsolete_threshold && new_memory.created_at > existing.created_at {
                 actions.push(InferredAction::MarkObsolete {
                     memory: existing.id,
                     superseded_by: new_memory.id,
@@ -98,7 +139,7 @@ impl WriteInferenceEngine {
             }
 
             // Moderate similarity: create Related edge
-            if sim > 0.6 && sim <= 0.85 {
+            if sim > self.config.related_min && sim <= self.config.related_max {
                 actions.push(InferredAction::CreateEdge {
                     source: new_memory.id,
                     target: existing.id,
@@ -120,7 +161,7 @@ impl WriteInferenceEngine {
                 })
             {
                 let sim = cosine_similarity(&new_memory.embedding, &original.embedding);
-                if sim > 0.5 {
+                if sim > self.config.correction_threshold {
                     actions.push(InferredAction::CreateEdge {
                         source: new_memory.id,
                         target: original.id,
@@ -129,7 +170,8 @@ impl WriteInferenceEngine {
                     });
                     actions.push(InferredAction::UpdateConfidence {
                         memory: original.id,
-                        new_confidence: (original.confidence * 0.5).max(0.1),
+                        new_confidence: (original.confidence * self.config.confidence_decay_factor)
+                            .max(self.config.confidence_floor),
                     });
                 }
             }
