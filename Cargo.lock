@@ -319,6 +319,24 @@ dependencies = [
  "mentedb-index",
  "mentedb-query",
  "mentedb-storage",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "mentedb-cognitive"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "crossbeam",
+ "mentedb-core",
+ "parking_lot",
+ "serde",
+ "tempfile",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -392,6 +410,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "mentedb",
+ "mentedb-core",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

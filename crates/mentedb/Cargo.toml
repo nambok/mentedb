@@ -2,9 +2,9 @@
 name = "mentedb"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 authors.workspace = true
-description = "MenteDB — The Mind Database for AI Agents"
+license.workspace = true
+description = "The mind database for AI agents"
 
 [dependencies]
 mentedb-core = { workspace = true }
@@ -13,3 +13,9 @@ mentedb-index = { workspace = true }
 mentedb-graph = { workspace = true }
 mentedb-query = { workspace = true }
 mentedb-context = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

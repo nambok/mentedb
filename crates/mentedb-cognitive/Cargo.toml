@@ -1,0 +1,19 @@
+[package]
+name = "mentedb-cognitive"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Radical cognitive features for MenteDB"
+
+[dependencies]
+mentedb-core = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+ahash = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+crossbeam = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

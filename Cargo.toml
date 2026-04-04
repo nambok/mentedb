@@ -8,6 +8,7 @@ members = [
     "crates/mentedb-query",
     "crates/mentedb-context",
     "crates/mentedb-server",
+    "crates/mentedb-cognitive",
 ]
 resolver = "2"
 
@@ -61,3 +62,4 @@ mentedb-graph = { path = "crates/mentedb-graph" }
 mentedb-query = { path = "crates/mentedb-query" }
 mentedb-context = { path = "crates/mentedb-context" }
 mentedb-server = { path = "crates/mentedb-server" }
+mentedb-cognitive = { path = "crates/mentedb-cognitive" }
