@@ -15,5 +15,5 @@ pub mod wal;
 // Re-export key types at crate root for convenience.
 pub use buffer::BufferPool;
 pub use engine::StorageEngine;
-pub use page::{Page, PageHeader, PageId, PageType, PAGE_DATA_SIZE, PAGE_SIZE};
+pub use page::{PAGE_DATA_SIZE, PAGE_SIZE, Page, PageHeader, PageId, PageType};
 pub use wal::{Lsn, Wal, WalEntry, WalEntryType};

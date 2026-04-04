@@ -173,17 +173,19 @@ impl CsrGraph {
         let edges = self.csr.edge_data_for(idx);
         for (i, &neighbor) in neighbors.iter().enumerate() {
             if !self.is_removed(idx, neighbor)
-                && let Some(&id) = self.idx_to_id.get(neighbor as usize) {
-                    results.push((id, edges[i]));
-                }
+                && let Some(&id) = self.idx_to_id.get(neighbor as usize)
+            {
+                results.push((id, edges[i]));
+            }
         }
 
         // From delta
         for delta in &self.delta_edges {
             if delta.source_idx == idx
-                && let Some(&id) = self.idx_to_id.get(delta.target_idx as usize) {
-                    results.push((id, delta.data));
-                }
+                && let Some(&id) = self.idx_to_id.get(delta.target_idx as usize)
+            {
+                results.push((id, delta.data));
+            }
         }
 
         results
@@ -205,17 +207,19 @@ impl CsrGraph {
         let edges = self.csc.edge_data_for(idx);
         for (i, &neighbor) in neighbors.iter().enumerate() {
             if !self.is_removed(neighbor, idx)
-                && let Some(&id) = self.idx_to_id.get(neighbor as usize) {
-                    results.push((id, edges[i]));
-                }
+                && let Some(&id) = self.idx_to_id.get(neighbor as usize)
+            {
+                results.push((id, edges[i]));
+            }
         }
 
         // From delta
         for delta in &self.delta_edges {
             if delta.target_idx == idx
-                && let Some(&id) = self.idx_to_id.get(delta.source_idx as usize) {
-                    results.push((id, delta.data));
-                }
+                && let Some(&id) = self.idx_to_id.get(delta.source_idx as usize)
+            {
+                results.push((id, delta.data));
+            }
         }
 
         results
@@ -338,8 +342,8 @@ impl CsrGraph {
     }
     /// Save the graph to a JSON file.
     pub fn save(&self, path: &std::path::Path) -> MenteResult<()> {
-        let data = serde_json::to_vec(self)
-            .map_err(|e| MenteError::Serialization(e.to_string()))?;
+        let data =
+            serde_json::to_vec(self).map_err(|e| MenteError::Serialization(e.to_string()))?;
         std::fs::write(path, data)?;
         Ok(())
     }

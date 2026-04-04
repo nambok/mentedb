@@ -83,10 +83,11 @@ impl BufferPool {
 
         // Flush dirty victim if needed.
         if inner.frames[frame_id].dirty
-            && let Some(old_pid) = inner.frames[frame_id].page_id {
-                pm.write_page(old_pid, &inner.frames[frame_id].page)?;
-                debug!(page_id = old_pid.0, frame_id, "flushed dirty victim");
-            }
+            && let Some(old_pid) = inner.frames[frame_id].page_id
+        {
+            pm.write_page(old_pid, &inner.frames[frame_id].page)?;
+            debug!(page_id = old_pid.0, frame_id, "flushed dirty victim");
+        }
 
         // Remove old mapping.
         if let Some(old_pid) = inner.frames[frame_id].page_id {
@@ -105,7 +106,10 @@ impl BufferPool {
         }
 
         inner.page_table.insert(page_id, frame_id);
-        trace!(page_id = page_id.0, frame_id, "loaded page into buffer pool");
+        trace!(
+            page_id = page_id.0,
+            frame_id, "loaded page into buffer pool"
+        );
 
         Ok(inner.frames[frame_id].page.clone())
     }
@@ -118,7 +122,10 @@ impl BufferPool {
                 inner.frames[fid].pin_count += 1;
                 Ok(())
             }
-            None => Err(MenteError::Storage(format!("page {} not in buffer pool", page_id.0))),
+            None => Err(MenteError::Storage(format!(
+                "page {} not in buffer pool",
+                page_id.0
+            ))),
         }
     }
 
@@ -136,7 +143,10 @@ impl BufferPool {
                 }
                 Ok(())
             }
-            None => Err(MenteError::Storage(format!("page {} not in buffer pool", page_id.0))),
+            None => Err(MenteError::Storage(format!(
+                "page {} not in buffer pool",
+                page_id.0
+            ))),
         }
     }
 
@@ -150,7 +160,10 @@ impl BufferPool {
                 frame.dirty = true;
                 Ok(())
             }
-            None => Err(MenteError::Storage(format!("page {} not in buffer pool", page_id.0))),
+            None => Err(MenteError::Storage(format!(
+                "page {} not in buffer pool",
+                page_id.0
+            ))),
         }
     }
 
@@ -167,7 +180,10 @@ impl BufferPool {
                 }
                 Ok(())
             }
-            None => Err(MenteError::Storage(format!("page {} not in buffer pool", page_id.0))),
+            None => Err(MenteError::Storage(format!(
+                "page {} not in buffer pool",
+                page_id.0
+            ))),
         }
     }
 
@@ -176,10 +192,11 @@ impl BufferPool {
         let mut inner = self.inner.lock();
         for frame in &mut inner.frames {
             if frame.dirty
-                && let Some(pid) = frame.page_id {
-                    pm.write_page(pid, &frame.page)?;
-                    frame.dirty = false;
-                }
+                && let Some(pid) = frame.page_id
+            {
+                pm.write_page(pid, &frame.page)?;
+                frame.dirty = false;
+            }
         }
         debug!("flushed all dirty pages");
         Ok(())
@@ -211,7 +228,9 @@ impl BufferPool {
             }
         }
 
-        Err(MenteError::Storage("buffer pool full: all pages are pinned".into()))
+        Err(MenteError::Storage(
+            "buffer pool full: all pages are pinned".into(),
+        ))
     }
 }
 

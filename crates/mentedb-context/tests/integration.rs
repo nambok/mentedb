@@ -1,11 +1,11 @@
 //! Integration tests for the full context assembly pipeline.
 
 use mentedb_context::{
-    AssemblyConfig, ContextAssembler, DeltaTracker, OutputFormat, ScoredMemory, TokenBudget,
-    BudgetAllocation, ContextLayout, CompactFormat, StructuredFormat, ContextSerializer,
+    AssemblyConfig, BudgetAllocation, CompactFormat, ContextAssembler, ContextLayout,
+    ContextSerializer, DeltaTracker, OutputFormat, ScoredMemory, StructuredFormat, TokenBudget,
 };
-use mentedb_core::MemoryNode;
 use mentedb_core::MemoryEdge;
+use mentedb_core::MemoryNode;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
 use uuid::Uuid;
@@ -26,10 +26,30 @@ fn make_scored(content: &str, score: f32, salience: f32, mem_type: MemoryType) -
 
 fn sample_memories() -> Vec<ScoredMemory> {
     vec![
-        make_scored("never use eval in production code", 0.95, 0.95, MemoryType::AntiPattern),
-        make_scored("user prefers dark mode for all editors", 0.88, 0.85, MemoryType::Semantic),
-        make_scored("switched database to PostgreSQL last week", 0.75, 0.7, MemoryType::Episodic),
-        make_scored("always run tests before committing", 0.60, 0.5, MemoryType::Procedural),
+        make_scored(
+            "never use eval in production code",
+            0.95,
+            0.95,
+            MemoryType::AntiPattern,
+        ),
+        make_scored(
+            "user prefers dark mode for all editors",
+            0.88,
+            0.85,
+            MemoryType::Semantic,
+        ),
+        make_scored(
+            "switched database to PostgreSQL last week",
+            0.75,
+            0.7,
+            MemoryType::Episodic,
+        ),
+        make_scored(
+            "always run tests before committing",
+            0.60,
+            0.5,
+            MemoryType::Procedural,
+        ),
         make_scored("project uses MIT license", 0.30, 0.3, MemoryType::Semantic),
         make_scored("had coffee this morning", 0.10, 0.1, MemoryType::Episodic),
     ]
@@ -110,7 +130,12 @@ fn test_full_pipeline_delta() {
 
     // Turn 3: add a new memory, drop the last one
     let mut new_set = memories[..5].to_vec();
-    new_set.push(make_scored("new discovery about API", 0.9, 0.85, MemoryType::Reasoning));
+    new_set.push(make_scored(
+        "new discovery about API",
+        0.9,
+        0.85,
+        MemoryType::Reasoning,
+    ));
     let window3 = ContextAssembler::assemble_delta(new_set, vec![], &mut tracker, &config);
     assert!(window3.format.contains("[NEW]"));
     assert!(window3.format.contains("new discovery about API"));
@@ -141,7 +166,12 @@ fn test_layout_zones_populated_correctly() {
 
     // AntiPattern should be in Opening zone
     let opening = &blocks[0];
-    assert!(opening.memories.iter().any(|sm| sm.memory.memory_type == MemoryType::AntiPattern));
+    assert!(
+        opening
+            .memories
+            .iter()
+            .any(|sm| sm.memory.memory_type == MemoryType::AntiPattern)
+    );
 }
 
 #[test]
@@ -160,7 +190,12 @@ fn test_token_budget_integration() {
 
 #[test]
 fn test_serializer_trait_dispatch() {
-    let memories = vec![make_scored("trait dispatch test", 0.9, 0.9, MemoryType::Semantic)];
+    let memories = vec![make_scored(
+        "trait dispatch test",
+        0.9,
+        0.9,
+        MemoryType::Semantic,
+    )];
     let blocks = ContextLayout::default().arrange(memories);
 
     let compact_output = CompactFormat.serialize(&blocks);

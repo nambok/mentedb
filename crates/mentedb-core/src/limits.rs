@@ -113,8 +113,10 @@ impl ResourceTracker {
 
     /// Record that a delete occurred.
     pub fn record_delete(&self, agent_id: AgentId, bytes: u64) {
-        self.current_memory_count
-            .fetch_sub(1.min(self.current_memory_count.load(Ordering::Relaxed)), Ordering::Relaxed);
+        self.current_memory_count.fetch_sub(
+            1.min(self.current_memory_count.load(Ordering::Relaxed)),
+            Ordering::Relaxed,
+        );
         let current = self.current_bytes.load(Ordering::Relaxed);
         self.current_bytes
             .fetch_sub(bytes.min(current), Ordering::Relaxed);

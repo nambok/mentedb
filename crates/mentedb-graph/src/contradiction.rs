@@ -120,8 +120,7 @@ pub fn detect_cycles(graph: &CsrGraph, edge_types: &[EdgeType]) -> Vec<Vec<Memor
                         let cycle: Vec<MemoryId> = path[pos..].to_vec();
                         // Only add if we haven't found an equivalent cycle
                         if !cycles.iter().any(|c: &Vec<MemoryId>| {
-                            c.len() == cycle.len()
-                                && cycle.iter().all(|n| c.contains(n))
+                            c.len() == cycle.len() && cycle.iter().all(|n| c.contains(n))
                         }) {
                             cycles.push(cycle);
                         }

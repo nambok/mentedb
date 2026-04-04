@@ -1,7 +1,7 @@
 //! Integration tests for multi-agent collaboration features.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mentedb_core::agent::AgentRegistry;
 use mentedb_core::conflict::{ConflictResolver, ConflictVersion, Resolution};
@@ -111,7 +111,9 @@ fn conflict_detection_and_resolution() {
         },
     ];
 
-    let conflict = resolver.detect_conflict(mid, &versions).expect("should detect conflict");
+    let conflict = resolver
+        .detect_conflict(mid, &versions)
+        .expect("should detect conflict");
     assert_eq!(conflict.versions.len(), 2);
 
     // Resolve by highest confidence — Alice wins

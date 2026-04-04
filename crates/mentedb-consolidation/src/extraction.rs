@@ -1,5 +1,5 @@
-use mentedb_core::types::MemoryId;
 use mentedb_core::MemoryNode;
+use mentedb_core::types::MemoryId;
 use serde::{Deserialize, Serialize};
 
 /// A structured fact extracted from memory content.
@@ -140,8 +140,20 @@ mod tests {
         let extractor = FactExtractor::new();
         let id = uuid::Uuid::new_v4();
         let facts = vec![
-            ExtractedFact { subject: "A".into(), predicate: "is".into(), object: "B".into(), confidence: 0.9, source_memory: id },
-            ExtractedFact { subject: "a".into(), predicate: "is".into(), object: "b".into(), confidence: 0.8, source_memory: id },
+            ExtractedFact {
+                subject: "A".into(),
+                predicate: "is".into(),
+                object: "B".into(),
+                confidence: 0.9,
+                source_memory: id,
+            },
+            ExtractedFact {
+                subject: "a".into(),
+                predicate: "is".into(),
+                object: "b".into(),
+                confidence: 0.8,
+                source_memory: id,
+            },
         ];
         let deduped = extractor.deduplicate_facts(&facts);
         assert_eq!(deduped.len(), 1);
@@ -152,12 +164,27 @@ mod tests {
         let extractor = FactExtractor::new();
         let id = uuid::Uuid::new_v4();
         let new_fact = ExtractedFact {
-            subject: "Team".into(), predicate: "uses".into(), object: "Postgres".into(),
-            confidence: 0.9, source_memory: id,
+            subject: "Team".into(),
+            predicate: "uses".into(),
+            object: "Postgres".into(),
+            confidence: 0.9,
+            source_memory: id,
         };
         let existing = vec![
-            ExtractedFact { subject: "Team".into(), predicate: "uses".into(), object: "MySQL".into(), confidence: 0.8, source_memory: id },
-            ExtractedFact { subject: "Team".into(), predicate: "prefers".into(), object: "Go".into(), confidence: 0.7, source_memory: id },
+            ExtractedFact {
+                subject: "Team".into(),
+                predicate: "uses".into(),
+                object: "MySQL".into(),
+                confidence: 0.8,
+                source_memory: id,
+            },
+            ExtractedFact {
+                subject: "Team".into(),
+                predicate: "prefers".into(),
+                object: "Go".into(),
+                confidence: 0.7,
+                source_memory: id,
+            },
         ];
         let contradictions = extractor.find_contradicting_facts(&new_fact, &existing);
         assert_eq!(contradictions.len(), 1);

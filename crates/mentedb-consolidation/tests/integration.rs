@@ -61,10 +61,7 @@ fn test_full_pipeline() {
             m
         },
         {
-            let mut m = make_memory(
-                "Unrelated topic about weather",
-                vec![0.0, 0.0, 1.0],
-            );
+            let mut m = make_memory("Unrelated topic about weather", vec![0.0, 0.0, 1.0]);
             m.created_at = now - 40 * DAY_US;
             m.accessed_at = now - 35 * DAY_US;
             m.access_count = 0;

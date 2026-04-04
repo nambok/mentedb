@@ -44,7 +44,12 @@ pub fn propagate_update(
     changed_id: MemoryId,
     new_confidence: f32,
 ) -> Vec<(MemoryId, f32)> {
-    propagate_update_with_config(graph, changed_id, new_confidence, &PropagationConfig::default())
+    propagate_update_with_config(
+        graph,
+        changed_id,
+        new_confidence,
+        &PropagationConfig::default(),
+    )
 }
 
 /// Propagate a confidence change through the graph with custom configuration.
@@ -89,7 +94,8 @@ pub fn propagate_update_with_config(
                 EdgeType::Contradicts => {
                     // contradicted node confidence -= delta * edge weight * factor
                     let current = confidences.get(&neighbor).copied().unwrap_or(1.0);
-                    (current - node_confidence * edge.weight * config.contradicts_factor).clamp(0.0, 1.0)
+                    (current - node_confidence * edge.weight * config.contradicts_factor)
+                        .clamp(0.0, 1.0)
                 }
                 EdgeType::Supersedes => {
                     // superseded node confidence = min(current, new * floor)

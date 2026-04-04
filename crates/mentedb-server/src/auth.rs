@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
+use axum::Json;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -65,10 +65,9 @@ pub async fn generate_token(
     State(state): State<Arc<AppState>>,
     Json(req): Json<TokenRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let secret = state
-        .jwt_secret
-        .as_deref()
-        .ok_or_else(|| ApiError::BadRequest("auth is disabled (no jwt-secret configured)".into()))?;
+    let secret = state.jwt_secret.as_deref().ok_or_else(|| {
+        ApiError::BadRequest("auth is disabled (no jwt-secret configured)".into())
+    })?;
 
     let token = create_token(secret, &req.agent_id, req.expiry_hours);
     Ok(Json(json!({ "token": token, "agent_id": req.agent_id })))

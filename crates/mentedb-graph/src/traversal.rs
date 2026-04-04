@@ -128,11 +128,7 @@ pub fn extract_subgraph(
 }
 
 /// Find shortest path using BFS. Returns None if no path exists.
-pub fn shortest_path(
-    graph: &CsrGraph,
-    from: MemoryId,
-    to: MemoryId,
-) -> Option<Vec<MemoryId>> {
+pub fn shortest_path(graph: &CsrGraph, from: MemoryId, to: MemoryId) -> Option<Vec<MemoryId>> {
     if from == to {
         return Some(vec![from]);
     }

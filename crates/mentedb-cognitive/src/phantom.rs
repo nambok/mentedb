@@ -92,13 +92,12 @@ pub struct PhantomConfig {
 impl Default for PhantomConfig {
     fn default() -> Self {
         let stop_words: HashSet<String> = [
-            "the", "a", "an", "is", "are", "was", "were", "it", "this", "that",
-            "we", "you", "they", "he", "she", "i", "my", "our", "but", "and",
-            "or", "if", "then", "when", "how", "what", "where", "who", "do",
-            "does", "did", "have", "has", "had", "be", "been", "being", "so",
-            "also", "just", "very", "too", "not", "no", "yes", "can", "will",
-            "should", "would", "could", "may", "might", "must", "shall",
-            "note", "see", "use", "make", "let", "new", "set", "get",
+            "the", "a", "an", "is", "are", "was", "were", "it", "this", "that", "we", "you",
+            "they", "he", "she", "i", "my", "our", "but", "and", "or", "if", "then", "when", "how",
+            "what", "where", "who", "do", "does", "did", "have", "has", "had", "be", "been",
+            "being", "so", "also", "just", "very", "too", "not", "no", "yes", "can", "will",
+            "should", "would", "could", "may", "might", "must", "shall", "note", "see", "use",
+            "make", "let", "new", "set", "get",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -282,12 +281,15 @@ impl PhantomTracker {
         let words: Vec<&str> = content.split_whitespace().collect();
         let mut i = 0;
         while i < words.len() {
-            let w = words[i].trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.');
+            let w = words[i]
+                .trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.');
             if !w.is_empty() && w.chars().next().is_some_and(|c| c.is_uppercase()) && w.len() >= 2 {
                 let mut entity_parts = vec![w.to_string()];
                 let mut j = i + 1;
                 while j < words.len() {
-                    let next = words[j].trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.');
+                    let next = words[j].trim_matches(|c: char| {
+                        !c.is_alphanumeric() && c != '-' && c != '_' && c != '.'
+                    });
                     if !next.is_empty() && next.chars().next().is_some_and(|c| c.is_uppercase()) {
                         entity_parts.push(next.to_string());
                         j += 1;
@@ -312,8 +314,12 @@ impl PhantomTracker {
                 i = j;
             } else {
                 if !w.is_empty() && w.len() >= self.config.min_word_length {
-                    let is_technical = w.contains('-') || w.contains('.') || w.contains('_')
-                        || (w.len() >= self.config.min_word_length && w.chars().all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_'));
+                    let is_technical = w.contains('-')
+                        || w.contains('.')
+                        || w.contains('_')
+                        || (w.len() >= self.config.min_word_length
+                            && w.chars()
+                                .all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_'));
 
                     if is_technical
                         && !known_lower.contains(&w.to_lowercase())
@@ -336,7 +342,8 @@ impl PhantomTracker {
     }
 
     pub fn get_active_phantoms(&self) -> Vec<&PhantomMemory> {
-        let mut active: Vec<&PhantomMemory> = self.phantoms.iter().filter(|p| !p.resolved).collect();
+        let mut active: Vec<&PhantomMemory> =
+            self.phantoms.iter().filter(|p| !p.resolved).collect();
         active.sort_by(|a, b| b.priority.cmp(&a.priority));
         active
     }
@@ -380,9 +387,20 @@ mod tests {
             &known,
             1,
         );
-        let refs: Vec<&str> = phantoms.iter().map(|p| p.source_reference.as_str()).collect();
-        assert!(refs.iter().any(|r| r.contains("Kubernetes")), "Expected Kubernetes, got: {:?}", refs);
-        assert!(refs.iter().any(|r| r.contains("Terraform")), "Expected Terraform, got: {:?}", refs);
+        let refs: Vec<&str> = phantoms
+            .iter()
+            .map(|p| p.source_reference.as_str())
+            .collect();
+        assert!(
+            refs.iter().any(|r| r.contains("Kubernetes")),
+            "Expected Kubernetes, got: {:?}",
+            refs
+        );
+        assert!(
+            refs.iter().any(|r| r.contains("Terraform")),
+            "Expected Terraform, got: {:?}",
+            refs
+        );
     }
 
     #[test]
@@ -462,11 +480,8 @@ mod tests {
         let mut tracker = PhantomTracker::default();
         tracker.register_entities(&["Kubernetes", "Terraform", "Helm"]);
 
-        let gaps = tracker.detect_gaps_explicit(
-            "Using Kubernetes and Helm",
-            &["Kubernetes", "Helm"],
-            1,
-        );
+        let gaps =
+            tracker.detect_gaps_explicit("Using Kubernetes and Helm", &["Kubernetes", "Helm"], 1);
 
         // Both are registered — no gaps.
         assert!(gaps.is_empty());
@@ -481,13 +496,12 @@ mod tests {
         let mut tracker = PhantomTracker::new(config);
 
         // No entities registered and heuristic off — should find nothing.
-        let gaps = tracker.detect_gaps(
-            "Deploy to Kubernetes using Terraform",
-            &[],
-            1,
+        let gaps = tracker.detect_gaps("Deploy to Kubernetes using Terraform", &[], 1);
+        assert!(
+            gaps.is_empty(),
+            "Expected no gaps with heuristic disabled and empty registry, got: {:?}",
+            gaps.iter().map(|g| &g.source_reference).collect::<Vec<_>>()
         );
-        assert!(gaps.is_empty(), "Expected no gaps with heuristic disabled and empty registry, got: {:?}",
-            gaps.iter().map(|g| &g.source_reference).collect::<Vec<_>>());
     }
 
     #[test]
@@ -498,11 +512,7 @@ mod tests {
         tracker.register_entity("Kubernetes");
 
         // Registry-based detection should still work even with heuristic off.
-        let gaps = tracker.detect_gaps(
-            "Deploy to Kubernetes using Terraform",
-            &[],
-            1,
-        );
+        let gaps = tracker.detect_gaps("Deploy to Kubernetes using Terraform", &[], 1);
         // Kubernetes is registered and referenced but not in known_entities → flagged.
         // Terraform is NOT registered and heuristic is off → not flagged.
         assert_eq!(gaps.len(), 1);
@@ -538,12 +548,11 @@ mod tests {
         let mut tracker = PhantomTracker::default();
         // No entities registered — heuristic only.
         // Use lowercase prefix so "Redis" is detected as a standalone capitalized word.
-        let gaps = tracker.detect_gaps(
-            "we use Redis for caching",
-            &[],
-            1,
-        );
-        let redis_gaps: Vec<_> = gaps.iter().filter(|g| g.source_reference == "Redis").collect();
+        let gaps = tracker.detect_gaps("we use Redis for caching", &[], 1);
+        let redis_gaps: Vec<_> = gaps
+            .iter()
+            .filter(|g| g.source_reference == "Redis")
+            .collect();
         assert_eq!(redis_gaps.len(), 1);
         assert_eq!(redis_gaps[0].priority, PhantomPriority::Low);
     }
@@ -554,7 +563,10 @@ mod tests {
         tracker.register_entity("Redis");
 
         let gaps = tracker.detect_gaps("we use Redis for caching", &[], 1);
-        let redis_gaps: Vec<_> = gaps.iter().filter(|g| g.source_reference == "Redis").collect();
+        let redis_gaps: Vec<_> = gaps
+            .iter()
+            .filter(|g| g.source_reference == "Redis")
+            .collect();
         assert_eq!(redis_gaps.len(), 1);
         // Registry-based single-word entity → Medium priority.
         assert_eq!(redis_gaps[0].priority, PhantomPriority::Medium);

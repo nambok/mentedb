@@ -11,9 +11,9 @@ use parking_lot::RwLock;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
+use mentedb_core::MenteError;
 use mentedb_core::error::MenteResult;
 use mentedb_core::types::MemoryId;
-use mentedb_core::MenteError;
 
 // ---------------------------------------------------------------------------
 // Distance metrics
@@ -259,7 +259,14 @@ impl HnswIndex {
         let query = &inner.nodes[node_idx].vector.clone();
 
         for level in (node_level + 1..=inner.max_level).rev() {
-            current_ep = greedy_closest(&inner.nodes, &inner.deleted, current_ep, query, level, metric);
+            current_ep = greedy_closest(
+                &inner.nodes,
+                &inner.deleted,
+                current_ep,
+                query,
+                level,
+                metric,
+            );
         }
 
         // For each level from min(node_level, max_level) down to 0, do ef-search and connect
@@ -298,7 +305,9 @@ impl HnswIndex {
                         })
                         .collect();
                     scored.sort_unstable_by(|a, b| {
-                        a.dist.partial_cmp(&b.dist).unwrap_or(std::cmp::Ordering::Equal)
+                        a.dist
+                            .partial_cmp(&b.dist)
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     });
                     scored.truncate(max_conn);
                     inner.nodes[neighbour_idx].layers[level] =
@@ -336,12 +345,25 @@ impl HnswIndex {
         // Greedy descent to layer 0
         let mut current_ep = ep;
         for level in (1..=inner.max_level).rev() {
-            current_ep =
-                greedy_closest(&inner.nodes, &inner.deleted, current_ep, query, level, metric);
+            current_ep = greedy_closest(
+                &inner.nodes,
+                &inner.deleted,
+                current_ep,
+                query,
+                level,
+                metric,
+            );
         }
 
-        let candidates =
-            search_layer(&inner.nodes, &inner.deleted, current_ep, query, ef, 0, metric);
+        let candidates = search_layer(
+            &inner.nodes,
+            &inner.deleted,
+            current_ep,
+            query,
+            ef,
+            0,
+            metric,
+        );
 
         candidates
             .into_iter()
@@ -377,8 +399,7 @@ impl HnswIndex {
     /// Serialize the index to bytes for persistence.
     pub fn serialize(&self) -> MenteResult<Vec<u8>> {
         let inner = self.inner.read();
-        serde_json::to_vec(&*inner)
-            .map_err(|e| MenteError::Serialization(e.to_string()))
+        serde_json::to_vec(&*inner).map_err(|e| MenteError::Serialization(e.to_string()))
     }
 
     /// Deserialize an index from bytes.
@@ -415,7 +436,7 @@ fn random_level(level_mult: f64, _m: usize) -> usize {
     let r: f64 = rng.r#gen::<f64>();
     // Avoid log(0)
     let r = r.max(f64::EPSILON);
-    
+
     (-r.ln() * level_mult).floor() as usize
 }
 
@@ -516,7 +537,11 @@ fn search_layer(
     }
 
     let mut res: Vec<Candidate> = results.into_vec();
-    res.sort_unstable_by(|a, b| a.dist.partial_cmp(&b.dist).unwrap_or(std::cmp::Ordering::Equal));
+    res.sort_unstable_by(|a, b| {
+        a.dist
+            .partial_cmp(&b.dist)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     res
 }
 

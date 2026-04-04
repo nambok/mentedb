@@ -19,10 +19,10 @@ use axum::middleware;
 use mentedb::MenteDb;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
-use tracing::info;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
+use tracing::info;
 
 use crate::rate_limit::RateLimiter;
 use crate::state::AppState;
@@ -136,9 +136,12 @@ async fn main() -> Result<()> {
 
     info!("MenteDB server listening on {addr}");
 
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     let mut db = db.write().await;
     db.close()?;

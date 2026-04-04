@@ -5,24 +5,22 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use mentedb::prelude::*;
 use mentedb::MenteDb;
+use mentedb::prelude::*;
 
 use mentedb_cognitive::{
-    CognitionStream, InterferenceDetector, PainRegistry, PainSignal, PhantomConfig,
-    PhantomTracker, SpeculativeCache, StreamAlert, TrajectoryTracker, TrajectoryNode,
-    DecisionState, WriteInferenceEngine,
+    CognitionStream, DecisionState, InterferenceDetector, PainRegistry, PainSignal, PhantomConfig,
+    PhantomTracker, SpeculativeCache, StreamAlert, TrajectoryNode, TrajectoryTracker,
+    WriteInferenceEngine,
 };
 use mentedb_consolidation::{
-    ArchivalConfig, ArchivalDecision, ArchivalPipeline, DecayConfig, DecayEngine,
-    FactExtractor, ForgetEngine, ForgetRequest, MemoryCompressor,
+    ArchivalConfig, ArchivalDecision, ArchivalPipeline, DecayConfig, DecayEngine, FactExtractor,
+    ForgetEngine, ForgetRequest, MemoryCompressor,
 };
-use mentedb_context::{
-    AssemblyConfig, ContextAssembler, DeltaTracker, OutputFormat, ScoredMemory,
-};
+use mentedb_context::{AssemblyConfig, ContextAssembler, DeltaTracker, OutputFormat, ScoredMemory};
 use mentedb_core::{
-    AgentRegistry, ConflictResolver, ConflictVersion, MemoryEdge, MemoryNode,
-    Permission, Resolution, SpaceManager, VersionStore,
+    AgentRegistry, ConflictResolver, ConflictVersion, MemoryEdge, MemoryNode, Permission,
+    Resolution, SpaceManager, VersionStore,
 };
 
 use tempfile::tempdir;
@@ -64,7 +62,12 @@ fn make_similar_embedding(base_seed: u32, noise: f32) -> Vec<f32> {
 }
 
 fn make_memory(agent_id: Uuid, content: &str, mem_type: MemoryType, seed: u32) -> MemoryNode {
-    MemoryNode::new(agent_id, mem_type, content.to_string(), make_embedding(seed))
+    MemoryNode::new(
+        agent_id,
+        mem_type,
+        content.to_string(),
+        make_embedding(seed),
+    )
 }
 
 fn make_memory_at(
@@ -96,11 +99,36 @@ fn test_coding_assistant_workflow() {
     let agent_id = Uuid::new_v4();
     let mut memories: Vec<MemoryNode> = Vec::new();
 
-    let m1 = make_memory(agent_id, "User chose React for frontend framework", MemoryType::Episodic, 1);
-    let m2 = make_memory(agent_id, "User chose TypeScript as primary language", MemoryType::Episodic, 2);
-    let m3 = make_memory(agent_id, "Project setup with Vite as build tool", MemoryType::Episodic, 3);
-    let m4 = make_memory(agent_id, "Tailwind CSS selected for styling", MemoryType::Episodic, 4);
-    let m5 = make_memory(agent_id, "ESLint and Prettier configured for linting", MemoryType::Episodic, 5);
+    let m1 = make_memory(
+        agent_id,
+        "User chose React for frontend framework",
+        MemoryType::Episodic,
+        1,
+    );
+    let m2 = make_memory(
+        agent_id,
+        "User chose TypeScript as primary language",
+        MemoryType::Episodic,
+        2,
+    );
+    let m3 = make_memory(
+        agent_id,
+        "Project setup with Vite as build tool",
+        MemoryType::Episodic,
+        3,
+    );
+    let m4 = make_memory(
+        agent_id,
+        "Tailwind CSS selected for styling",
+        MemoryType::Episodic,
+        4,
+    );
+    let m5 = make_memory(
+        agent_id,
+        "ESLint and Prettier configured for linting",
+        MemoryType::Episodic,
+        5,
+    );
 
     let ids: Vec<MemoryId> = vec![m1.id, m2.id, m3.id, m4.id, m5.id];
 
@@ -131,7 +159,10 @@ fn test_coding_assistant_workflow() {
 
         // Recall memories via vector similarity (MQL type-scan hits debug_assert in HNSW)
         let results = db.recall_similar(&make_embedding(1), 10).unwrap();
-        assert!(!results.is_empty(), "Should recall at least 1 memory via similarity");
+        assert!(
+            !results.is_empty(),
+            "Should recall at least 1 memory via similarity"
+        );
 
         db.close().unwrap();
     }
@@ -169,7 +200,10 @@ fn test_coding_assistant_workflow() {
                     | mentedb_cognitive::InferredAction::CreateEdge { .. }
             )
         });
-        assert!(has_flag, "WriteInferenceEngine should detect relationship with existing memories: got {actions:?}");
+        assert!(
+            has_flag,
+            "WriteInferenceEngine should detect relationship with existing memories: got {actions:?}"
+        );
 
         // TrajectoryTracker
         let mut tracker = TrajectoryTracker::new(100);
@@ -194,12 +228,17 @@ fn test_coding_assistant_workflow() {
         assert!(resume.is_some(), "Trajectory should produce resume context");
         let resume_text = resume.unwrap();
         assert!(
-            resume_text.contains("Webpack") || resume_text.contains("build tool") || resume_text.contains("Switched"),
+            resume_text.contains("Webpack")
+                || resume_text.contains("build tool")
+                || resume_text.contains("Switched"),
             "Resume context should mention the build-tool switch: {resume_text}"
         );
 
         // Final assertions
-        assert!(memories.len() >= 6, "At least 6 memories stored across sessions");
+        assert!(
+            memories.len() >= 6,
+            "At least 6 memories stored across sessions"
+        );
 
         db.close().unwrap();
     }
@@ -238,9 +277,24 @@ fn test_multi_agent_collaboration() {
 
     // Frontend memories
     let fe_mems: Vec<MemoryNode> = vec![
-        make_memory(frontend_agent.id, "Header component uses sticky positioning", MemoryType::Semantic, 10),
-        make_memory(frontend_agent.id, "Dashboard uses React Query for data fetching", MemoryType::Semantic, 11),
-        make_memory(frontend_agent.id, "Form validation with Zod schemas", MemoryType::Semantic, 12),
+        make_memory(
+            frontend_agent.id,
+            "Header component uses sticky positioning",
+            MemoryType::Semantic,
+            10,
+        ),
+        make_memory(
+            frontend_agent.id,
+            "Dashboard uses React Query for data fetching",
+            MemoryType::Semantic,
+            11,
+        ),
+        make_memory(
+            frontend_agent.id,
+            "Form validation with Zod schemas",
+            MemoryType::Semantic,
+            12,
+        ),
     ];
     for m in &fe_mems {
         db.store(m.clone()).unwrap();
@@ -248,9 +302,24 @@ fn test_multi_agent_collaboration() {
 
     // Backend memories
     let be_mems: Vec<MemoryNode> = vec![
-        make_memory(backend_agent.id, "REST API uses Express with TypeScript", MemoryType::Semantic, 20),
-        make_memory(backend_agent.id, "PostgreSQL with Prisma ORM for data layer", MemoryType::Semantic, 21),
-        make_memory(backend_agent.id, "Redis caching layer for session management", MemoryType::Semantic, 22),
+        make_memory(
+            backend_agent.id,
+            "REST API uses Express with TypeScript",
+            MemoryType::Semantic,
+            20,
+        ),
+        make_memory(
+            backend_agent.id,
+            "PostgreSQL with Prisma ORM for data layer",
+            MemoryType::Semantic,
+            21,
+        ),
+        make_memory(
+            backend_agent.id,
+            "Redis caching layer for session management",
+            MemoryType::Semantic,
+            22,
+        ),
     ];
     for m in &be_mems {
         db.store(m.clone()).unwrap();
@@ -306,16 +375,25 @@ fn test_multi_agent_collaboration() {
     ];
 
     let conflict = resolver.detect_conflict(fe_auth.id, &versions);
-    assert!(conflict.is_some(), "Should detect auth conflict between agents");
+    assert!(
+        conflict.is_some(),
+        "Should detect auth conflict between agents"
+    );
 
     let conflict = conflict.unwrap();
     let resolved = resolver.auto_resolve(&conflict, Resolution::KeepHighestConfidence);
-    assert_eq!(resolved.agent_id, backend_agent.id, "Backend had higher confidence");
+    assert_eq!(
+        resolved.agent_id, backend_agent.id,
+        "Backend had higher confidence"
+    );
 
     // Spaces isolation: each agent can list only spaces they have access to
     let fe_spaces = space_mgr.list_spaces_for_agent(frontend_agent.id);
     let be_spaces = space_mgr.list_spaces_for_agent(backend_agent.id);
-    assert!(fe_spaces.len() >= 2, "Frontend agent sees both spaces (own + granted)");
+    assert!(
+        fe_spaces.len() >= 2,
+        "Frontend agent sees both spaces (own + granted)"
+    );
     assert!(be_spaces.len() >= 2, "Backend agent sees both spaces");
 
     db.close().unwrap();
@@ -389,7 +467,10 @@ fn test_knowledge_lifecycle() {
         .iter()
         .flat_map(|m| extractor.extract_facts(m))
         .collect();
-    assert!(!all_facts.is_empty(), "FactExtractor should extract at least one fact");
+    assert!(
+        !all_facts.is_empty(),
+        "FactExtractor should extract at least one fact"
+    );
 
     // Compress verbose memories
     let compressor = MemoryCompressor::new();
@@ -467,17 +548,39 @@ fn test_cognitive_safety_net() {
     pain_registry.record_pain(signal);
 
     // Context about database recommendation should surface the pain
-    let context_kw = vec!["database".to_string(), "nosql".to_string(), "recommendation".to_string()];
+    let context_kw = vec![
+        "database".to_string(),
+        "nosql".to_string(),
+        "recommendation".to_string(),
+    ];
     let found_pain = pain_registry.get_pain_for_context(&context_kw);
-    assert!(!found_pain.is_empty(), "Pain signal should surface for 'nosql' keyword");
+    assert!(
+        !found_pain.is_empty(),
+        "Pain signal should surface for 'nosql' keyword"
+    );
 
     let warning_text = pain_registry.format_pain_warnings(&found_pain);
     assert!(!warning_text.is_empty(), "Pain warning should produce text");
 
     // ── Interference Detection ─────────────────────────────────────────────
-    let alpha = make_memory(agent_id, "Project Alpha uses React with Redux for state management", MemoryType::Semantic, 50);
-    let beta = make_memory(agent_id, "Project Beta uses Vue with Pinia for state management", MemoryType::Semantic, 51);
-    let gamma = make_memory(agent_id, "Project Gamma uses Angular with NgRx for state management", MemoryType::Semantic, 52);
+    let alpha = make_memory(
+        agent_id,
+        "Project Alpha uses React with Redux for state management",
+        MemoryType::Semantic,
+        50,
+    );
+    let beta = make_memory(
+        agent_id,
+        "Project Beta uses Vue with Pinia for state management",
+        MemoryType::Semantic,
+        51,
+    );
+    let gamma = make_memory(
+        agent_id,
+        "Project Gamma uses Angular with NgRx for state management",
+        MemoryType::Semantic,
+        52,
+    );
 
     db.store(alpha.clone()).unwrap();
     db.store(beta.clone()).unwrap();
@@ -500,7 +603,11 @@ fn test_cognitive_safety_net() {
         // Arrange with separation
         let ids: Vec<MemoryId> = int_memories.iter().map(|m| m.id).collect();
         let arranged = InterferenceDetector::arrange_with_separation(ids.clone(), &pairs);
-        assert_eq!(arranged.len(), ids.len(), "Arrangement should preserve all memories");
+        assert_eq!(
+            arranged.len(),
+            ids.len(),
+            "Arrangement should preserve all memories"
+        );
     }
 
     // ── Phantom Tracker ────────────────────────────────────────────────────
@@ -537,8 +644,18 @@ fn test_stream_cognition() {
     let agent_id = Uuid::new_v4();
 
     // Store known facts
-    let fact_mysql = make_memory(agent_id, "User uses MySQL for their database", MemoryType::Semantic, 60);
-    let fact_deadline = make_memory(agent_id, "Project deadline is March 15", MemoryType::Semantic, 61);
+    let fact_mysql = make_memory(
+        agent_id,
+        "User uses MySQL for their database",
+        MemoryType::Semantic,
+        60,
+    );
+    let fact_deadline = make_memory(
+        agent_id,
+        "Project deadline is March 15",
+        MemoryType::Semantic,
+        61,
+    );
     let fact_team = make_memory(agent_id, "Team size is 5 people", MemoryType::Semantic, 62);
 
     db.store(fact_mysql.clone()).unwrap();
@@ -546,7 +663,10 @@ fn test_stream_cognition() {
     db.store(fact_team.clone()).unwrap();
 
     let known_facts: Vec<(MemoryId, String)> = vec![
-        (fact_mysql.id, "User uses MySQL for their database".to_string()),
+        (
+            fact_mysql.id,
+            "User uses MySQL for their database".to_string(),
+        ),
         (fact_deadline.id, "Project deadline is March 15".to_string()),
         (fact_team.id, "Team size is 5 people".to_string()),
     ];
@@ -561,7 +681,9 @@ fn test_stream_cognition() {
     }
 
     let alerts = stream.check_alerts(&known_facts);
-    let _has_contradiction = alerts.iter().any(|a| matches!(a, StreamAlert::Contradiction { .. }));
+    let _has_contradiction = alerts
+        .iter()
+        .any(|a| matches!(a, StreamAlert::Contradiction { .. }));
     // Stream cognition works on keyword matching — PostgreSQL vs MySQL
     // Whether it flags depends on the implementation's threshold
     // We verify the stream is functional
@@ -581,10 +703,7 @@ fn test_stream_cognition() {
 
     // Drain buffer
     let buffer = stream.drain_buffer();
-    assert!(
-        !buffer.is_empty(),
-        "Buffer should contain accumulated text"
-    );
+    assert!(!buffer.is_empty(), "Buffer should contain accumulated text");
     assert!(
         buffer.contains("PostgreSQL") || buffer.contains("team"),
         "Buffer should contain fed tokens: {buffer}"
@@ -659,7 +778,10 @@ fn test_speculative_preassembly() {
     // Hit: query about a cached topic
     if let Some(first_topic) = topics_to_cache.first() {
         let hit = cache.try_hit(first_topic);
-        assert!(hit.is_some(), "Cache should hit for pre-assembled topic '{first_topic}'");
+        assert!(
+            hit.is_some(),
+            "Cache should hit for pre-assembled topic '{first_topic}'"
+        );
         let entry = hit.unwrap();
         assert!(
             entry.context_text.contains("Pre-assembled context"),
@@ -693,41 +815,62 @@ fn test_context_assembly_quality() {
     for i in 0..2 {
         let m = make_memory(
             agent_id,
-            &format!("ANTI-PATTERN: Never use eval() in production code (pattern {})", i),
+            &format!(
+                "ANTI-PATTERN: Never use eval() in production code (pattern {})",
+                i
+            ),
             MemoryType::AntiPattern,
             200 + i,
         );
-        scored.push(ScoredMemory { memory: m, score: 0.7 });
+        scored.push(ScoredMemory {
+            memory: m,
+            score: 0.7,
+        });
     }
 
     // 3 Correction memories (should also go to Opening)
     for i in 0..3 {
         let m = make_memory(
             agent_id,
-            &format!("CORRECTION: The API endpoint is /v2/users not /v1/users (correction {})", i),
+            &format!(
+                "CORRECTION: The API endpoint is /v2/users not /v1/users (correction {})",
+                i
+            ),
             MemoryType::Correction,
             210 + i,
         );
-        scored.push(ScoredMemory { memory: m, score: 0.75 });
+        scored.push(ScoredMemory {
+            memory: m,
+            score: 0.75,
+        });
     }
 
     // 5 high-salience memories (should go to Critical zone)
     for i in 0..5 {
         let mut m = make_memory(
             agent_id,
-            &format!("Critical: User auth requires OAuth 2.0 PKCE flow (critical {})", i),
+            &format!(
+                "Critical: User auth requires OAuth 2.0 PKCE flow (critical {})",
+                i
+            ),
             MemoryType::Semantic,
             220 + i,
         );
         m.salience = 0.95;
-        scored.push(ScoredMemory { memory: m, score: 0.9 });
+        scored.push(ScoredMemory {
+            memory: m,
+            score: 0.9,
+        });
     }
 
     // 10 regular memories (Primary/Supporting)
     for i in 0..10 {
         let m = make_memory(
             agent_id,
-            &format!("Project uses microservices architecture with Docker containers (detail {})", i),
+            &format!(
+                "Project uses microservices architecture with Docker containers (detail {})",
+                i
+            ),
             MemoryType::Episodic,
             230 + i,
         );
@@ -770,7 +913,10 @@ fn test_context_assembly_quality() {
 
     // Compact should include more memories in the same budget or use fewer tokens
     // for the same content
-    assert!(compact_ctx.total_tokens > 0, "Compact should produce tokens");
+    assert!(
+        compact_ctx.total_tokens > 0,
+        "Compact should produce tokens"
+    );
 
     // If both fit everything, compact should use fewer tokens;
     // if budget-constrained, compact should fit more memories
@@ -799,26 +945,22 @@ fn test_context_assembly_quality() {
     };
 
     // First assembly
-    let ctx1 = ContextAssembler::assemble_delta(
-        scored.clone(),
-        vec![],
-        &mut delta_tracker,
-        &delta_config,
+    let ctx1 =
+        ContextAssembler::assemble_delta(scored.clone(), vec![], &mut delta_tracker, &delta_config);
+    assert!(
+        ctx1.total_tokens > 0,
+        "First delta assembly should produce output"
     );
-    assert!(ctx1.total_tokens > 0, "First delta assembly should produce output");
 
     // Second assembly with same data — should show delta awareness
     // On second pass, all memories are "unchanged" so added count is 0.
     // This is correct: the delta system avoids re-sending the same context.
-    let ctx2 = ContextAssembler::assemble_delta(
-        scored.clone(),
-        vec![],
-        &mut delta_tracker,
-        &delta_config,
-    );
+    let ctx2 =
+        ContextAssembler::assemble_delta(scored.clone(), vec![], &mut delta_tracker, &delta_config);
     // Delta system works: on second pass with identical data, nothing is "added"
     assert!(
-        ctx2.metadata.included_count == 0 || ctx2.metadata.included_count <= ctx1.metadata.included_count,
+        ctx2.metadata.included_count == 0
+            || ctx2.metadata.included_count <= ctx1.metadata.included_count,
         "Second delta should include fewer or equal memories (delta-only): got {} vs first {}",
         ctx2.metadata.included_count,
         ctx1.metadata.included_count
@@ -832,7 +974,10 @@ fn test_context_assembly_quality() {
         250,
     );
     let mut scored_with_new = scored.clone();
-    scored_with_new.push(ScoredMemory { memory: extra, score: 0.99 });
+    scored_with_new.push(ScoredMemory {
+        memory: extra,
+        score: 0.99,
+    });
 
     let ctx3 = ContextAssembler::assemble_delta(
         scored_with_new,
@@ -910,7 +1055,10 @@ fn test_gdpr_forget() {
     let audit = forget_engine.generate_audit_log(&request, &plan);
     assert!(!audit.is_empty(), "Audit log should be generated");
     assert!(
-        audit.contains("GDPR") || audit.contains("erasure") || audit.contains("Erasure") || audit.contains("delete"),
+        audit.contains("GDPR")
+            || audit.contains("erasure")
+            || audit.contains("Erasure")
+            || audit.contains("delete"),
         "Audit log should reference the reason: {audit}"
     );
 

@@ -2,12 +2,12 @@
 
 use std::path::Path;
 
-use mentedb_core::error::{MenteError, MenteResult};
 use mentedb_core::MemoryNode;
+use mentedb_core::error::{MenteError, MenteResult};
 use tracing::info;
 
 use crate::buffer::BufferPool;
-use crate::page::{Page, PageId, PageManager, PageType, PAGE_DATA_SIZE};
+use crate::page::{PAGE_DATA_SIZE, Page, PageId, PageManager, PageType};
 use crate::wal::{Wal, WalEntryType};
 
 /// Default number of page frames in the buffer pool.
@@ -35,7 +35,11 @@ impl StorageEngine {
         let buffer_pool = BufferPool::new(DEFAULT_BUFFER_POOL_SIZE);
         let wal = Wal::open(path)?;
 
-        let mut engine = Self { page_manager, buffer_pool, wal };
+        let mut engine = Self {
+            page_manager,
+            buffer_pool,
+            wal,
+        };
 
         let recovered = engine.recover()?;
         if recovered > 0 {
@@ -124,7 +128,9 @@ impl StorageEngine {
         let lsn = self.wal.append(WalEntryType::PageWrite, page_id.0, data)?;
 
         // Load the page into the buffer pool (or get cached copy).
-        let mut page = self.buffer_pool.fetch_page(page_id, &mut self.page_manager)?;
+        let mut page = self
+            .buffer_pool
+            .fetch_page(page_id, &mut self.page_manager)?;
 
         let copy_len = data.len().min(PAGE_DATA_SIZE);
         page.data[..copy_len].copy_from_slice(&data[..copy_len]);
@@ -153,8 +159,8 @@ impl StorageEngine {
     ///
     /// Returns the [`PageId`] where the node was stored.
     pub fn store_memory(&mut self, node: &MemoryNode) -> MenteResult<PageId> {
-        let serialized = serde_json::to_vec(node)
-            .map_err(|e| MenteError::Serialization(e.to_string()))?;
+        let serialized =
+            serde_json::to_vec(node).map_err(|e| MenteError::Serialization(e.to_string()))?;
 
         // 4 bytes for the length prefix.
         if serialized.len() + 4 > PAGE_DATA_SIZE {
@@ -174,7 +180,11 @@ impl StorageEngine {
 
         self.write_page(page_id, &buf)?;
 
-        info!(page_id = page_id.0, bytes = serialized.len(), "stored memory node");
+        info!(
+            page_id = page_id.0,
+            bytes = serialized.len(),
+            "stored memory node"
+        );
         Ok(page_id)
     }
 

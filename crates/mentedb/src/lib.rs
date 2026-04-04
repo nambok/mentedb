@@ -26,10 +26,10 @@
 
 use std::path::{Path, PathBuf};
 
-use mentedb_core::types::MemoryId;
-use mentedb_core::error::MenteResult;
-use mentedb_core::{MenteError, MemoryEdge, MemoryNode};
 use mentedb_context::{AssemblyConfig, ContextAssembler, ContextWindow, ScoredMemory};
+use mentedb_core::error::MenteResult;
+use mentedb_core::types::MemoryId;
+use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
 use mentedb_graph::GraphManager;
 use mentedb_index::IndexManager;
 use mentedb_query::{Mql, QueryPlan};
@@ -37,27 +37,27 @@ use mentedb_storage::StorageEngine;
 use tracing::{debug, info};
 
 // Re-export sub-crates for direct access.
-pub use mentedb_core as core;
-pub use mentedb_storage as storage;
-pub use mentedb_index as index;
-pub use mentedb_graph as graph;
-pub use mentedb_query as query;
 pub use mentedb_context as context;
+pub use mentedb_core as core;
+pub use mentedb_graph as graph;
+pub use mentedb_index as index;
+pub use mentedb_query as query;
+pub use mentedb_storage as storage;
 
 /// Commonly used types, re-exported for convenience.
 pub mod prelude {
     pub use mentedb_core::edge::EdgeType;
+    pub use mentedb_core::error::MenteResult;
     pub use mentedb_core::memory::MemoryType;
     pub use mentedb_core::types::*;
-    pub use mentedb_core::error::MenteResult;
-    pub use mentedb_core::{MenteError, MemoryEdge, MemoryNode, MemoryTier};
+    pub use mentedb_core::{MemoryEdge, MemoryNode, MemoryTier, MenteError};
 
     pub use crate::MenteDb;
 }
 
+use mentedb_storage::PageId;
 /// Mapping from MemoryId to the storage PageId where it lives.
 use std::collections::HashMap;
-use mentedb_storage::PageId;
 
 /// The unified database facade for MenteDB.
 ///
@@ -164,9 +164,10 @@ impl MenteDb {
 
         // Load the node so we can clean up indexes properly.
         if let Some(&page_id) = self.page_map.get(&id)
-            && let Ok(node) = self.storage.load_memory(page_id) {
-                self.index.remove_memory(id, &node);
-            }
+            && let Ok(node) = self.storage.load_memory(page_id)
+        {
+            self.index.remove_memory(id, &node);
+        }
 
         self.graph.remove_memory(id);
         self.page_map.remove(&id);
@@ -197,17 +198,13 @@ impl MenteDb {
                 let hits = self.index.hybrid_search(&[], Some(&tag_refs), None, k);
                 self.load_scored_memories(&hits)
             }
-            QueryPlan::TemporalScan {
-                start, end, ..
-            } => {
-                let hits =
-                    self.index
-                        .hybrid_search(&[], None, Some((*start, *end)), 100);
+            QueryPlan::TemporalScan { start, end, .. } => {
+                let hits = self
+                    .index
+                    .hybrid_search(&[], None, Some((*start, *end)), 100);
                 self.load_scored_memories(&hits)
             }
-            QueryPlan::GraphTraversal {
-                start, depth, ..
-            } => {
+            QueryPlan::GraphTraversal { start, depth, .. } => {
                 let (ids, _edges) = self.graph.get_context_subgraph(*start, *depth);
                 let scored: Vec<ScoredMemory> = ids
                     .iter()
@@ -238,19 +235,17 @@ impl MenteDb {
     }
 
     /// Loads MemoryNodes from storage and pairs them with their search scores.
-    fn load_scored_memories(
-        &mut self,
-        hits: &[(MemoryId, f32)],
-    ) -> MenteResult<Vec<ScoredMemory>> {
+    fn load_scored_memories(&mut self, hits: &[(MemoryId, f32)]) -> MenteResult<Vec<ScoredMemory>> {
         let mut scored = Vec::with_capacity(hits.len());
         for &(id, score) in hits {
             if let Some(&page_id) = self.page_map.get(&id)
-                && let Ok(node) = self.storage.load_memory(page_id) {
-                    scored.push(ScoredMemory {
-                        memory: node,
-                        score,
-                    });
-                }
+                && let Ok(node) = self.storage.load_memory(page_id)
+            {
+                scored.push(ScoredMemory {
+                    memory: node,
+                    score,
+                });
+            }
         }
         Ok(scored)
     }

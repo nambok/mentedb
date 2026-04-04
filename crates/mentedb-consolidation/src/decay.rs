@@ -1,5 +1,5 @@
-use mentedb_core::types::Timestamp;
 use mentedb_core::MemoryNode;
+use mentedb_core::types::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for salience decay.
@@ -51,8 +51,7 @@ impl DecayEngine {
         let half_life = self.config.half_life_us as f64;
 
         let decay_factor = (-time_since_access / half_life).exp2() as f32;
-        let access_bonus =
-            self.config.access_boost * ((1.0 + access_count as f64).ln() as f32);
+        let access_bonus = self.config.access_boost * ((1.0 + access_count as f64).ln() as f32);
 
         let result = original_salience * decay_factor + access_bonus;
         result.clamp(self.config.min_salience, self.config.max_salience)
@@ -61,13 +60,8 @@ impl DecayEngine {
     /// Apply decay to all memories in a batch.
     pub fn apply_decay_batch(&self, memories: &mut [MemoryNode], now: Timestamp) {
         for m in memories.iter_mut() {
-            m.salience = self.compute_decay(
-                m.salience,
-                m.created_at,
-                m.accessed_at,
-                m.access_count,
-                now,
-            );
+            m.salience =
+                self.compute_decay(m.salience, m.created_at, m.accessed_at, m.access_count, now);
         }
     }
 

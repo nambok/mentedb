@@ -64,9 +64,10 @@ impl BitmapIndex {
     pub fn remove_tag(&self, id: MemoryId, tag: &str) {
         let mut inner = self.inner.write();
         if let Some(&offset) = inner.id_to_offset.get(&id)
-            && let Some(bm) = inner.tag_bitmaps.get_mut(tag) {
-                bm.remove(offset);
-            }
+            && let Some(bm) = inner.tag_bitmaps.get_mut(tag)
+        {
+            bm.remove(offset);
+        }
     }
 
     /// Get all memory ids that have the given tag.
@@ -166,8 +167,8 @@ impl BitmapIndex {
             id_to_offset: inner.id_to_offset.iter().map(|(&k, &v)| (k, v)).collect(),
             offset_to_id: inner.offset_to_id.clone(),
         };
-        let data = serde_json::to_vec(&snapshot)
-            .map_err(|e| MenteError::Serialization(e.to_string()))?;
+        let data =
+            serde_json::to_vec(&snapshot).map_err(|e| MenteError::Serialization(e.to_string()))?;
         std::fs::write(path, data)?;
         Ok(())
     }

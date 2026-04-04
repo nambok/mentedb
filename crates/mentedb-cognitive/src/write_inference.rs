@@ -1,7 +1,7 @@
+use mentedb_core::MemoryNode;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
 use mentedb_core::types::MemoryId;
-use mentedb_core::MemoryNode;
 
 #[derive(Debug, Clone)]
 pub enum InferredAction {
@@ -43,11 +43,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         norm_b += b[i] * b[i];
     }
     let denom = norm_a.sqrt() * norm_b.sqrt();
-    if denom == 0.0 {
-        0.0
-    } else {
-        dot / denom
-    }
+    if denom == 0.0 { 0.0 } else { dot / denom }
 }
 
 /// Configuration for write-time inference thresholds.
@@ -117,17 +113,17 @@ impl WriteInferenceEngine {
             // Very high similarity: potential duplicate or contradiction
             if sim > self.config.contradiction_threshold
                 && existing.agent_id == new_memory.agent_id
-                    && existing.content != new_memory.content
-                {
-                    actions.push(InferredAction::FlagContradiction {
-                        existing: existing.id,
-                        new: new_memory.id,
-                        reason: format!(
-                            "High embedding similarity ({:.3}) with different content from same agent",
-                            sim
-                        ),
-                    });
-                }
+                && existing.content != new_memory.content
+            {
+                actions.push(InferredAction::FlagContradiction {
+                    existing: existing.id,
+                    new: new_memory.id,
+                    reason: format!(
+                        "High embedding similarity ({:.3}) with different content from same agent",
+                        sim
+                    ),
+                });
+            }
 
             // High similarity: mark older as obsolete if newer timestamp
             if sim > self.config.obsolete_threshold && new_memory.created_at > existing.created_at {
@@ -158,22 +154,22 @@ impl WriteInferenceEngine {
                         .partial_cmp(&cosine_similarity(&new_memory.embedding, &b.embedding))
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
-            {
-                let sim = cosine_similarity(&new_memory.embedding, &original.embedding);
-                if sim > self.config.correction_threshold {
-                    actions.push(InferredAction::CreateEdge {
-                        source: new_memory.id,
-                        target: original.id,
-                        edge_type: EdgeType::Supersedes,
-                        weight: 1.0,
-                    });
-                    actions.push(InferredAction::UpdateConfidence {
-                        memory: original.id,
-                        new_confidence: (original.confidence * self.config.confidence_decay_factor)
-                            .max(self.config.confidence_floor),
-                    });
-                }
+        {
+            let sim = cosine_similarity(&new_memory.embedding, &original.embedding);
+            if sim > self.config.correction_threshold {
+                actions.push(InferredAction::CreateEdge {
+                    source: new_memory.id,
+                    target: original.id,
+                    edge_type: EdgeType::Supersedes,
+                    weight: 1.0,
+                });
+                actions.push(InferredAction::UpdateConfidence {
+                    memory: original.id,
+                    new_confidence: (original.confidence * self.config.confidence_decay_factor)
+                        .max(self.config.confidence_floor),
+                });
             }
+        }
 
         actions
     }
@@ -204,7 +200,8 @@ mod tests {
     #[test]
     fn test_flag_contradiction() {
         let agent = uuid::Uuid::new_v4();
-        let mut existing = make_memory("uses PostgreSQL", vec![1.0, 0.0, 0.0], MemoryType::Semantic);
+        let mut existing =
+            make_memory("uses PostgreSQL", vec![1.0, 0.0, 0.0], MemoryType::Semantic);
         existing.agent_id = agent;
 
         let mut new_mem = make_memory("uses MySQL", vec![0.99, 0.01, 0.0], MemoryType::Semantic);
@@ -214,7 +211,9 @@ mod tests {
         let engine = WriteInferenceEngine::new();
         let actions = engine.infer_on_write(&new_mem, &[existing], &[]);
         assert!(
-            actions.iter().any(|a| matches!(a, InferredAction::FlagContradiction { .. })),
+            actions
+                .iter()
+                .any(|a| matches!(a, InferredAction::FlagContradiction { .. })),
             "Expected FlagContradiction, got: {:?}",
             actions
         );
@@ -229,7 +228,13 @@ mod tests {
         let engine = WriteInferenceEngine::new();
         let actions = engine.infer_on_write(&new_mem, &[existing], &[]);
         assert!(
-            actions.iter().any(|a| matches!(a, InferredAction::CreateEdge { edge_type: EdgeType::Related, .. })),
+            actions.iter().any(|a| matches!(
+                a,
+                InferredAction::CreateEdge {
+                    edge_type: EdgeType::Related,
+                    ..
+                }
+            )),
             "Expected CreateEdge Related, got: {:?}",
             actions
         );

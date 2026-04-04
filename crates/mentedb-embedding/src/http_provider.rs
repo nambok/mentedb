@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use mentedb_core::error::MenteResult;
 use mentedb_core::MenteError;
+use mentedb_core::error::MenteResult;
 use serde::{Deserialize, Serialize};
 
 use crate::provider::AsyncEmbeddingProvider;
@@ -181,8 +181,8 @@ mod tests {
 
     #[test]
     fn test_with_dimensions_override() {
-        let config = HttpEmbeddingConfig::openai("key", "text-embedding-3-small")
-            .with_dimensions(256);
+        let config =
+            HttpEmbeddingConfig::openai("key", "text-embedding-3-small").with_dimensions(256);
         assert_eq!(config.dimensions, 256);
     }
 }

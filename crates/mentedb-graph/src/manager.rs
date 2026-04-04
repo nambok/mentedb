@@ -120,7 +120,10 @@ mod tests {
         let b = Uuid::new_v4();
         mgr.add_memory(a);
         mgr.add_memory(b);
-        assert!(mgr.add_relationship(&make_edge(a, b, EdgeType::Caused)).is_ok());
+        assert!(
+            mgr.add_relationship(&make_edge(a, b, EdgeType::Caused))
+                .is_ok()
+        );
     }
 
     #[test]
@@ -130,7 +133,10 @@ mod tests {
         let b = Uuid::new_v4();
         mgr.add_memory(a);
         // b not added
-        assert!(mgr.add_relationship(&make_edge(a, b, EdgeType::Caused)).is_err());
+        assert!(
+            mgr.add_relationship(&make_edge(a, b, EdgeType::Caused))
+                .is_err()
+        );
     }
 
     #[test]
@@ -142,8 +148,10 @@ mod tests {
         mgr.add_memory(a);
         mgr.add_memory(b);
         mgr.add_memory(c);
-        mgr.add_relationship(&make_edge(a, b, EdgeType::Caused)).unwrap();
-        mgr.add_relationship(&make_edge(b, c, EdgeType::Related)).unwrap();
+        mgr.add_relationship(&make_edge(a, b, EdgeType::Caused))
+            .unwrap();
+        mgr.add_relationship(&make_edge(b, c, EdgeType::Related))
+            .unwrap();
 
         let (nodes, edges) = mgr.get_context_subgraph(a, 2);
         assert_eq!(nodes.len(), 3);
@@ -157,7 +165,8 @@ mod tests {
         let b = Uuid::new_v4();
         mgr.add_memory(a);
         mgr.add_memory(b);
-        mgr.add_relationship(&make_edge(a, b, EdgeType::Caused)).unwrap();
+        mgr.add_relationship(&make_edge(a, b, EdgeType::Caused))
+            .unwrap();
         mgr.compact();
 
         let out = mgr.graph().outgoing(a);
@@ -177,7 +186,8 @@ mod tests {
             edge_type: EdgeType::Caused,
             weight: 1.0,
             created_at: 1000,
-        }).unwrap();
+        })
+        .unwrap();
 
         let results = mgr.propagate_belief_change(a, 0.5);
         assert!(results.len() >= 2);

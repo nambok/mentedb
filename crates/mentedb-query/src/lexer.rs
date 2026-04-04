@@ -48,14 +48,14 @@ pub enum TokenKind {
     EdgeType,
 
     // Operators
-    Eq,       // =
-    Neq,      // !=
-    Gt,       // >
-    Lt,       // <
-    Gte,      // >=
-    Lte,      // <=
+    Eq,        // =
+    Neq,       // !=
+    Gt,        // >
+    Lt,        // <
+    Gte,       // >=
+    Lte,       // <=
     SimilarTo, // ~>
-    Arrow,    // ->
+    Arrow,     // ->
 
     // Punctuation
     LParen,
@@ -106,7 +106,11 @@ pub fn tokenize(input: &str) -> MenteResult<Vec<Token>> {
             }
             pos += 1; // closing quote
             let lexeme = input[start..pos].to_string();
-            tokens.push(Token { kind: TokenKind::StringLit, lexeme, position: start });
+            tokens.push(Token {
+                kind: TokenKind::StringLit,
+                lexeme,
+                position: start,
+            });
             continue;
         }
 
@@ -122,7 +126,11 @@ pub fn tokenize(input: &str) -> MenteResult<Vec<Token>> {
                 _ => None,
             };
             if let Some(k) = kind {
-                tokens.push(Token { kind: k, lexeme: two.to_string(), position: start });
+                tokens.push(Token {
+                    kind: k,
+                    lexeme: two.to_string(),
+                    position: start,
+                });
                 pos += 2;
                 continue;
             }
@@ -186,8 +194,7 @@ pub fn tokenize(input: &str) -> MenteResult<Vec<Token>> {
                 pos += 1;
             }
             let mut is_float = false;
-            if pos < len && bytes[pos] == b'.' && pos + 1 < len && bytes[pos + 1].is_ascii_digit()
-            {
+            if pos < len && bytes[pos] == b'.' && pos + 1 < len && bytes[pos + 1].is_ascii_digit() {
                 is_float = true;
                 pos += 1;
                 while pos < len && bytes[pos].is_ascii_digit() {
@@ -195,14 +202,24 @@ pub fn tokenize(input: &str) -> MenteResult<Vec<Token>> {
                 }
             }
             let lexeme = input[start..pos].to_string();
-            let kind = if is_float { TokenKind::FloatLit } else { TokenKind::IntegerLit };
-            tokens.push(Token { kind, lexeme, position: start });
+            let kind = if is_float {
+                TokenKind::FloatLit
+            } else {
+                TokenKind::IntegerLit
+            };
+            tokens.push(Token {
+                kind,
+                lexeme,
+                position: start,
+            });
             continue;
         }
 
         // Identifiers, keywords
         if bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_' {
-            while pos < len && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_' || bytes[pos] == b'-') {
+            while pos < len
+                && (bytes[pos].is_ascii_alphanumeric() || bytes[pos] == b'_' || bytes[pos] == b'-')
+            {
                 pos += 1;
             }
             let lexeme = input[start..pos].to_string();
@@ -240,7 +257,11 @@ pub fn tokenize(input: &str) -> MenteResult<Vec<Token>> {
                 "edge_type" => TokenKind::EdgeType,
                 _ => TokenKind::Identifier,
             };
-            tokens.push(Token { kind, lexeme, position: start });
+            tokens.push(Token {
+                kind,
+                lexeme,
+                position: start,
+            });
             continue;
         }
 
@@ -250,7 +271,11 @@ pub fn tokenize(input: &str) -> MenteResult<Vec<Token>> {
         )));
     }
 
-    tokens.push(Token { kind: TokenKind::Eof, lexeme: String::new(), position: pos });
+    tokens.push(Token {
+        kind: TokenKind::Eof,
+        lexeme: String::new(),
+        position: pos,
+    });
     Ok(tokens)
 }
 
@@ -304,11 +329,20 @@ mod tests {
     fn test_operators() {
         let tokens = tokenize("= != > < >= <= ~> ->").unwrap();
         let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
-        assert_eq!(kinds, vec![
-            TokenKind::Eq, TokenKind::Neq, TokenKind::Gt, TokenKind::Lt,
-            TokenKind::Gte, TokenKind::Lte, TokenKind::SimilarTo, TokenKind::Arrow,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Eq,
+                TokenKind::Neq,
+                TokenKind::Gt,
+                TokenKind::Lt,
+                TokenKind::Gte,
+                TokenKind::Lte,
+                TokenKind::SimilarTo,
+                TokenKind::Arrow,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
@@ -339,10 +373,19 @@ mod tests {
     fn test_punctuation() {
         let tokens = tokenize("( ) [ ] , . : ;").unwrap();
         let kinds: Vec<TokenKind> = tokens.iter().map(|t| t.kind).collect();
-        assert_eq!(kinds, vec![
-            TokenKind::LParen, TokenKind::RParen, TokenKind::LBracket, TokenKind::RBracket,
-            TokenKind::Comma, TokenKind::Dot, TokenKind::Colon, TokenKind::Semicolon,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::LParen,
+                TokenKind::RParen,
+                TokenKind::LBracket,
+                TokenKind::RBracket,
+                TokenKind::Comma,
+                TokenKind::Dot,
+                TokenKind::Colon,
+                TokenKind::Semicolon,
+                TokenKind::Eof,
+            ]
+        );
     }
 }

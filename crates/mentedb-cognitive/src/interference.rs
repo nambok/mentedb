@@ -1,5 +1,5 @@
-use mentedb_core::types::MemoryId;
 use mentedb_core::MemoryNode;
+use mentedb_core::types::MemoryId;
 
 #[derive(Debug, Clone)]
 pub struct InterferencePair {

@@ -107,8 +107,18 @@ impl ContextLayout {
         }
 
         // Sort each zone by score descending
-        for group in [&mut opening, &mut critical, &mut primary, &mut supporting, &mut closing] {
-            group.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        for group in [
+            &mut opening,
+            &mut critical,
+            &mut primary,
+            &mut supporting,
+            &mut closing,
+        ] {
+            group.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
         }
 
         let zones = [
@@ -143,7 +153,9 @@ impl ContextLayout {
         }
 
         // High salience + high score -> Critical
-        if sm.score >= self.thresholds.critical_score && mem.salience >= self.thresholds.critical_salience {
+        if sm.score >= self.thresholds.critical_score
+            && mem.salience >= self.thresholds.critical_salience
+        {
             return AttentionZone::Critical;
         }
 
@@ -200,7 +212,10 @@ mod tests {
             score: 0.95,
         }];
         let blocks = layout.arrange(memories);
-        let opening = blocks.iter().find(|b| b.zone == AttentionZone::Opening).unwrap();
+        let opening = blocks
+            .iter()
+            .find(|b| b.zone == AttentionZone::Opening)
+            .unwrap();
         assert_eq!(opening.memories.len(), 1);
     }
 
@@ -212,7 +227,10 @@ mod tests {
             score: 0.85,
         }];
         let blocks = layout.arrange(memories);
-        let critical = blocks.iter().find(|b| b.zone == AttentionZone::Critical).unwrap();
+        let critical = blocks
+            .iter()
+            .find(|b| b.zone == AttentionZone::Critical)
+            .unwrap();
         assert_eq!(critical.memories.len(), 1);
     }
 
@@ -224,7 +242,10 @@ mod tests {
             score: 0.3,
         }];
         let blocks = layout.arrange(memories);
-        let supporting = blocks.iter().find(|b| b.zone == AttentionZone::Supporting).unwrap();
+        let supporting = blocks
+            .iter()
+            .find(|b| b.zone == AttentionZone::Supporting)
+            .unwrap();
         assert_eq!(supporting.memories.len(), 1);
     }
 

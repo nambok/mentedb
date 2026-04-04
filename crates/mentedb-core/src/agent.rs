@@ -110,6 +110,9 @@ mod tests {
         let mut reg = AgentRegistry::new();
         let a = reg.register("meta");
         reg.update_metadata(a.id, "role", "planner");
-        assert_eq!(reg.get(a.id).unwrap().metadata.get("role").unwrap(), "planner");
+        assert_eq!(
+            reg.get(a.id).unwrap().metadata.get("role").unwrap(),
+            "planner"
+        );
     }
 }

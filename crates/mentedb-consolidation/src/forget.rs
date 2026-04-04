@@ -1,5 +1,5 @@
-use mentedb_core::types::{AgentId, MemoryId, SpaceId, Timestamp};
 use mentedb_core::MemoryNode;
+use mentedb_core::types::{AgentId, MemoryId, SpaceId, Timestamp};
 use serde::{Deserialize, Serialize};
 
 /// A request to forget (delete) memories, for GDPR compliance.
@@ -71,13 +71,15 @@ impl ForgetEngine {
         // Estimate deleted facts (roughly 1 per memory)
         let deleted_facts = to_delete.len();
 
-        let audit_log_entry =
-            self.generate_audit_log(request, &ForgetResult {
+        let audit_log_entry = self.generate_audit_log(
+            request,
+            &ForgetResult {
                 deleted_memories: to_delete.len(),
                 deleted_edges,
                 deleted_facts,
                 audit_log_entry: String::new(),
-            });
+            },
+        );
 
         ForgetResult {
             deleted_memories: to_delete.len(),
@@ -89,10 +91,7 @@ impl ForgetEngine {
 
     /// Generate a human-readable audit log entry.
     pub fn generate_audit_log(&self, request: &ForgetRequest, result: &ForgetResult) -> String {
-        let mut log = format!(
-            "FORGET REQUEST at timestamp {}\n",
-            request.requested_at
-        );
+        let mut log = format!("FORGET REQUEST at timestamp {}\n", request.requested_at);
         log.push_str(&format!("Reason: {}\n", request.reason));
 
         if let Some(agent_id) = request.agent_id {

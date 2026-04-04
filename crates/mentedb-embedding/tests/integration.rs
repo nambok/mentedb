@@ -20,7 +20,10 @@ fn test_hash_provider_different_texts() {
     let e2 = provider.embed("goodbye world").unwrap();
 
     // Embeddings should differ
-    assert_ne!(e1, e2, "Different texts should produce different embeddings");
+    assert_ne!(
+        e1, e2,
+        "Different texts should produce different embeddings"
+    );
 
     // Both should be normalized
     let norm1: f32 = e1.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -43,8 +46,14 @@ fn test_cache_lru_eviction() {
     // Insert text_d — should evict text_b (LRU)
     cache.put("text_d", "model", vec![7.0, 8.0]);
 
-    assert!(cache.get("text_a", "model").is_some(), "text_a was recently accessed");
-    assert!(cache.get("text_b", "model").is_none(), "text_b should have been evicted");
+    assert!(
+        cache.get("text_a", "model").is_some(),
+        "text_a was recently accessed"
+    );
+    assert!(
+        cache.get("text_b", "model").is_none(),
+        "text_b should have been evicted"
+    );
     assert!(cache.get("text_c", "model").is_some());
     assert!(cache.get("text_d", "model").is_some());
 
@@ -78,9 +87,7 @@ fn test_manager_embed_batch() {
     // Pre-cache one text
     let _ = manager.embed("alpha").unwrap();
 
-    let batch = manager
-        .embed_batch(&["alpha", "beta", "gamma"])
-        .unwrap();
+    let batch = manager.embed_batch(&["alpha", "beta", "gamma"]).unwrap();
 
     assert_eq!(batch.len(), 3);
     assert_eq!(batch[0].len(), 384);

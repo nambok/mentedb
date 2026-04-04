@@ -1,7 +1,7 @@
 //! Integration tests for the MenteDB storage engine.
 
-use mentedb_core::memory::MemoryType;
 use mentedb_core::MemoryNode;
+use mentedb_core::memory::MemoryType;
 use mentedb_storage::StorageEngine;
 use uuid::Uuid;
 

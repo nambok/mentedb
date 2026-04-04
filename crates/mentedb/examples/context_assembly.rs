@@ -3,11 +3,11 @@
 //!
 //! Run with: cargo run --example context_assembly
 
-use mentedb::prelude::*;
 use mentedb::context::{
     AssemblyConfig, ContextAssembler, OutputFormat, ScoredMemory,
     budget::{BudgetAllocation, TokenBudget, estimate_tokens},
 };
+use mentedb::prelude::*;
 use uuid::Uuid;
 
 fn main() {
@@ -140,10 +140,25 @@ fn create_sample_memories(agent_id: AgentId) -> Vec<ScoredMemory> {
     m5.salience = 0.85;
 
     vec![
-        ScoredMemory { memory: m1, score: 0.92 },
-        ScoredMemory { memory: m2, score: 0.88 },
-        ScoredMemory { memory: m3, score: 0.55 },
-        ScoredMemory { memory: m4, score: 0.25 },
-        ScoredMemory { memory: m5, score: 0.80 },
+        ScoredMemory {
+            memory: m1,
+            score: 0.92,
+        },
+        ScoredMemory {
+            memory: m2,
+            score: 0.88,
+        },
+        ScoredMemory {
+            memory: m3,
+            score: 0.55,
+        },
+        ScoredMemory {
+            memory: m4,
+            score: 0.25,
+        },
+        ScoredMemory {
+            memory: m5,
+            score: 0.80,
+        },
     ]
 }

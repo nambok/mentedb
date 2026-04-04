@@ -47,12 +47,7 @@ impl VersionStore {
     }
 
     /// Record a write and return the new version ID.
-    pub fn record_write(
-        &mut self,
-        memory_id: MemoryId,
-        agent_id: AgentId,
-        data_hash: u64,
-    ) -> u64 {
+    pub fn record_write(&mut self, memory_id: MemoryId, agent_id: AgentId, data_hash: u64) -> u64 {
         let vid = self.next_version.fetch_add(1, Ordering::Relaxed);
         let version = Version {
             version_id: vid,

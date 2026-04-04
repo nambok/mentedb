@@ -106,13 +106,19 @@ impl<'a> Parser<'a> {
         if self.at(TokenKind::Limit) {
             self.advance();
             let tok = self.advance();
-            let n: usize = tok.lexeme.parse().map_err(|_| {
-                MenteError::Query(format!("invalid limit value: {}", tok.lexeme))
-            })?;
+            let n: usize = tok
+                .lexeme
+                .parse()
+                .map_err(|_| MenteError::Query(format!("invalid limit value: {}", tok.lexeme)))?;
             limit = Some(n);
         }
 
-        Ok(Statement::Recall(RecallStatement { filters, near, limit, order_by }))
+        Ok(Statement::Recall(RecallStatement {
+            filters,
+            near,
+            limit,
+            order_by,
+        }))
     }
 
     fn parse_relate(&mut self) -> MenteResult<Statement> {
@@ -131,13 +137,19 @@ impl<'a> Parser<'a> {
             self.expect(TokenKind::Identifier)?; // "weight"
             self.expect(TokenKind::Eq)?;
             let tok = self.advance();
-            let w: f32 = tok.lexeme.parse().map_err(|_| {
-                MenteError::Query(format!("invalid weight value: {}", tok.lexeme))
-            })?;
+            let w: f32 = tok
+                .lexeme
+                .parse()
+                .map_err(|_| MenteError::Query(format!("invalid weight value: {}", tok.lexeme)))?;
             weight = Some(w);
         }
 
-        Ok(Statement::Relate(RelateStatement { source, target, edge_type, weight }))
+        Ok(Statement::Relate(RelateStatement {
+            source,
+            target,
+            edge_type,
+            weight,
+        }))
     }
 
     fn parse_forget(&mut self) -> MenteResult<Statement> {
@@ -162,9 +174,10 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::Depth)?;
         let tok = self.advance();
-        let depth: usize = tok.lexeme.parse().map_err(|_| {
-            MenteError::Query(format!("invalid depth value: {}", tok.lexeme))
-        })?;
+        let depth: usize = tok
+            .lexeme
+            .parse()
+            .map_err(|_| MenteError::Query(format!("invalid depth value: {}", tok.lexeme)))?;
 
         let mut edge_filter = None;
         if self.at(TokenKind::Where) {
@@ -176,7 +189,11 @@ impl<'a> Parser<'a> {
             edge_filter = Some(vec![et]);
         }
 
-        Ok(Statement::Traverse(TraverseStatement { start, depth, edge_filter }))
+        Ok(Statement::Traverse(TraverseStatement {
+            start,
+            depth,
+            edge_filter,
+        }))
     }
 
     fn parse_filters(&mut self) -> MenteResult<Vec<Filter>> {
@@ -251,21 +268,24 @@ impl<'a> Parser<'a> {
                 Ok(Value::Text(inner))
             }
             TokenKind::IntegerLit => {
-                let n: i64 = tok.lexeme.parse().map_err(|_| {
-                    MenteError::Query(format!("invalid integer: {}", tok.lexeme))
-                })?;
+                let n: i64 = tok
+                    .lexeme
+                    .parse()
+                    .map_err(|_| MenteError::Query(format!("invalid integer: {}", tok.lexeme)))?;
                 Ok(Value::Integer(n))
             }
             TokenKind::FloatLit => {
-                let n: f64 = tok.lexeme.parse().map_err(|_| {
-                    MenteError::Query(format!("invalid float: {}", tok.lexeme))
-                })?;
+                let n: f64 = tok
+                    .lexeme
+                    .parse()
+                    .map_err(|_| MenteError::Query(format!("invalid float: {}", tok.lexeme)))?;
                 Ok(Value::Number(n))
             }
             TokenKind::UuidLit => {
-                let uuid: Uuid = tok.lexeme.parse().map_err(|_| {
-                    MenteError::Query(format!("invalid UUID: {}", tok.lexeme))
-                })?;
+                let uuid: Uuid = tok
+                    .lexeme
+                    .parse()
+                    .map_err(|_| MenteError::Query(format!("invalid UUID: {}", tok.lexeme)))?;
                 Ok(Value::Uuid(uuid))
             }
             TokenKind::Identifier => {
@@ -293,7 +313,6 @@ impl<'a> Parser<'a> {
         let tok = self.advance();
         let name = match tok.kind {
             TokenKind::Identifier | TokenKind::StringLit => {
-                
                 if tok.kind == TokenKind::StringLit {
                     tok.lexeme[1..tok.lexeme.len() - 1].to_string()
                 } else {
@@ -356,9 +375,10 @@ impl<'a> Parser<'a> {
     fn parse_uuid(&mut self) -> MenteResult<Uuid> {
         let tok = self.advance();
         match tok.kind {
-            TokenKind::UuidLit => tok.lexeme.parse().map_err(|_| {
-                MenteError::Query(format!("invalid UUID: {}", tok.lexeme))
-            }),
+            TokenKind::UuidLit => tok
+                .lexeme
+                .parse()
+                .map_err(|_| MenteError::Query(format!("invalid UUID: {}", tok.lexeme))),
             TokenKind::StringLit => {
                 let inner = &tok.lexeme[1..tok.lexeme.len() - 1];
                 inner.parse().map_err(|_| {
@@ -466,7 +486,9 @@ mod tests {
             Statement::Forget(f) => {
                 assert_eq!(
                     f.target,
-                    "550e8400-e29b-41d4-a716-446655440000".parse::<Uuid>().unwrap()
+                    "550e8400-e29b-41d4-a716-446655440000"
+                        .parse::<Uuid>()
+                        .unwrap()
                 );
             }
             _ => panic!("expected Forget"),
@@ -488,9 +510,10 @@ mod tests {
 
     #[test]
     fn test_parse_traverse() {
-        let tokens =
-            tokenize("TRAVERSE 550e8400-e29b-41d4-a716-446655440000 DEPTH 3 WHERE edge_type = caused")
-                .unwrap();
+        let tokens = tokenize(
+            "TRAVERSE 550e8400-e29b-41d4-a716-446655440000 DEPTH 3 WHERE edge_type = caused",
+        )
+        .unwrap();
         let stmt = Parser::parse(&tokens).unwrap();
         match stmt {
             Statement::Traverse(t) => {

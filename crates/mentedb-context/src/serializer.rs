@@ -54,7 +54,10 @@ impl ContextSerializer for StructuredFormat {
             parts.push(format!("## {}", zone_label(block.zone)));
             for sm in &block.memories {
                 let m = &sm.memory;
-                let mut line = format!("- **[{:?}]** (salience: {:.2}) {}", m.memory_type, m.salience, m.content);
+                let mut line = format!(
+                    "- **[{:?}]** (salience: {:.2}) {}",
+                    m.memory_type, m.salience, m.content
+                );
                 if !m.tags.is_empty() {
                     line.push_str(&format!(" [{}]", m.tags.join(", ")));
                 }
@@ -125,14 +128,21 @@ mod tests {
         m.tags = vec!["test".to_string()];
         ContextBlock {
             zone,
-            memories: vec![ScoredMemory { memory: m, score: 0.9 }],
+            memories: vec![ScoredMemory {
+                memory: m,
+                score: 0.9,
+            }],
             estimated_tokens: 10,
         }
     }
 
     #[test]
     fn test_compact_format() {
-        let blocks = vec![make_block(AttentionZone::Critical, "user likes Rust", MemoryType::Semantic)];
+        let blocks = vec![make_block(
+            AttentionZone::Critical,
+            "user likes Rust",
+            MemoryType::Semantic,
+        )];
         let output = CompactFormat.serialize(&blocks);
         assert!(output.contains("M|Semantic|0.90|user likes Rust|tags:test"));
         assert!(output.contains("🎯 Critical Context"));
@@ -140,7 +150,11 @@ mod tests {
 
     #[test]
     fn test_structured_format() {
-        let blocks = vec![make_block(AttentionZone::Opening, "avoid eval", MemoryType::AntiPattern)];
+        let blocks = vec![make_block(
+            AttentionZone::Opening,
+            "avoid eval",
+            MemoryType::AntiPattern,
+        )];
         let output = StructuredFormat.serialize(&blocks);
         assert!(output.contains("## ⚠️ Warnings & Corrections"));
         assert!(output.contains("**[AntiPattern]**"));
@@ -149,7 +163,11 @@ mod tests {
 
     #[test]
     fn test_delta_format() {
-        let blocks = vec![make_block(AttentionZone::Critical, "new info", MemoryType::Episodic)];
+        let blocks = vec![make_block(
+            AttentionZone::Critical,
+            "new info",
+            MemoryType::Episodic,
+        )];
         let fmt = DeltaFormat::new("[UNCHANGED] 5 memories from previous turn".to_string());
         let output = fmt.serialize(&blocks);
         assert!(output.contains("[UNCHANGED] 5 memories"));

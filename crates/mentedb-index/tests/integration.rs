@@ -1,10 +1,12 @@
 //! Integration tests for mentedb-index: exercises all indexes together via IndexManager.
 
-use mentedb_core::memory::MemoryType;
 use mentedb_core::MemoryNode;
-use mentedb_index::{IndexManager, HnswIndex, DistanceMetric, BitmapIndex, TemporalIndex, SalienceIndex};
-use mentedb_index::manager::IndexManagerConfig;
+use mentedb_core::memory::MemoryType;
 use mentedb_index::hnsw::HnswConfig;
+use mentedb_index::manager::IndexManagerConfig;
+use mentedb_index::{
+    BitmapIndex, DistanceMetric, HnswIndex, IndexManager, SalienceIndex, TemporalIndex,
+};
 use uuid::Uuid;
 
 fn make_node(embedding: Vec<f32>, tags: Vec<&str>, salience: f32, created_at: u64) -> MemoryNode {
@@ -32,10 +34,20 @@ fn test_hybrid_search_full_pipeline() {
     });
 
     // Insert a variety of memories
-    let a = make_node(vec![1.0, 0.0, 0.0, 0.0], vec!["work", "important"], 0.9, 1000);
+    let a = make_node(
+        vec![1.0, 0.0, 0.0, 0.0],
+        vec!["work", "important"],
+        0.9,
+        1000,
+    );
     let b = make_node(vec![0.0, 1.0, 0.0, 0.0], vec!["personal"], 0.5, 2000);
     let c = make_node(vec![0.9, 0.1, 0.0, 0.0], vec!["work"], 0.7, 3000);
-    let d = make_node(vec![0.0, 0.0, 1.0, 0.0], vec!["work", "important"], 0.3, 500);
+    let d = make_node(
+        vec![0.0, 0.0, 1.0, 0.0],
+        vec!["work", "important"],
+        0.3,
+        500,
+    );
 
     let a_id = a.id;
     let c_id = c.id;

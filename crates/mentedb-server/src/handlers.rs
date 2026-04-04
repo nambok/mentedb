@@ -21,9 +21,7 @@ use crate::state::AppState;
 // GET /v1/health
 // ---------------------------------------------------------------------------
 
-pub async fn health(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let uptime = state.start_time.elapsed().as_secs();
     Json(json!({
         "status": "ok",
@@ -36,15 +34,17 @@ pub async fn health(
 // GET /v1/stats
 // ---------------------------------------------------------------------------
 
-pub async fn stats(
-    State(state): State<Arc<AppState>>,
-) -> Result<impl IntoResponse, ApiError> {
+pub async fn stats(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
     let uptime = state.start_time.elapsed().as_secs();
 
     // Scan to count memories (no public count method on MenteDb).
     let mut db = state.db.write().await;
     let memory_count = match db.recall("RECALL memories LIMIT 10000") {
-        Ok(window) => window.blocks.iter().map(|b| b.memories.len()).sum::<usize>(),
+        Ok(window) => window
+            .blocks
+            .iter()
+            .map(|b| b.memories.len())
+            .sum::<usize>(),
         Err(_) => 0,
     };
 
@@ -74,7 +74,10 @@ pub async fn store_memory(
     let embedding = parse_embedding(&req, false)?;
 
     let tags: Vec<String> = match req.get("tags").and_then(|v| v.as_array()) {
-        Some(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        Some(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
         None => vec![],
     };
 
@@ -96,7 +99,10 @@ pub async fn store_memory(
     let id = Uuid::new_v4();
 
     let salience = req.get("salience").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
-    let confidence = req.get("confidence").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+    let confidence = req
+        .get("confidence")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0) as f32;
 
     let node = MemoryNode {
         id,
@@ -120,7 +126,10 @@ pub async fn store_memory(
         ApiError::Internal(format!("store failed: {e}"))
     })?;
 
-    Ok((StatusCode::CREATED, Json(json!({ "id": id.to_string(), "status": "stored" }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "id": id.to_string(), "status": "stored" })),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -131,8 +140,8 @@ pub async fn get_memory(
     State(state): State<Arc<AppState>>,
     Path(id_str): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let id = Uuid::parse_str(&id_str)
-        .map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
+    let id =
+        Uuid::parse_str(&id_str).map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
 
     // PointLookup exists in QueryPlan but is not reachable via MQL syntax,
     // so we scan and filter client-side until MenteDb exposes a public get(id).
@@ -161,8 +170,8 @@ pub async fn forget_memory(
     State(state): State<Arc<AppState>>,
     Path(id_str): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let id = Uuid::parse_str(&id_str)
-        .map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
+    let id =
+        Uuid::parse_str(&id_str).map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
 
     let mut db = state.db.write().await;
     db.forget(id).map_err(|e| {
@@ -318,9 +327,9 @@ fn parse_embedding(val: &Value, required: bool) -> Result<Vec<f32>, ApiError> {
         Some(arr) => {
             let mut emb = Vec::with_capacity(arr.len());
             for v in arr {
-                let f = v
-                    .as_f64()
-                    .ok_or_else(|| ApiError::BadRequest("embedding values must be numbers".into()))?;
+                let f = v.as_f64().ok_or_else(|| {
+                    ApiError::BadRequest("embedding values must be numbers".into())
+                })?;
                 emb.push(f as f32);
             }
             Ok(emb)

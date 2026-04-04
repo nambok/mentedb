@@ -6,14 +6,16 @@
 //! - Delta-aware serving (only send what changed)
 //! - Token-efficient serialization formats
 
-pub mod budget;
-pub mod layout;
-pub mod delta;
-pub mod serializer;
 pub mod assembler;
+pub mod budget;
+pub mod delta;
+pub mod layout;
+pub mod serializer;
 
-pub use budget::{TokenBudget, BudgetAllocation, ZoneBudgetConfig};
-pub use layout::{ScoredMemory, AttentionZone, ContextBlock, ContextLayout, ZoneThresholds};
-pub use delta::{DeltaTracker, DeltaResult};
-pub use serializer::{ContextSerializer, CompactFormat, StructuredFormat, DeltaFormat};
-pub use assembler::{ContextAssembler, AssemblyConfig, ContextWindow, AssemblyMetadata, OutputFormat};
+pub use assembler::{
+    AssemblyConfig, AssemblyMetadata, ContextAssembler, ContextWindow, OutputFormat,
+};
+pub use budget::{BudgetAllocation, TokenBudget, ZoneBudgetConfig};
+pub use delta::{DeltaResult, DeltaTracker};
+pub use layout::{AttentionZone, ContextBlock, ContextLayout, ScoredMemory, ZoneThresholds};
+pub use serializer::{CompactFormat, ContextSerializer, DeltaFormat, StructuredFormat};

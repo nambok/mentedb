@@ -69,7 +69,11 @@ impl ContextAssembler {
 
         // 1. Sort by score descending
         let mut sorted = memories;
-        sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // 2. Apply token budget — greedily include memories that fit
         let mut budget = TokenBudget::new(config.token_budget);
@@ -155,7 +159,10 @@ impl ContextAssembler {
             .collect();
 
         let delta_header = DeltaTracker::format_delta_context(
-            &added_memories.iter().map(|sm| &sm.memory).collect::<Vec<_>>(),
+            &added_memories
+                .iter()
+                .map(|sm| &sm.memory)
+                .collect::<Vec<_>>(),
             &removed_summaries,
             delta.unchanged.len(),
         );
@@ -168,7 +175,11 @@ impl ContextAssembler {
         budget.consume(&delta_header);
 
         let mut sorted = added_memories;
-        sorted.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        sorted.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut included = Vec::new();
         for sm in sorted {
@@ -248,8 +259,18 @@ mod tests {
     fn test_assemble_respects_budget() {
         // Tiny budget to force exclusion
         let memories = vec![
-            make_scored("a very important memory with lots of words", 0.9, 0.9, MemoryType::Semantic),
-            make_scored("another memory with many words in it", 0.8, 0.8, MemoryType::Episodic),
+            make_scored(
+                "a very important memory with lots of words",
+                0.9,
+                0.9,
+                MemoryType::Semantic,
+            ),
+            make_scored(
+                "another memory with many words in it",
+                0.8,
+                0.8,
+                MemoryType::Episodic,
+            ),
         ];
         let config = AssemblyConfig {
             token_budget: 10,
@@ -281,7 +302,12 @@ mod tests {
         let config = AssemblyConfig::default();
 
         // First turn — all new
-        let window = ContextAssembler::assemble_delta(vec![m1.clone(), m2.clone()], vec![], &mut tracker, &config);
+        let window = ContextAssembler::assemble_delta(
+            vec![m1.clone(), m2.clone()],
+            vec![],
+            &mut tracker,
+            &config,
+        );
         assert!(window.format.contains("[NEW]"));
 
         // Second turn — same memories, should see UNCHANGED

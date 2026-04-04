@@ -2,15 +2,16 @@
 
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
+use mentedb_query::Mql;
 use mentedb_query::ast::*;
 use mentedb_query::planner::QueryPlan;
-use mentedb_query::Mql;
 
 #[test]
 fn test_recall_with_similar_to_produces_vector_search() {
-    let plan =
-        Mql::parse(r#"RECALL memories WHERE content ~> "database migration" AND tag = "backend" LIMIT 10"#)
-            .unwrap();
+    let plan = Mql::parse(
+        r#"RECALL memories WHERE content ~> "database migration" AND tag = "backend" LIMIT 10"#,
+    )
+    .unwrap();
     match plan {
         QueryPlan::VectorSearch { k, filters, .. } => {
             assert_eq!(k, 10);
@@ -61,7 +62,9 @@ fn test_relate_end_to_end() {
     )
     .unwrap();
     match plan {
-        QueryPlan::EdgeInsert { edge_type, weight, .. } => {
+        QueryPlan::EdgeInsert {
+            edge_type, weight, ..
+        } => {
             assert_eq!(edge_type, EdgeType::Caused);
             assert!((weight - 0.9).abs() < f32::EPSILON);
         }
@@ -94,7 +97,9 @@ fn test_traverse_end_to_end() {
     )
     .unwrap();
     match plan {
-        QueryPlan::GraphTraversal { depth, edge_types, .. } => {
+        QueryPlan::GraphTraversal {
+            depth, edge_types, ..
+        } => {
             assert_eq!(depth, 3);
             assert_eq!(edge_types, vec![EdgeType::Caused]);
         }

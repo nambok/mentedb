@@ -114,12 +114,13 @@ impl SpeculativeCache {
         }
 
         if best_score > self.hit_threshold
-            && let Some(idx) = best_idx {
-                self.entries[idx].hit_count += 1;
-                self.entries[idx].last_accessed = now;
-                self.stats.hits += 1;
-                return Some(&self.entries[idx]);
-            }
+            && let Some(idx) = best_idx
+        {
+            self.entries[idx].hit_count += 1;
+            self.entries[idx].last_accessed = now;
+            self.stats.hits += 1;
+            return Some(&self.entries[idx]);
+        }
 
         self.stats.misses += 1;
         None
@@ -169,7 +170,10 @@ mod tests {
     fn test_pre_assemble_and_hit() {
         let mut cache = SpeculativeCache::default();
         cache.pre_assemble(
-            vec!["database schema design".to_string(), "API authentication".to_string()],
+            vec![
+                "database schema design".to_string(),
+                "API authentication".to_string(),
+            ],
             |topic| Some((format!("Context for {}", topic), vec![uuid::Uuid::new_v4()])),
         );
 
@@ -183,10 +187,9 @@ mod tests {
     #[test]
     fn test_cache_miss() {
         let mut cache = SpeculativeCache::default();
-        cache.pre_assemble(
-            vec!["database schema".to_string()],
-            |topic| Some((format!("Context for {}", topic), vec![])),
-        );
+        cache.pre_assemble(vec!["database schema".to_string()], |topic| {
+            Some((format!("Context for {}", topic), vec![]))
+        });
 
         let hit = cache.try_hit("cooking recipes");
         assert!(hit.is_none());
@@ -197,10 +200,9 @@ mod tests {
     fn test_lru_eviction() {
         let mut cache = SpeculativeCache::new(10, 0.5);
         for i in 0..12 {
-            cache.pre_assemble(
-                vec![format!("topic {}", i)],
-                |topic| Some((format!("Context for {}", topic), vec![])),
-            );
+            cache.pre_assemble(vec![format!("topic {}", i)], |topic| {
+                Some((format!("Context for {}", topic), vec![]))
+            });
         }
         assert!(cache.stats().cache_size <= 10);
         assert!(cache.stats().evictions > 0);
@@ -209,10 +211,9 @@ mod tests {
     #[test]
     fn test_evict_stale() {
         let mut cache = SpeculativeCache::default();
-        cache.pre_assemble(
-            vec!["old topic".to_string()],
-            |topic| Some((format!("Context for {}", topic), vec![])),
-        );
+        cache.pre_assemble(vec!["old topic".to_string()], |topic| {
+            Some((format!("Context for {}", topic), vec![]))
+        });
         // Evict anything older than 0 microseconds from a far-future time
         cache.evict_stale(0, u64::MAX);
         assert_eq!(cache.stats().cache_size, 0);

@@ -1,6 +1,6 @@
 use mentedb_cognitive::*;
-use mentedb_core::memory::MemoryType;
 use mentedb_core::MemoryNode;
+use mentedb_core::memory::MemoryType;
 use uuid::Uuid;
 
 fn make_memory(content: &str, embedding: Vec<f32>, mem_type: MemoryType) -> MemoryNode {
@@ -15,11 +15,16 @@ fn test_stream_cognition_contradiction() {
     // Feed a sentence that contradicts a known fact
     stream.feed_token("The system actually uses MySQL instead of PostgreSQL now");
 
-    let facts = vec![(mid, "The system uses PostgreSQL for data storage".to_string())];
+    let facts = vec![(
+        mid,
+        "The system uses PostgreSQL for data storage".to_string(),
+    )];
     let alerts = stream.check_alerts(&facts);
 
     assert!(
-        alerts.iter().any(|a| matches!(a, StreamAlert::Contradiction { .. })),
+        alerts
+            .iter()
+            .any(|a| matches!(a, StreamAlert::Contradiction { .. })),
         "Expected contradiction alert when AI contradicts stored fact. Got: {:?}",
         alerts
     );
@@ -33,11 +38,19 @@ fn test_stream_cognition_contradiction() {
 fn test_write_inference_contradiction() {
     let agent = Uuid::new_v4();
 
-    let mut existing = make_memory("The backend uses PostgreSQL", vec![1.0, 0.0, 0.0], MemoryType::Semantic);
+    let mut existing = make_memory(
+        "The backend uses PostgreSQL",
+        vec![1.0, 0.0, 0.0],
+        MemoryType::Semantic,
+    );
     existing.agent_id = agent;
     existing.created_at = 1000;
 
-    let mut new_mem = make_memory("The backend uses MySQL", vec![0.99, 0.01, 0.0], MemoryType::Semantic);
+    let mut new_mem = make_memory(
+        "The backend uses MySQL",
+        vec![0.99, 0.01, 0.0],
+        MemoryType::Semantic,
+    );
     new_mem.agent_id = agent;
     new_mem.created_at = 2000;
 
@@ -45,7 +58,9 @@ fn test_write_inference_contradiction() {
     let actions = engine.infer_on_write(&new_mem, &[existing], &[]);
 
     assert!(
-        actions.iter().any(|a| matches!(a, InferredAction::FlagContradiction { .. })),
+        actions
+            .iter()
+            .any(|a| matches!(a, InferredAction::FlagContradiction { .. })),
         "Expected FlagContradiction action. Got: {:?}",
         actions
     );
@@ -83,8 +98,16 @@ fn test_trajectory_resume_context() {
     });
 
     let ctx = tracker.get_resume_context().unwrap();
-    assert!(ctx.contains("Session storage"), "Resume context should mention current topic. Got: {}", ctx);
-    assert!(ctx.contains("Redis vs Cookie"), "Resume context should mention narrowed choice. Got: {}", ctx);
+    assert!(
+        ctx.contains("Session storage"),
+        "Resume context should mention current topic. Got: {}",
+        ctx
+    );
+    assert!(
+        ctx.contains("Redis vs Cookie"),
+        "Resume context should mention narrowed choice. Got: {}",
+        ctx
+    );
 }
 
 #[test]
@@ -98,7 +121,10 @@ fn test_phantom_detection() {
         1,
     );
 
-    let refs: Vec<&str> = phantoms.iter().map(|p| p.source_reference.as_str()).collect();
+    let refs: Vec<&str> = phantoms
+        .iter()
+        .map(|p| p.source_reference.as_str())
+        .collect();
     assert!(
         refs.iter().any(|r| r.contains("Kubernetes")),
         "Expected phantom for Kubernetes. Got: {:?}",
@@ -169,12 +195,23 @@ fn test_speculative_cache() {
 
 #[test]
 fn test_interference_detection() {
-    let a = make_memory("Project Alpha uses React framework", vec![1.0, 0.0, 0.0], MemoryType::Semantic);
-    let b = make_memory("Project Beta uses Vue framework", vec![0.99, 0.1, 0.0], MemoryType::Semantic);
+    let a = make_memory(
+        "Project Alpha uses React framework",
+        vec![1.0, 0.0, 0.0],
+        MemoryType::Semantic,
+    );
+    let b = make_memory(
+        "Project Beta uses Vue framework",
+        vec![0.99, 0.1, 0.0],
+        MemoryType::Semantic,
+    );
 
     let detector = InterferenceDetector::default();
     let pairs = detector.detect_interference(&[a, b]);
 
-    assert!(!pairs.is_empty(), "Expected interference pair for similar but different memories");
+    assert!(
+        !pairs.is_empty(),
+        "Expected interference pair for similar but different memories"
+    );
     assert!(pairs[0].disambiguation.contains("Do not confuse"));
 }

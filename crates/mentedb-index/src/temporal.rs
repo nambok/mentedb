@@ -79,12 +79,13 @@ impl TemporalIndex {
     pub fn remove_by_id(&self, id: MemoryId) {
         let mut inner = self.inner.write();
         if let Some(ts) = inner.id_to_ts.remove(&id)
-            && let Some(ids) = inner.tree.get_mut(&ts) {
-                ids.retain(|&i| i != id);
-                if ids.is_empty() {
-                    inner.tree.remove(&ts);
-                }
+            && let Some(ids) = inner.tree.get_mut(&ts)
+        {
+            ids.retain(|&i| i != id);
+            if ids.is_empty() {
+                inner.tree.remove(&ts);
             }
+        }
     }
 
     /// Get the timestamp for a given memory id (if indexed).
@@ -109,8 +110,8 @@ impl TemporalIndex {
             tree: inner.tree.iter().map(|(&k, v)| (k, v.clone())).collect(),
             id_to_ts: inner.id_to_ts.iter().map(|(&k, &v)| (k, v)).collect(),
         };
-        let data = serde_json::to_vec(&snapshot)
-            .map_err(|e| MenteError::Serialization(e.to_string()))?;
+        let data =
+            serde_json::to_vec(&snapshot).map_err(|e| MenteError::Serialization(e.to_string()))?;
         std::fs::write(path, data)?;
         Ok(())
     }

@@ -63,7 +63,10 @@ impl Wal {
     /// Open or create a WAL file at `dir_path/wal.log`.
     pub fn open(dir_path: &Path) -> MenteResult<Self> {
         let wal_path = dir_path.join("wal.log");
-        let exists = wal_path.exists() && std::fs::metadata(&wal_path).map(|m| m.len() > 0).unwrap_or(false);
+        let exists = wal_path.exists()
+            && std::fs::metadata(&wal_path)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false);
 
         let file = OpenOptions::new()
             .read(true)
@@ -79,7 +82,11 @@ impl Wal {
             if let Some(last) = entries.last() {
                 wal.next_lsn = last.lsn + 1;
             }
-            info!(next_lsn = wal.next_lsn, entries = entries.len(), "opened existing WAL");
+            info!(
+                next_lsn = wal.next_lsn,
+                entries = entries.len(),
+                "opened existing WAL"
+            );
         } else {
             info!("created new WAL");
         }
@@ -88,7 +95,12 @@ impl Wal {
     }
 
     /// Append an entry to the WAL and return its LSN.
-    pub fn append(&mut self, entry_type: WalEntryType, page_id: u64, data: &[u8]) -> MenteResult<Lsn> {
+    pub fn append(
+        &mut self,
+        entry_type: WalEntryType,
+        page_id: u64,
+        data: &[u8],
+    ) -> MenteResult<Lsn> {
         let lsn = self.next_lsn;
         self.next_lsn += 1;
 
@@ -294,7 +306,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         {
             let mut wal = Wal::open(dir.path()).unwrap();
-            wal.append(WalEntryType::PageWrite, 10, b"recovery-data").unwrap();
+            wal.append(WalEntryType::PageWrite, 10, b"recovery-data")
+                .unwrap();
             wal.sync().unwrap();
         }
         {

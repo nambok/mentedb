@@ -5,8 +5,7 @@
 
 use mentedb_cognitive::{
     CognitionStream, PainRegistry, PainSignal, PhantomConfig, PhantomTracker, StreamAlert,
-    TrajectoryNode, TrajectoryTracker,
-    trajectory::DecisionState,
+    TrajectoryNode, TrajectoryTracker, trajectory::DecisionState,
 };
 use mentedb_core::types::{MemoryId, Timestamp};
 use uuid::Uuid;
@@ -193,7 +192,8 @@ fn demonstrate_pain_signals() {
         memory_id: Uuid::new_v4(),
         intensity: 0.9,
         trigger_keywords: vec!["deploy".into(), "production".into(), "rollback".into()],
-        description: "Deployed untested code to production, required emergency rollback".to_string(),
+        description: "Deployed untested code to production, required emergency rollback"
+            .to_string(),
         created_at: 1000,
         decay_rate: 0.001,
     };
@@ -205,7 +205,8 @@ fn demonstrate_pain_signals() {
         memory_id: Uuid::new_v4(),
         intensity: 0.6,
         trigger_keywords: vec!["cache".into(), "stale".into(), "invalidation".into()],
-        description: "Cache invalidation bug caused stale data to be served for 2 hours".to_string(),
+        description: "Cache invalidation bug caused stale data to be served for 2 hours"
+            .to_string(),
         created_at: 2000,
         decay_rate: 0.002,
     };
@@ -214,7 +215,10 @@ fn demonstrate_pain_signals() {
     // Query pain signals relevant to a context.
     let context_keywords = vec!["deploy".into(), "production".into()];
     let relevant = registry.get_pain_for_context(&context_keywords);
-    println!("Pain signals matching 'deploy production': {}", relevant.len());
+    println!(
+        "Pain signals matching 'deploy production': {}",
+        relevant.len()
+    );
     for pain in &relevant {
         println!(
             "  intensity={:.2}, description='{}'",
@@ -234,8 +238,5 @@ fn demonstrate_pain_signals() {
     println!("\nAfter time decay, re-checking...");
 
     let still_relevant = registry.get_pain_for_context(&context_keywords);
-    println!(
-        "Pain signals still active: {}",
-        still_relevant.len()
-    );
+    println!("Pain signals still active: {}", still_relevant.len());
 }

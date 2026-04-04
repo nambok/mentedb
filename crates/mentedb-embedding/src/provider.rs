@@ -20,10 +20,7 @@ pub trait EmbeddingProvider: Send + Sync {
 /// Asynchronous embedding provider.
 pub trait AsyncEmbeddingProvider: Send + Sync {
     /// Generate an embedding vector for a single text.
-    fn embed(
-        &self,
-        text: &str,
-    ) -> impl std::future::Future<Output = MenteResult<Vec<f32>>> + Send;
+    fn embed(&self, text: &str) -> impl std::future::Future<Output = MenteResult<Vec<f32>>> + Send;
 
     /// Generate embedding vectors for a batch of texts.
     fn embed_batch(

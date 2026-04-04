@@ -84,11 +84,7 @@ impl ConflictResolver {
     }
 
     /// Resolve a conflict using the given strategy, returning the winning version.
-    pub fn auto_resolve(
-        &self,
-        conflict: &Conflict,
-        strategy: Resolution,
-    ) -> ConflictVersion {
+    pub fn auto_resolve(&self, conflict: &Conflict, strategy: Resolution) -> ConflictVersion {
         match &strategy {
             Resolution::KeepLatest => self.resolve_keep_latest(conflict),
             Resolution::KeepHighestConfidence => self.resolve_keep_highest_confidence(conflict),
@@ -147,7 +143,12 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
-    fn make_version(agent: AgentId, content: &str, confidence: f32, ts: Timestamp) -> ConflictVersion {
+    fn make_version(
+        agent: AgentId,
+        content: &str,
+        confidence: f32,
+        ts: Timestamp,
+    ) -> ConflictVersion {
         ConflictVersion {
             agent_id: agent,
             content: content.to_string(),

@@ -1,5 +1,5 @@
-use mentedb_core::types::MemoryId;
 use mentedb_core::MemoryNode;
+use mentedb_core::types::MemoryId;
 use serde::{Deserialize, Serialize};
 
 /// A compressed representation of a memory.
@@ -12,14 +12,38 @@ pub struct CompressedMemory {
 }
 
 const KEY_WORDS: &[&str] = &[
-    "decided", "uses", "prefers", "switched", "chose", "selected",
-    "important", "critical", "must", "should", "always", "never",
+    "decided",
+    "uses",
+    "prefers",
+    "switched",
+    "chose",
+    "selected",
+    "important",
+    "critical",
+    "must",
+    "should",
+    "always",
+    "never",
 ];
 
 const FILLER_WORDS: &[&str] = &[
-    "actually", "basically", "honestly", "really", "very", "quite",
-    "just", "simply", "perhaps", "maybe", "somewhat", "rather",
-    "kind of", "sort of", "you know", "i think", "i mean",
+    "actually",
+    "basically",
+    "honestly",
+    "really",
+    "very",
+    "quite",
+    "just",
+    "simply",
+    "perhaps",
+    "maybe",
+    "somewhat",
+    "rather",
+    "kind of",
+    "sort of",
+    "you know",
+    "i think",
+    "i mean",
 ];
 
 /// Compresses verbose memories into token-efficient forms.

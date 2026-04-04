@@ -141,7 +141,12 @@ impl Default for TrajectoryTracker {
 mod tests {
     use super::*;
 
-    fn make_turn(id: u64, summary: &str, state: DecisionState, questions: Vec<&str>) -> TrajectoryNode {
+    fn make_turn(
+        id: u64,
+        summary: &str,
+        state: DecisionState,
+        questions: Vec<&str>,
+    ) -> TrajectoryNode {
         TrajectoryNode {
             turn_id: id,
             topic_embedding: vec![0.0; 4],
@@ -155,7 +160,12 @@ mod tests {
     #[test]
     fn test_record_and_resume() {
         let mut tracker = TrajectoryTracker::default();
-        tracker.record_turn(make_turn(1, "JWT auth design", DecisionState::Investigating, vec![]));
+        tracker.record_turn(make_turn(
+            1,
+            "JWT auth design",
+            DecisionState::Investigating,
+            vec![],
+        ));
         tracker.record_turn(make_turn(
             2,
             "Token refresh strategy",
@@ -188,7 +198,12 @@ mod tests {
     fn test_fifo_eviction() {
         let mut tracker = TrajectoryTracker::default();
         for i in 0..105 {
-            tracker.record_turn(make_turn(i, &format!("turn {}", i), DecisionState::Investigating, vec![]));
+            tracker.record_turn(make_turn(
+                i,
+                &format!("turn {}", i),
+                DecisionState::Investigating,
+                vec![],
+            ));
         }
         assert_eq!(tracker.get_trajectory().len(), MAX_TURNS_DEFAULT);
         assert_eq!(tracker.get_trajectory()[0].turn_id, 5);

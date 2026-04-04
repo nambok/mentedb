@@ -6,8 +6,7 @@ use std::path::Path;
 use crate::error::{MenteError, MenteResult};
 
 /// Top-level configuration for a MenteDB instance.
-#[derive(Debug, Clone, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct MenteConfig {
     /// Storage engine configuration.
     #[serde(default)]
@@ -299,13 +298,11 @@ impl Default for ServerConfig {
     }
 }
 
-
 impl MenteConfig {
     /// Load configuration from a JSON file.
     pub fn from_file(path: &Path) -> MenteResult<Self> {
         let contents = std::fs::read_to_string(path).map_err(MenteError::Io)?;
-        serde_json::from_str(&contents)
-            .map_err(|e| MenteError::Serialization(e.to_string()))
+        serde_json::from_str(&contents).map_err(|e| MenteError::Serialization(e.to_string()))
     }
 }
 
@@ -405,7 +402,10 @@ mod tests {
         let cfg = MenteConfig::from_file(&path).unwrap();
         let defaults = MenteConfig::default();
 
-        assert_eq!(cfg.storage.buffer_pool_size, defaults.storage.buffer_pool_size);
+        assert_eq!(
+            cfg.storage.buffer_pool_size,
+            defaults.storage.buffer_pool_size
+        );
         assert_eq!(cfg.index.hnsw_m, defaults.index.hnsw_m);
         assert_eq!(cfg.server.port, defaults.server.port);
 

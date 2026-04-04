@@ -124,8 +124,8 @@ impl SalienceIndex {
                 .map(|(&k, v)| (k.to_f32(), v.clone()))
                 .collect(),
         };
-        let data = serde_json::to_vec(&snapshot)
-            .map_err(|e| MenteError::Serialization(e.to_string()))?;
+        let data =
+            serde_json::to_vec(&snapshot).map_err(|e| MenteError::Serialization(e.to_string()))?;
         std::fs::write(path, data)?;
         Ok(())
     }
@@ -211,7 +211,10 @@ mod tests {
     fn test_ordering() {
         // Verify that ordering through OrderedF32 preserves f32 ordering
         let vals = [-1.0f32, 0.0, 0.1, 0.5, 0.9, 1.0];
-        let mut keys: Vec<_> = vals.iter().map(|&v| super::OrderedF32::from_f32(v)).collect();
+        let mut keys: Vec<_> = vals
+            .iter()
+            .map(|&v| super::OrderedF32::from_f32(v))
+            .collect();
         let mut sorted_keys = keys.clone();
         sorted_keys.sort();
         assert_eq!(keys, sorted_keys);

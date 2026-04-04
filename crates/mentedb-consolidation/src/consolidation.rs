@@ -1,6 +1,6 @@
+use mentedb_core::MemoryNode;
 use mentedb_core::memory::MemoryType;
 use mentedb_core::types::{MemoryId, Timestamp};
-use mentedb_core::MemoryNode;
 use serde::{Deserialize, Serialize};
 
 /// A group of memories that are candidates for consolidation.
@@ -150,10 +150,7 @@ impl ConsolidationEngine {
         let summary = seen_sentences.join(". ");
 
         // Max confidence
-        let combined_confidence = cluster
-            .iter()
-            .map(|m| m.confidence)
-            .fold(0.0_f32, f32::max);
+        let combined_confidence = cluster.iter().map(|m| m.confidence).fold(0.0_f32, f32::max);
 
         // Mean embedding, normalized
         let dim = cluster[0].embedding.len();

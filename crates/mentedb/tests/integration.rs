@@ -1,5 +1,5 @@
-use mentedb::prelude::*;
 use mentedb::MenteDb;
+use mentedb::prelude::*;
 use uuid::Uuid;
 
 fn make_memory(content: &str, embedding: Vec<f32>) -> MemoryNode {
@@ -21,7 +21,10 @@ fn test_store_and_recall_similar() {
         make_memory("Meeting scheduled for Monday", vec![0.0, 1.0, 0.0, 0.0]),
         make_memory("API key rotated last week", vec![0.0, 0.0, 1.0, 0.0]),
         make_memory("User likes Python over Rust", vec![0.8, 0.1, 0.0, 0.0]),
-        make_memory("Deploy pipeline uses GitHub Actions", vec![0.0, 0.0, 0.9, 0.1]),
+        make_memory(
+            "Deploy pipeline uses GitHub Actions",
+            vec![0.0, 0.0, 0.9, 0.1],
+        ),
     ];
 
     for m in &memories {
@@ -50,7 +53,10 @@ fn test_forget_memory() {
     // After forgetting, similarity search should not return the forgotten memory.
     let results = db.recall_similar(&[0.5, 0.5, 0.0, 0.0], 5).unwrap();
     for (result_id, _) in &results {
-        assert_ne!(*result_id, id, "Forgotten memory should not appear in results");
+        assert_ne!(
+            *result_id, id,
+            "Forgotten memory should not appear in results"
+        );
     }
 
     db.close().unwrap();

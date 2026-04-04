@@ -11,13 +11,34 @@ pub type SubscriberId = usize;
 /// Events emitted by the memory system.
 #[derive(Debug, Clone)]
 pub enum MenteEvent {
-    MemoryCreated { id: MemoryId, agent_id: AgentId },
-    MemoryUpdated { id: MemoryId, version: u64 },
-    MemoryDeleted { id: MemoryId },
-    EdgeCreated { source: MemoryId, target: MemoryId, edge_type: EdgeType },
-    BeliefChanged { id: MemoryId, old_confidence: f32, new_confidence: f32 },
-    SpaceCreated { id: SpaceId },
-    ContradictionDetected { a: MemoryId, b: MemoryId },
+    MemoryCreated {
+        id: MemoryId,
+        agent_id: AgentId,
+    },
+    MemoryUpdated {
+        id: MemoryId,
+        version: u64,
+    },
+    MemoryDeleted {
+        id: MemoryId,
+    },
+    EdgeCreated {
+        source: MemoryId,
+        target: MemoryId,
+        edge_type: EdgeType,
+    },
+    BeliefChanged {
+        id: MemoryId,
+        old_confidence: f32,
+        new_confidence: f32,
+    },
+    SpaceCreated {
+        id: SpaceId,
+    },
+    ContradictionDetected {
+        a: MemoryId,
+        b: MemoryId,
+    },
 }
 
 /// Thread-safe event bus.
@@ -88,8 +109,8 @@ impl EventBus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use uuid::Uuid;
 
     #[test]

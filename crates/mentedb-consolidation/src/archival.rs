@@ -1,5 +1,5 @@
-use mentedb_core::types::{MemoryId, Timestamp};
 use mentedb_core::MemoryNode;
+use mentedb_core::types::{MemoryId, Timestamp};
 use serde::{Deserialize, Serialize};
 
 /// Decision on what to do with a memory during archival evaluation.

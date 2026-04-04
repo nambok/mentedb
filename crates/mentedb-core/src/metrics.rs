@@ -126,18 +126,66 @@ impl Metrics {
         let mut out = String::with_capacity(2048);
 
         let counters = [
-            ("mentedb_writes_total", "Total write operations", &self.writes_total),
-            ("mentedb_reads_total", "Total read operations", &self.reads_total),
-            ("mentedb_deletes_total", "Total delete operations", &self.deletes_total),
-            ("mentedb_cache_hits_total", "Total cache hits", &self.cache_hits),
-            ("mentedb_cache_misses_total", "Total cache misses", &self.cache_misses),
-            ("mentedb_wal_syncs_total", "Total WAL sync operations", &self.wal_syncs),
-            ("mentedb_context_assemblies_total", "Total context assemblies", &self.context_assemblies),
-            ("mentedb_mql_queries_parsed_total", "Total MQL queries parsed", &self.mql_queries_parsed),
-            ("mentedb_contradictions_detected_total", "Total contradictions detected", &self.contradictions_detected),
-            ("mentedb_beliefs_propagated_total", "Total beliefs propagated", &self.beliefs_propagated),
-            ("mentedb_speculative_hits_total", "Speculative cache hits", &self.speculative_hits),
-            ("mentedb_speculative_misses_total", "Speculative cache misses", &self.speculative_misses),
+            (
+                "mentedb_writes_total",
+                "Total write operations",
+                &self.writes_total,
+            ),
+            (
+                "mentedb_reads_total",
+                "Total read operations",
+                &self.reads_total,
+            ),
+            (
+                "mentedb_deletes_total",
+                "Total delete operations",
+                &self.deletes_total,
+            ),
+            (
+                "mentedb_cache_hits_total",
+                "Total cache hits",
+                &self.cache_hits,
+            ),
+            (
+                "mentedb_cache_misses_total",
+                "Total cache misses",
+                &self.cache_misses,
+            ),
+            (
+                "mentedb_wal_syncs_total",
+                "Total WAL sync operations",
+                &self.wal_syncs,
+            ),
+            (
+                "mentedb_context_assemblies_total",
+                "Total context assemblies",
+                &self.context_assemblies,
+            ),
+            (
+                "mentedb_mql_queries_parsed_total",
+                "Total MQL queries parsed",
+                &self.mql_queries_parsed,
+            ),
+            (
+                "mentedb_contradictions_detected_total",
+                "Total contradictions detected",
+                &self.contradictions_detected,
+            ),
+            (
+                "mentedb_beliefs_propagated_total",
+                "Total beliefs propagated",
+                &self.beliefs_propagated,
+            ),
+            (
+                "mentedb_speculative_hits_total",
+                "Speculative cache hits",
+                &self.speculative_hits,
+            ),
+            (
+                "mentedb_speculative_misses_total",
+                "Speculative cache misses",
+                &self.speculative_misses,
+            ),
         ];
 
         for (name, help, counter) in &counters {

@@ -31,10 +31,14 @@ fn test_graph_manager_full_workflow() {
     }
 
     // Build: n[0] -> n[1] -> n[2], n[0] -> n[3], n[3] -> n[4]
-    mgr.add_relationship(&edge(n[0], n[1], EdgeType::Caused, 0.9)).unwrap();
-    mgr.add_relationship(&edge(n[1], n[2], EdgeType::Caused, 0.8)).unwrap();
-    mgr.add_relationship(&edge(n[0], n[3], EdgeType::Related, 0.7)).unwrap();
-    mgr.add_relationship(&edge(n[3], n[4], EdgeType::Supports, 0.6)).unwrap();
+    mgr.add_relationship(&edge(n[0], n[1], EdgeType::Caused, 0.9))
+        .unwrap();
+    mgr.add_relationship(&edge(n[1], n[2], EdgeType::Caused, 0.8))
+        .unwrap();
+    mgr.add_relationship(&edge(n[0], n[3], EdgeType::Related, 0.7))
+        .unwrap();
+    mgr.add_relationship(&edge(n[3], n[4], EdgeType::Supports, 0.6))
+        .unwrap();
 
     // Context subgraph from n[0] with depth 2
     let (nodes, edges) = mgr.get_context_subgraph(n[0], 2);
@@ -144,8 +148,10 @@ fn test_remove_and_compact() {
     for &id in &n {
         mgr.add_memory(id);
     }
-    mgr.add_relationship(&edge(n[0], n[1], EdgeType::Caused, 1.0)).unwrap();
-    mgr.add_relationship(&edge(n[1], n[2], EdgeType::Related, 1.0)).unwrap();
+    mgr.add_relationship(&edge(n[0], n[1], EdgeType::Caused, 1.0))
+        .unwrap();
+    mgr.add_relationship(&edge(n[1], n[2], EdgeType::Related, 1.0))
+        .unwrap();
     mgr.compact();
 
     // Remove middle node
@@ -174,8 +180,10 @@ fn test_graph_manager_save_load() {
         mgr.add_memory(a);
         mgr.add_memory(b);
         mgr.add_memory(c);
-        mgr.add_relationship(&edge(a, b, EdgeType::Caused, 0.8)).unwrap();
-        mgr.add_relationship(&edge(b, c, EdgeType::Related, 0.5)).unwrap();
+        mgr.add_relationship(&edge(a, b, EdgeType::Caused, 0.8))
+            .unwrap();
+        mgr.add_relationship(&edge(b, c, EdgeType::Related, 0.5))
+            .unwrap();
         mgr.save(&graph_dir).unwrap();
     }
 
@@ -208,7 +216,8 @@ fn test_graph_save_load_after_compact() {
         let mut mgr = GraphManager::new();
         mgr.add_memory(a);
         mgr.add_memory(b);
-        mgr.add_relationship(&edge(a, b, EdgeType::Supports, 0.9)).unwrap();
+        mgr.add_relationship(&edge(a, b, EdgeType::Supports, 0.9))
+            .unwrap();
         mgr.compact();
         mgr.save(&graph_dir).unwrap();
     }

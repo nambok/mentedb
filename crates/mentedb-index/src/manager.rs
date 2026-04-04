@@ -3,9 +3,9 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use mentedb_core::MemoryNode;
 use mentedb_core::error::MenteResult;
 use mentedb_core::types::{MemoryId, Timestamp};
-use mentedb_core::MemoryNode;
 
 use crate::bitmap::BitmapIndex;
 use crate::hnsw::{HnswConfig, HnswIndex};
@@ -17,7 +17,6 @@ use crate::temporal::TemporalIndex;
 pub struct IndexManagerConfig {
     pub hnsw: HnswConfig,
 }
-
 
 /// Owns all index types and provides unified indexing and hybrid search.
 pub struct IndexManager {
@@ -124,9 +123,8 @@ impl IndexManager {
         });
 
         // Build set of time-range-filtered ids (if time range is specified)
-        let time_filter: Option<HashSet<MemoryId>> = time_range.map(|(start, end)| {
-            self.temporal.range(start, end).into_iter().collect()
-        });
+        let time_filter: Option<HashSet<MemoryId>> =
+            time_range.map(|(start, end)| self.temporal.range(start, end).into_iter().collect());
 
         // Find the max distance for normalization
         let max_dist = vector_candidates
@@ -147,13 +145,15 @@ impl IndexManager {
             .into_iter()
             .filter(|(id, _)| {
                 if let Some(ref tf) = tag_filter
-                    && !tf.contains(id) {
-                        return false;
-                    }
+                    && !tf.contains(id)
+                {
+                    return false;
+                }
                 if let Some(ref trf) = time_filter
-                    && !trf.contains(id) {
-                        return false;
-                    }
+                    && !trf.contains(id)
+                {
+                    return false;
+                }
                 true
             })
             .map(|(id, dist)| {
@@ -165,7 +165,11 @@ impl IndexManager {
 
                 // Recency: normalize timestamp to [0, 1]
                 let ts = self.temporal.get_timestamp(id).unwrap_or(0) as f64;
-                let recency = if max_ts > 0.0 { (ts / max_ts) as f32 } else { 0.0 };
+                let recency = if max_ts > 0.0 {
+                    (ts / max_ts) as f32
+                } else {
+                    0.0
+                };
 
                 let combined = vector_sim * 0.6 + salience * 0.3 + recency * 0.1;
                 (id, combined)
@@ -190,7 +194,12 @@ mod tests {
     use super::*;
     use mentedb_core::memory::MemoryType;
 
-    fn make_node(embedding: Vec<f32>, tags: Vec<String>, salience: f32, created_at: u64) -> MemoryNode {
+    fn make_node(
+        embedding: Vec<f32>,
+        tags: Vec<String>,
+        salience: f32,
+        created_at: u64,
+    ) -> MemoryNode {
         let mut node = MemoryNode::new(
             uuid::Uuid::new_v4(),
             MemoryType::Episodic,

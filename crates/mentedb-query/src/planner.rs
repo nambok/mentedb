@@ -1,10 +1,10 @@
 //! Query planner — converts a parsed `Statement` into a `QueryPlan`.
 
+use crate::ast::*;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::error::{MenteError, MenteResult};
 use mentedb_core::types::{MemoryId, Timestamp};
 use serde::{Deserialize, Serialize};
-use crate::ast::*;
 
 /// A physical query plan describing how to execute a query.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -54,9 +54,9 @@ pub fn plan(statement: &Statement) -> MenteResult<QueryPlan> {
         Statement::Recall(recall) => plan_recall(recall),
         Statement::Relate(relate) => plan_relate(relate),
         Statement::Forget(forget) => Ok(QueryPlan::Delete { id: forget.target }),
-        Statement::Consolidate(cons) => {
-            Ok(QueryPlan::Consolidate { filters: cons.filters.clone() })
-        }
+        Statement::Consolidate(cons) => Ok(QueryPlan::Consolidate {
+            filters: cons.filters.clone(),
+        }),
         Statement::Traverse(trav) => plan_traverse(trav),
     }
 }
@@ -78,8 +78,12 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
         if let Value::Text(ref _text) = sim_filter.value {
             // The text will need to be embedded at execution time; we still emit VectorSearch
             // with an empty query vec — the executor is responsible for embedding the text.
-            let remaining: Vec<Filter> =
-                recall.filters.iter().filter(|f| f.op != Operator::SimilarTo).cloned().collect();
+            let remaining: Vec<Filter> = recall
+                .filters
+                .iter()
+                .filter(|f| f.op != Operator::SimilarTo)
+                .cloned()
+                .collect();
             return Ok(QueryPlan::VectorSearch {
                 query: Vec::new(), // placeholder — executor embeds text
                 k: limit,
@@ -93,8 +97,11 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
     }
 
     // If only tag filters, use TagScan
-    let tag_filters: Vec<&Filter> =
-        recall.filters.iter().filter(|f| f.field == Field::Tag).collect();
+    let tag_filters: Vec<&Filter> = recall
+        .filters
+        .iter()
+        .filter(|f| f.field == Field::Tag)
+        .collect();
     if !tag_filters.is_empty() && recall.filters.iter().all(|f| f.field == Field::Tag) {
         let tags: Vec<String> = tag_filters
             .iter()
@@ -116,7 +123,10 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
         .iter()
         .filter(|f| {
             (f.field == Field::Created || f.field == Field::Accessed)
-                && matches!(f.op, Operator::Gt | Operator::Lt | Operator::Gte | Operator::Lte)
+                && matches!(
+                    f.op,
+                    Operator::Gt | Operator::Lt | Operator::Gte | Operator::Lte
+                )
         })
         .collect();
 
@@ -126,7 +136,10 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
             .iter()
             .filter(|f| {
                 !((f.field == Field::Created || f.field == Field::Accessed)
-                    && matches!(f.op, Operator::Gt | Operator::Lt | Operator::Gte | Operator::Lte))
+                    && matches!(
+                        f.op,
+                        Operator::Gt | Operator::Lt | Operator::Gte | Operator::Lte
+                    ))
             })
             .cloned()
             .collect();
@@ -149,7 +162,11 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
             }
         }
 
-        return Ok(QueryPlan::TemporalScan { start, end, filters: remaining });
+        return Ok(QueryPlan::TemporalScan {
+            start,
+            end,
+            filters: remaining,
+        });
     }
 
     // Fallback: tag scan with no tags (full scan with filters)
@@ -230,7 +247,12 @@ mod tests {
         let qp = plan_mql("FORGET 550e8400-e29b-41d4-a716-446655440000");
         match qp {
             QueryPlan::Delete { id } => {
-                assert_eq!(id, "550e8400-e29b-41d4-a716-446655440000".parse::<Uuid>().unwrap());
+                assert_eq!(
+                    id,
+                    "550e8400-e29b-41d4-a716-446655440000"
+                        .parse::<Uuid>()
+                        .unwrap()
+                );
             }
             _ => panic!("expected Delete, got {:?}", qp),
         }
@@ -242,7 +264,9 @@ mod tests {
             "TRAVERSE 550e8400-e29b-41d4-a716-446655440000 DEPTH 3 WHERE edge_type = caused",
         );
         match qp {
-            QueryPlan::GraphTraversal { depth, edge_types, .. } => {
+            QueryPlan::GraphTraversal {
+                depth, edge_types, ..
+            } => {
                 assert_eq!(depth, 3);
                 assert_eq!(edge_types, vec![EdgeType::Caused]);
             }
@@ -256,7 +280,9 @@ mod tests {
             "RELATE 550e8400-e29b-41d4-a716-446655440000 -> 660e8400-e29b-41d4-a716-446655440000 AS caused WITH weight = 0.8",
         );
         match qp {
-            QueryPlan::EdgeInsert { edge_type, weight, .. } => {
+            QueryPlan::EdgeInsert {
+                edge_type, weight, ..
+            } => {
                 assert_eq!(edge_type, EdgeType::Caused);
                 assert!((weight - 0.8).abs() < f32::EPSILON);
             }

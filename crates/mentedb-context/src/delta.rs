@@ -35,9 +35,21 @@ impl DeltaTracker {
     ) -> DeltaResult {
         let current_set: AHashSet<MemoryId> = current.iter().copied().collect();
 
-        let added: Vec<MemoryId> = current.iter().filter(|id| !previous.contains(id)).copied().collect();
-        let removed: Vec<MemoryId> = previous.iter().filter(|id| !current_set.contains(id)).copied().collect();
-        let unchanged: Vec<MemoryId> = current.iter().filter(|id| previous.contains(id)).copied().collect();
+        let added: Vec<MemoryId> = current
+            .iter()
+            .filter(|id| !previous.contains(id))
+            .copied()
+            .collect();
+        let removed: Vec<MemoryId> = previous
+            .iter()
+            .filter(|id| !current_set.contains(id))
+            .copied()
+            .collect();
+        let unchanged: Vec<MemoryId> = current
+            .iter()
+            .filter(|id| previous.contains(id))
+            .copied()
+            .collect();
 
         DeltaResult {
             added,
@@ -147,7 +159,11 @@ mod tests {
         );
         let result = DeltaTracker::format_delta_context(
             &[&mem],
-            &["old memory 1".into(), "old memory 2".into(), "old memory 3".into()],
+            &[
+                "old memory 1".into(),
+                "old memory 2".into(),
+                "old memory 3".into(),
+            ],
             12,
         );
         assert!(result.contains("[NEW] user switched to MySQL on March 15"));

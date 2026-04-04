@@ -150,7 +150,10 @@ impl PageManager {
     /// Open (or create) a page file at `dir_path/pages.db`.
     pub fn open(dir_path: &Path) -> MenteResult<Self> {
         let file_path = dir_path.join("pages.db");
-        let exists = file_path.exists() && std::fs::metadata(&file_path).map(|m| m.len() > 0).unwrap_or(false);
+        let exists = file_path.exists()
+            && std::fs::metadata(&file_path)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false);
 
         let mut file = OpenOptions::new()
             .read(true)
@@ -169,13 +172,24 @@ impl PageManager {
                 return Err(MenteError::Storage("invalid page file magic number".into()));
             }
             if hdr.version != VERSION {
-                return Err(MenteError::Storage(format!("unsupported page file version: {}", hdr.version)));
+                return Err(MenteError::Storage(format!(
+                    "unsupported page file version: {}",
+                    hdr.version
+                )));
             }
 
             info!(page_count = hdr.page_count, "opened existing page file");
-            Ok(Self { file, page_count: hdr.page_count, free_list_head: hdr.free_list_head })
+            Ok(Self {
+                file,
+                page_count: hdr.page_count,
+                free_list_head: hdr.free_list_head,
+            })
         } else {
-            let mut pm = Self { file, page_count: 1, free_list_head: 0 };
+            let mut pm = Self {
+                file,
+                page_count: 1,
+                free_list_head: 0,
+            };
             // Write header page (page 0) — reserves first PAGE_SIZE bytes.
             let mut header_page = Page::zeroed();
             header_page.header.page_id = 0;
@@ -196,7 +210,10 @@ impl PageManager {
             free_list_head: self.free_list_head,
         };
         let bytes = unsafe {
-            std::slice::from_raw_parts(&hdr as *const FileHeader as *const u8, std::mem::size_of::<FileHeader>())
+            std::slice::from_raw_parts(
+                &hdr as *const FileHeader as *const u8,
+                std::mem::size_of::<FileHeader>(),
+            )
         };
         self.file.seek(SeekFrom::Start(0))?;
         self.file.write_all(bytes)?;
@@ -233,7 +250,10 @@ impl PageManager {
     /// Read a page from disk.
     pub fn read_page(&mut self, page_id: PageId) -> MenteResult<Box<Page>> {
         if page_id.0 >= self.page_count {
-            return Err(MenteError::Storage(format!("page {} out of range (count={})", page_id.0, self.page_count)));
+            return Err(MenteError::Storage(format!(
+                "page {} out of range (count={})",
+                page_id.0, self.page_count
+            )));
         }
 
         let offset = page_id.0 * PAGE_SIZE as u64;

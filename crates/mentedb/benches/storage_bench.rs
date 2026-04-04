@@ -23,7 +23,9 @@ fn random_embedding(dim: usize) -> Vec<f32> {
 
     (0..dim)
         .map(|i| {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(i as u64);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(i as u64);
             // Map to [-1, 1]
             (state as f32 / u64::MAX as f32) * 2.0 - 1.0
         })
@@ -62,7 +64,9 @@ fn bench_hnsw_search(c: &mut Criterion) {
     // Build the index once outside the benchmark loop.
     let index = HnswIndex::new(HnswConfig::default());
     for _ in 0..10_000 {
-        index.insert(Uuid::new_v4(), &random_embedding(128)).unwrap();
+        index
+            .insert(Uuid::new_v4(), &random_embedding(128))
+            .unwrap();
     }
 
     c.bench_function("hnsw_search_top10", |b| {
@@ -103,19 +107,13 @@ fn bench_mql_parse(c: &mut Criterion) {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            1 => format!(
-                "RECALL memories WHERE type = episodic AND tag = \"bench{i}\" LIMIT 5"
-            ),
-            2 => format!(
-                r#"RECALL memories WHERE content ~> "topic number {i}" LIMIT 10"#
-            ),
+            1 => format!("RECALL memories WHERE type = episodic AND tag = \"bench{i}\" LIMIT 5"),
+            2 => format!(r#"RECALL memories WHERE content ~> "topic number {i}" LIMIT 10"#),
             3 => format!(
                 "TRAVERSE {} DEPTH 3 WHERE edge_type = caused",
                 Uuid::new_v4()
             ),
-            _ => format!(
-                "RECALL memories WHERE salience > 0.{i:02} LIMIT 20"
-            ),
+            _ => format!("RECALL memories WHERE salience > 0.{i:02} LIMIT 20"),
         })
         .collect();
 

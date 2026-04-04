@@ -229,9 +229,6 @@ mod tests {
 
         assert_eq!(manifest.memory_count, 1);
         assert_eq!(manifest.size_bytes, 1024);
-        assert_eq!(
-            fs::read(alt_target.join("data.bin")).unwrap().len(),
-            1024
-        );
+        assert_eq!(fs::read(alt_target.join("data.bin")).unwrap().len(), 1024);
     }
 }

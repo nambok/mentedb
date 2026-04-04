@@ -115,11 +115,15 @@ impl CognitionStream {
                 continue;
             }
 
-            let matched = keywords.iter().filter(|kw| full_lower.contains(*kw)).count();
+            let matched = keywords
+                .iter()
+                .filter(|kw| full_lower.contains(*kw))
+                .count();
             let ratio = matched as f32 / keywords.len() as f32;
 
             // High keyword overlap but not identical text = potential contradiction
-            if ratio > self.config.contradiction_keyword_ratio && !full_lower.contains(&fact_lower) {
+            if ratio > self.config.contradiction_keyword_ratio && !full_lower.contains(&fact_lower)
+            {
                 // Check for negation patterns that suggest contradiction
                 let has_negation = full_lower.contains("not ")
                     || full_lower.contains("never ")
@@ -192,7 +196,9 @@ mod tests {
         let facts = vec![(mid, "The system uses PostgreSQL for storage".to_string())];
         let alerts = stream.check_alerts(&facts);
         assert!(
-            alerts.iter().any(|a| matches!(a, StreamAlert::Contradiction { .. })),
+            alerts
+                .iter()
+                .any(|a| matches!(a, StreamAlert::Contradiction { .. })),
             "Expected contradiction alert, got: {:?}",
             alerts
         );

@@ -40,7 +40,11 @@ impl PainRegistry {
                 let matched = signal
                     .trigger_keywords
                     .iter()
-                    .filter(|trigger| ctx_lower.iter().any(|ctx| ctx.contains(&trigger.to_lowercase())))
+                    .filter(|trigger| {
+                        ctx_lower
+                            .iter()
+                            .any(|ctx| ctx.contains(&trigger.to_lowercase()))
+                    })
                     .count();
 
                 if matched > 0 {
@@ -125,7 +129,8 @@ mod tests {
         registry.record_pain(make_signal(vec!["mongodb", "nosql"], 0.95));
         registry.record_pain(make_signal(vec!["python", "flask"], 0.5));
 
-        let results = registry.get_pain_for_context(&["mongodb".to_string(), "database".to_string()]);
+        let results =
+            registry.get_pain_for_context(&["mongodb".to_string(), "database".to_string()]);
         assert_eq!(results.len(), 1);
         assert!(results[0].trigger_keywords.contains(&"mongodb".to_string()));
     }
@@ -135,7 +140,11 @@ mod tests {
         let signal = make_signal(vec!["test"], 1.0);
         let decayed = PainRegistry::current_intensity(&signal, 11000);
         assert!(decayed < 1.0, "Expected decay, got {}", decayed);
-        assert!(decayed > 0.0, "Expected positive intensity, got {}", decayed);
+        assert!(
+            decayed > 0.0,
+            "Expected positive intensity, got {}",
+            decayed
+        );
     }
 
     #[test]
