@@ -127,8 +127,7 @@ impl RaftNetworkV2<TypeConfig> for MenteNetwork {
             .await
             .map_err(|e| StreamingError::Unreachable(Unreachable::new(&e)))?;
 
-        serde_json::from_slice(&body)
-            .map_err(|e| StreamingError::Unreachable(Unreachable::new(&e)))
+        serde_json::from_slice(&body).map_err(|e| StreamingError::Unreachable(Unreachable::new(&e)))
     }
 
     async fn vote(

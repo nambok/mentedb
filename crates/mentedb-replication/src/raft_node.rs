@@ -11,7 +11,7 @@ use crate::config::ReplicationConfig;
 use crate::network::MenteNetworkFactory;
 use crate::store::{LogStore, StateMachine};
 
-/// Type configuration for openraft parameterized with MenteDB types.
+// Type configuration for openraft parameterized with MenteDB types.
 openraft::declare_raft_types!(
     pub TypeConfig:
         D = MenteRequest,
@@ -92,7 +92,7 @@ impl Default for MenteResponse {
 
 /// The MenteDB Raft node, wrapping an openraft Raft instance.
 pub struct MenteRaftNode {
-    pub raft: Raft<TypeConfig>,
+    pub raft: Raft<TypeConfig, StateMachine>,
     pub config: ReplicationConfig,
 }
 
@@ -118,8 +118,14 @@ impl MenteRaftNode {
         let raft_config = raft_config.validate().expect("invalid raft config");
         let raft_config = std::sync::Arc::new(raft_config);
 
-        let raft =
-            Raft::new(config.node_id, raft_config, network, log_store, state_machine).await?;
+        let raft = Raft::new(
+            config.node_id,
+            raft_config,
+            network,
+            log_store,
+            state_machine,
+        )
+        .await?;
 
         Ok(Self { raft, config })
     }
