@@ -8,6 +8,9 @@ steps:
     with:
       components: clippy, rustfmt
 
+  - name: Install protobuf compiler
+    run: sudo apt-get install -y protobuf-compiler
+
   - name: Cache cargo registry and build
     uses: actions/cache@v4
     with:

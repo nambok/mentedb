@@ -16,6 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get install -y protobuf-compiler
       - run: cargo check --workspace
 
   test:
@@ -24,6 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get install -y protobuf-compiler
       - run: cargo test --workspace
 
   fmt:
@@ -44,4 +46,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - run: sudo apt-get install -y protobuf-compiler
       - run: cargo clippy --workspace -- -D warnings

@@ -1,7 +1,9 @@
 //! Raft node wrapper with MenteDB-specific types.
 
+use std::fmt;
 use std::io::Cursor;
 
+use openraft::async_runtime::watch::WatchReceiver;
 use openraft::{BasicNode, Raft};
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +47,21 @@ pub enum MenteRequest {
         content: Option<String>,
         tags: Option<Vec<String>>,
     },
+}
+
+impl fmt::Display for MenteRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StoreMemory { memory_id, .. } => write!(f, "StoreMemory({})", memory_id),
+            Self::ForgetMemory { memory_id } => write!(f, "ForgetMemory({})", memory_id),
+            Self::RelateMemories {
+                source_id,
+                target_id,
+                ..
+            } => write!(f, "RelateMemories({} -> {})", source_id, target_id),
+            Self::UpdateMemory { memory_id, .. } => write!(f, "UpdateMemory({})", memory_id),
+        }
+    }
 }
 
 /// A response returned after applying a Raft-replicated request.
@@ -101,14 +118,8 @@ impl MenteRaftNode {
         let raft_config = raft_config.validate().expect("invalid raft config");
         let raft_config = std::sync::Arc::new(raft_config);
 
-        let raft = Raft::new(
-            config.node_id,
-            raft_config,
-            network,
-            log_store,
-            state_machine,
-        )
-        .await?;
+        let raft =
+            Raft::new(config.node_id, raft_config, network, log_store, state_machine).await?;
 
         Ok(Self { raft, config })
     }
@@ -117,14 +128,14 @@ impl MenteRaftNode {
     pub async fn client_write(
         &self,
         request: MenteRequest,
-    ) -> Result<MenteResponse, openraft::error::RaftError<TypeConfig>> {
+    ) -> Result<MenteResponse, Box<dyn std::error::Error>> {
         let response = self.raft.client_write(request).await?;
-        Ok(response.response().cloned().unwrap_or_default())
+        Ok(response.response().clone())
     }
 
     /// Returns the current Raft metrics (leader, term, membership, etc.).
     pub fn metrics(&self) -> openraft::metrics::RaftMetrics<TypeConfig> {
-        self.raft.metrics().borrow().clone()
+        self.raft.metrics().borrow_watched().clone()
     }
 }
 
@@ -152,6 +163,16 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         let deserialized: MenteResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(resp, deserialized);
+    }
+
+    #[test]
+    fn test_request_display() {
+        let req = MenteRequest::StoreMemory {
+            memory_id: "m1".into(),
+            content: "c".into(),
+            tags: vec![],
+        };
+        assert_eq!(format!("{}", req), "StoreMemory(m1)");
     }
 
     #[test]

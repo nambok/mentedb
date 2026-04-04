@@ -6,8 +6,11 @@
 
 use std::future::Future;
 
+use openraft::errors::{RPCError, ReplicationClosed, StreamingError, Unreachable};
 use openraft::network::{RPCOption, RaftNetworkFactory, RaftNetworkV2};
-use openraft::raft::{AppendEntriesRequest, AppendEntriesResponse, VoteRequest, VoteResponse};
+use openraft::raft::{
+    AppendEntriesRequest, AppendEntriesResponse, SnapshotResponse, VoteRequest, VoteResponse,
+};
 use openraft::{BasicNode, OptionalSend};
 use serde::{Deserialize, Serialize};
 
@@ -15,10 +18,9 @@ use crate::raft_node::TypeConfig;
 
 type SnapshotOf = openraft::type_config::alias::SnapshotOf<TypeConfig>;
 type VoteOf = openraft::type_config::alias::VoteOf<TypeConfig>;
-type RPCError = openraft::errors::RPCError<TypeConfig>;
-type StreamingError = openraft::errors::StreamingError<TypeConfig>;
-type SnapshotResponse = openraft::raft::SnapshotResponse<TypeConfig>;
-type ReplicationClosed = openraft::errors::ReplicationClosed;
+type MenteRPCError = RPCError<TypeConfig>;
+type MenteStreamingError = StreamingError<TypeConfig>;
+type MenteSnapshotResponse = SnapshotResponse<TypeConfig>;
 
 /// Factory that creates network connections to peer nodes.
 #[derive(Clone)]
@@ -60,23 +62,26 @@ pub struct MenteNetwork {
 }
 
 impl MenteNetwork {
-    async fn post<Req, Resp>(&mut self, path: &str, req: &Req) -> Result<Resp, RPCError>
+    async fn post<Req, Resp>(&mut self, path: &str, req: &Req) -> Result<Resp, MenteRPCError>
     where
         Req: Serialize + Send + Sync,
         Resp: for<'de> Deserialize<'de>,
     {
         let url = format!("{}{}", self.target_addr, path);
-        let resp = self.client.post(&url).json(req).send().await.map_err(|e| {
-            openraft::errors::RPCError::Unreachable(openraft::errors::Unreachable::new(&e))
-        })?;
+        let resp = self
+            .client
+            .post(&url)
+            .json(req)
+            .send()
+            .await
+            .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
 
-        let body = resp.bytes().await.map_err(|e| {
-            openraft::errors::RPCError::Unreachable(openraft::errors::Unreachable::new(&e))
-        })?;
+        let body = resp
+            .bytes()
+            .await
+            .map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))?;
 
-        serde_json::from_slice(&body).map_err(|e| {
-            openraft::errors::RPCError::Unreachable(openraft::errors::Unreachable::new(&e))
-        })
+        serde_json::from_slice(&body).map_err(|e| RPCError::Unreachable(Unreachable::new(&e)))
     }
 }
 
@@ -85,7 +90,7 @@ impl RaftNetworkV2<TypeConfig> for MenteNetwork {
         &mut self,
         req: AppendEntriesRequest<TypeConfig>,
         _option: RPCOption,
-    ) -> Result<AppendEntriesResponse<TypeConfig>, RPCError> {
+    ) -> Result<AppendEntriesResponse<TypeConfig>, MenteRPCError> {
         self.post("/raft/append-entries", &req).await
     }
 
@@ -95,8 +100,7 @@ impl RaftNetworkV2<TypeConfig> for MenteNetwork {
         snapshot: SnapshotOf,
         _cancel: impl Future<Output = ReplicationClosed> + OptionalSend + 'static,
         _option: RPCOption,
-    ) -> Result<SnapshotResponse, StreamingError> {
-        // Serialize the snapshot and send it in one request.
+    ) -> Result<MenteSnapshotResponse, MenteStreamingError> {
         #[derive(Serialize)]
         struct SnapshotPayload {
             vote: String,
@@ -116,26 +120,22 @@ impl RaftNetworkV2<TypeConfig> for MenteNetwork {
             .json(&payload)
             .send()
             .await
-            .map_err(|e| {
-                openraft::errors::StreamingError::Unreachable(openraft::errors::Unreachable::new(
-                    &e,
-                ))
-            })?;
+            .map_err(|e| StreamingError::Unreachable(Unreachable::new(&e)))?;
 
-        let body = resp.bytes().await.map_err(|e| {
-            openraft::errors::StreamingError::Unreachable(openraft::errors::Unreachable::new(&e))
-        })?;
+        let body = resp
+            .bytes()
+            .await
+            .map_err(|e| StreamingError::Unreachable(Unreachable::new(&e)))?;
 
-        serde_json::from_slice(&body).map_err(|e| {
-            openraft::errors::StreamingError::Unreachable(openraft::errors::Unreachable::new(&e))
-        })
+        serde_json::from_slice(&body)
+            .map_err(|e| StreamingError::Unreachable(Unreachable::new(&e)))
     }
 
     async fn vote(
         &mut self,
         req: VoteRequest<TypeConfig>,
         _option: RPCOption,
-    ) -> Result<VoteResponse<TypeConfig>, RPCError> {
+    ) -> Result<VoteResponse<TypeConfig>, MenteRPCError> {
         self.post("/raft/vote", &req).await
     }
 }
@@ -146,8 +146,12 @@ mod tests {
 
     #[test]
     fn test_network_factory_creation() {
-        let factory = MenteNetworkFactory::new();
-        let _ = factory.client;
+        let _factory = MenteNetworkFactory::new();
+    }
+
+    #[test]
+    fn test_network_factory_default() {
+        let _factory = MenteNetworkFactory::default();
     }
 
     #[tokio::test]
