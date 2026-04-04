@@ -115,8 +115,8 @@ impl WriteInferenceEngine {
             let sim = cosine_similarity(&new_memory.embedding, &existing.embedding);
 
             // Very high similarity: potential duplicate or contradiction
-            if sim > self.config.contradiction_threshold {
-                if existing.agent_id == new_memory.agent_id
+            if sim > self.config.contradiction_threshold
+                && existing.agent_id == new_memory.agent_id
                     && existing.content != new_memory.content
                 {
                     actions.push(InferredAction::FlagContradiction {
@@ -128,7 +128,6 @@ impl WriteInferenceEngine {
                         ),
                     });
                 }
-            }
 
             // High similarity: mark older as obsolete if newer timestamp
             if sim > self.config.obsolete_threshold && new_memory.created_at > existing.created_at {
@@ -150,8 +149,8 @@ impl WriteInferenceEngine {
         }
 
         // Correction type: find the most similar existing memory and supersede it
-        if new_memory.memory_type == MemoryType::Correction {
-            if let Some(original) = existing_memories
+        if new_memory.memory_type == MemoryType::Correction
+            && let Some(original) = existing_memories
                 .iter()
                 .filter(|m| m.id != new_memory.id)
                 .max_by(|a, b| {
@@ -175,7 +174,6 @@ impl WriteInferenceEngine {
                     });
                 }
             }
-        }
 
         actions
     }

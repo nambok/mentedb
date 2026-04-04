@@ -82,12 +82,11 @@ impl BufferPool {
         let frame_id = Self::find_victim(&mut inner)?;
 
         // Flush dirty victim if needed.
-        if inner.frames[frame_id].dirty {
-            if let Some(old_pid) = inner.frames[frame_id].page_id {
+        if inner.frames[frame_id].dirty
+            && let Some(old_pid) = inner.frames[frame_id].page_id {
                 pm.write_page(old_pid, &inner.frames[frame_id].page)?;
                 debug!(page_id = old_pid.0, frame_id, "flushed dirty victim");
             }
-        }
 
         // Remove old mapping.
         if let Some(old_pid) = inner.frames[frame_id].page_id {
@@ -176,12 +175,11 @@ impl BufferPool {
     pub fn flush_all(&self, pm: &mut PageManager) -> MenteResult<()> {
         let mut inner = self.inner.lock();
         for frame in &mut inner.frames {
-            if frame.dirty {
-                if let Some(pid) = frame.page_id {
+            if frame.dirty
+                && let Some(pid) = frame.page_id {
                     pm.write_page(pid, &frame.page)?;
                     frame.dirty = false;
                 }
-            }
         }
         debug!("flushed all dirty pages");
         Ok(())

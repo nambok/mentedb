@@ -99,12 +99,10 @@ fn remove_filler(text: &str) -> String {
     for &filler in FILLER_WORDS {
         // Case-insensitive removal
         let lower = result.to_lowercase();
-        while let Some(pos) = lower.find(filler) {
+        if let Some(pos) = lower.find(filler) {
             let end = pos + filler.len();
-            // Remove the filler and any trailing space
             let actual = &result[pos..end];
             result = result.replacen(actual, "", 1);
-            break;
         }
     }
     // Collapse whitespace

@@ -13,17 +13,11 @@ use crate::salience::SalienceIndex;
 use crate::temporal::TemporalIndex;
 
 /// Configuration for the composite index manager.
+#[derive(Default)]
 pub struct IndexManagerConfig {
     pub hnsw: HnswConfig,
 }
 
-impl Default for IndexManagerConfig {
-    fn default() -> Self {
-        Self {
-            hnsw: HnswConfig::default(),
-        }
-    }
-}
 
 /// Owns all index types and provides unified indexing and hybrid search.
 pub struct IndexManager {
@@ -152,16 +146,14 @@ impl IndexManager {
         let mut scored: Vec<(MemoryId, f32)> = vector_candidates
             .into_iter()
             .filter(|(id, _)| {
-                if let Some(ref tf) = tag_filter {
-                    if !tf.contains(id) {
+                if let Some(ref tf) = tag_filter
+                    && !tf.contains(id) {
                         return false;
                     }
-                }
-                if let Some(ref trf) = time_filter {
-                    if !trf.contains(id) {
+                if let Some(ref trf) = time_filter
+                    && !trf.contains(id) {
                         return false;
                     }
-                }
                 true
             })
             .map(|(id, dist)| {

@@ -126,7 +126,7 @@ pub async fn get_memory(db: Db, id_str: &str) -> Response {
     // PointLookup exists in QueryPlan but is not reachable via MQL syntax,
     // so we scan and filter client-side. This is inefficient but correct
     // until MenteDb exposes a public get(id) method.
-    let query = format!("RECALL memories LIMIT 1000");
+    let query = "RECALL memories LIMIT 1000".to_string();
     let mut db = db.lock().await;
     match db.recall(&query) {
         Ok(window) => {

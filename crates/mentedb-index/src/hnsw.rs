@@ -358,7 +358,7 @@ impl HnswIndex {
             .id_to_idx
             .get(&id)
             .copied()
-            .ok_or_else(|| MenteError::MemoryNotFound(id))?;
+            .ok_or(MenteError::MemoryNotFound(id))?;
         inner.deleted.insert(idx);
         Ok(())
     }
@@ -415,8 +415,8 @@ fn random_level(level_mult: f64, _m: usize) -> usize {
     let r: f64 = rng.r#gen::<f64>();
     // Avoid log(0)
     let r = r.max(f64::EPSILON);
-    let level = (-r.ln() * level_mult).floor() as usize;
-    level
+    
+    (-r.ln() * level_mult).floor() as usize
 }
 
 /// Greedily walk neighbours at `level` to find the node closest to `query`.

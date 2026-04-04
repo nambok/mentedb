@@ -56,18 +56,17 @@ impl BitmapIndex {
         inner
             .tag_bitmaps
             .entry(tag.to_string())
-            .or_insert_with(RoaringBitmap::new)
+            .or_default()
             .insert(offset);
     }
 
     /// Remove a tag for the given memory id.
     pub fn remove_tag(&self, id: MemoryId, tag: &str) {
         let mut inner = self.inner.write();
-        if let Some(&offset) = inner.id_to_offset.get(&id) {
-            if let Some(bm) = inner.tag_bitmaps.get_mut(tag) {
+        if let Some(&offset) = inner.id_to_offset.get(&id)
+            && let Some(bm) = inner.tag_bitmaps.get_mut(tag) {
                 bm.remove(offset);
             }
-        }
     }
 
     /// Get all memory ids that have the given tag.

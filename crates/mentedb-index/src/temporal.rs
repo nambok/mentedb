@@ -78,14 +78,13 @@ impl TemporalIndex {
     /// Remove a memory by id (looks up the timestamp internally).
     pub fn remove_by_id(&self, id: MemoryId) {
         let mut inner = self.inner.write();
-        if let Some(ts) = inner.id_to_ts.remove(&id) {
-            if let Some(ids) = inner.tree.get_mut(&ts) {
+        if let Some(ts) = inner.id_to_ts.remove(&id)
+            && let Some(ids) = inner.tree.get_mut(&ts) {
                 ids.retain(|&i| i != id);
                 if ids.is_empty() {
                     inner.tree.remove(&ts);
                 }
             }
-        }
     }
 
     /// Get the timestamp for a given memory id (if indexed).

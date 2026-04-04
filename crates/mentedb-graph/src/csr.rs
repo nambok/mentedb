@@ -172,20 +172,18 @@ impl CsrGraph {
         let neighbors = self.csr.neighbors(idx);
         let edges = self.csr.edge_data_for(idx);
         for (i, &neighbor) in neighbors.iter().enumerate() {
-            if !self.is_removed(idx, neighbor) {
-                if let Some(&id) = self.idx_to_id.get(neighbor as usize) {
+            if !self.is_removed(idx, neighbor)
+                && let Some(&id) = self.idx_to_id.get(neighbor as usize) {
                     results.push((id, edges[i]));
                 }
-            }
         }
 
         // From delta
         for delta in &self.delta_edges {
-            if delta.source_idx == idx {
-                if let Some(&id) = self.idx_to_id.get(delta.target_idx as usize) {
+            if delta.source_idx == idx
+                && let Some(&id) = self.idx_to_id.get(delta.target_idx as usize) {
                     results.push((id, delta.data));
                 }
-            }
         }
 
         results
@@ -206,20 +204,18 @@ impl CsrGraph {
         let neighbors = self.csc.neighbors(idx);
         let edges = self.csc.edge_data_for(idx);
         for (i, &neighbor) in neighbors.iter().enumerate() {
-            if !self.is_removed(neighbor, idx) {
-                if let Some(&id) = self.idx_to_id.get(neighbor as usize) {
+            if !self.is_removed(neighbor, idx)
+                && let Some(&id) = self.idx_to_id.get(neighbor as usize) {
                     results.push((id, edges[i]));
                 }
-            }
         }
 
         // From delta
         for delta in &self.delta_edges {
-            if delta.target_idx == idx {
-                if let Some(&id) = self.idx_to_id.get(delta.source_idx as usize) {
+            if delta.target_idx == idx
+                && let Some(&id) = self.idx_to_id.get(delta.source_idx as usize) {
                     results.push((id, delta.data));
                 }
-            }
         }
 
         results

@@ -7,6 +7,7 @@ use crate::error::{MenteError, MenteResult};
 
 /// Top-level configuration for a MenteDB instance.
 #[derive(Debug, Clone, Deserialize)]
+#[derive(Default)]
 pub struct MenteConfig {
     /// Storage engine configuration.
     #[serde(default)]
@@ -298,18 +299,6 @@ impl Default for ServerConfig {
     }
 }
 
-impl Default for MenteConfig {
-    fn default() -> Self {
-        Self {
-            storage: StorageConfig::default(),
-            index: IndexConfig::default(),
-            context: ContextConfig::default(),
-            cognitive: CognitiveConfig::default(),
-            consolidation: ConsolidationConfig::default(),
-            server: ServerConfig::default(),
-        }
-    }
-}
 
 impl MenteConfig {
     /// Load configuration from a JSON file.

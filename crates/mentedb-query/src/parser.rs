@@ -293,12 +293,12 @@ impl<'a> Parser<'a> {
         let tok = self.advance();
         let name = match tok.kind {
             TokenKind::Identifier | TokenKind::StringLit => {
-                let s = if tok.kind == TokenKind::StringLit {
+                
+                if tok.kind == TokenKind::StringLit {
                     tok.lexeme[1..tok.lexeme.len() - 1].to_string()
                 } else {
                     tok.lexeme.clone()
-                };
-                s
+                }
             }
             _ => {
                 return Err(MenteError::Query(format!(

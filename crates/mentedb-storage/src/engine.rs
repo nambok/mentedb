@@ -27,6 +27,7 @@ impl StorageEngine {
     /// Open (or create) a storage engine rooted at `path`.
     ///
     /// `path` must be a directory; it will be created if it does not exist.
+    /// After opening, any uncommitted WAL entries are replayed for crash recovery.
     pub fn open(path: &Path) -> MenteResult<Self> {
         std::fs::create_dir_all(path)?;
 
@@ -34,9 +35,66 @@ impl StorageEngine {
         let buffer_pool = BufferPool::new(DEFAULT_BUFFER_POOL_SIZE);
         let wal = Wal::open(path)?;
 
-        info!(?path, "storage engine opened");
+        let mut engine = Self { page_manager, buffer_pool, wal };
 
-        Ok(Self { page_manager, buffer_pool, wal })
+        let recovered = engine.recover()?;
+        if recovered > 0 {
+            info!(recovered, ?path, "storage engine opened with WAL recovery");
+        } else {
+            info!(?path, "storage engine opened");
+        }
+
+        Ok(engine)
+    }
+
+    /// Replay WAL entries to recover writes that were not checkpointed.
+    ///
+    /// For each `PageWrite` entry the serialized data is written back to its page.
+    /// After replay the WAL is truncated. Returns the number of entries replayed.
+    pub fn recover(&mut self) -> MenteResult<usize> {
+        let entries = self.wal.iterate()?;
+        let mut count = 0usize;
+
+        for entry in &entries {
+            match entry.entry_type {
+                WalEntryType::PageWrite => {
+                    let page_id = PageId(entry.page_id);
+
+                    // Ensure the page file is large enough for this page id.
+                    while self.page_manager.page_count() <= entry.page_id {
+                        self.page_manager.allocate_page()?;
+                    }
+
+                    let mut page = self.page_manager.read_page(page_id)?;
+                    let copy_len = entry.data.len().min(PAGE_DATA_SIZE);
+                    page.data[..copy_len].copy_from_slice(&entry.data[..copy_len]);
+                    if copy_len < PAGE_DATA_SIZE {
+                        page.data[copy_len..].fill(0);
+                    }
+                    page.header.page_id = entry.page_id;
+                    page.header.lsn = entry.lsn;
+                    page.header.page_type = PageType::Data as u8;
+                    page.header.free_space = (PAGE_DATA_SIZE - copy_len) as u16;
+                    page.header.checksum = page.compute_checksum();
+
+                    self.page_manager.write_page(page_id, &page)?;
+                    count += 1;
+                }
+                WalEntryType::Checkpoint | WalEntryType::Commit => {
+                    // No page data to replay for these entry types.
+                }
+            }
+        }
+
+        if count > 0 {
+            self.page_manager.sync()?;
+            // Truncate the entire WAL — all entries have been applied.
+            let next_lsn = self.wal.next_lsn();
+            self.wal.truncate(next_lsn)?;
+            info!(count, "WAL recovery replayed entries");
+        }
+
+        Ok(count)
     }
 
     /// Gracefully shut down: flush dirty pages, sync files.
@@ -235,6 +293,113 @@ mod tests {
             let mut engine = StorageEngine::open(dir.path()).unwrap();
             let loaded = engine.load_memory(pid).unwrap();
             assert_eq!(loaded.content, "persist across close");
+        }
+    }
+
+    #[test]
+    fn test_crash_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ids = Vec::new();
+        let mut contents = Vec::new();
+        {
+            let mut engine = StorageEngine::open(dir.path()).unwrap();
+            for i in 0..3 {
+                let content = format!("crash-recovery-{i}");
+                let node = MemoryNode::new(
+                    Uuid::new_v4(),
+                    MemoryType::Episodic,
+                    content.clone(),
+                    vec![i as f32],
+                );
+                let pid = engine.store_memory(&node).unwrap();
+                ids.push(pid);
+                contents.push(content);
+            }
+            // Simulate crash: sync the WAL but do NOT call close/checkpoint.
+            engine.wal.sync().unwrap();
+            // Drop without close — dirty pages may not be flushed.
+        }
+        {
+            // Reopen — WAL replay should recover the writes.
+            let mut engine = StorageEngine::open(dir.path()).unwrap();
+            for (pid, expected) in ids.iter().zip(contents.iter()) {
+                let loaded = engine.load_memory(*pid).unwrap();
+                assert_eq!(&loaded.content, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn test_recovery_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid;
+        let content = "idempotent-check".to_string();
+        {
+            let mut engine = StorageEngine::open(dir.path()).unwrap();
+            let node = MemoryNode::new(
+                Uuid::new_v4(),
+                MemoryType::Semantic,
+                content.clone(),
+                vec![1.0, 2.0],
+            );
+            pid = engine.store_memory(&node).unwrap();
+            // Proper shutdown — checkpoint flushes pages and truncates WAL.
+            engine.checkpoint().unwrap();
+            engine.close().unwrap();
+        }
+        {
+            // Reopen after clean shutdown — WAL should be empty, no duplicate data.
+            let mut engine = StorageEngine::open(dir.path()).unwrap();
+            let loaded = engine.load_memory(pid).unwrap();
+            assert_eq!(loaded.content, content);
+        }
+    }
+
+    #[test]
+    fn test_partial_write_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ids = Vec::new();
+        let mut contents = Vec::new();
+        {
+            let mut engine = StorageEngine::open(dir.path()).unwrap();
+            // Store 3 memories then checkpoint.
+            for i in 0..3 {
+                let content = format!("checkpointed-{i}");
+                let node = MemoryNode::new(
+                    Uuid::new_v4(),
+                    MemoryType::Semantic,
+                    content.clone(),
+                    vec![i as f32],
+                );
+                let pid = engine.store_memory(&node).unwrap();
+                ids.push(pid);
+                contents.push(content);
+            }
+            engine.checkpoint().unwrap();
+
+            // Store 2 more without checkpoint (will only be in WAL).
+            for i in 3..5 {
+                let content = format!("unckeckpointed-{i}");
+                let node = MemoryNode::new(
+                    Uuid::new_v4(),
+                    MemoryType::Episodic,
+                    content.clone(),
+                    vec![i as f32],
+                );
+                let pid = engine.store_memory(&node).unwrap();
+                ids.push(pid);
+                contents.push(content);
+            }
+            // Simulate crash — sync WAL but don't close.
+            engine.wal.sync().unwrap();
+        }
+        {
+            let mut engine = StorageEngine::open(dir.path()).unwrap();
+            // All 5 memories should be present: 3 from checkpoint, 2 from WAL replay.
+            for (pid, expected) in ids.iter().zip(contents.iter()) {
+                let loaded = engine.load_memory(*pid).unwrap();
+                assert_eq!(&loaded.content, expected);
+            }
         }
     }
 }

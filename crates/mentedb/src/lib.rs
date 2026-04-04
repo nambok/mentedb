@@ -163,11 +163,10 @@ impl MenteDb {
         debug!("Forgetting memory {}", id);
 
         // Load the node so we can clean up indexes properly.
-        if let Some(&page_id) = self.page_map.get(&id) {
-            if let Ok(node) = self.storage.load_memory(page_id) {
+        if let Some(&page_id) = self.page_map.get(&id)
+            && let Ok(node) = self.storage.load_memory(page_id) {
                 self.index.remove_memory(id, &node);
             }
-        }
 
         self.graph.remove_memory(id);
         self.page_map.remove(&id);
@@ -227,7 +226,7 @@ impl MenteDb {
                 let page_id = self
                     .page_map
                     .get(id)
-                    .ok_or_else(|| MenteError::MemoryNotFound(*id))?;
+                    .ok_or(MenteError::MemoryNotFound(*id))?;
                 let node = self.storage.load_memory(*page_id)?;
                 Ok(vec![ScoredMemory {
                     memory: node,
@@ -245,14 +244,13 @@ impl MenteDb {
     ) -> MenteResult<Vec<ScoredMemory>> {
         let mut scored = Vec::with_capacity(hits.len());
         for &(id, score) in hits {
-            if let Some(&page_id) = self.page_map.get(&id) {
-                if let Ok(node) = self.storage.load_memory(page_id) {
+            if let Some(&page_id) = self.page_map.get(&id)
+                && let Ok(node) = self.storage.load_memory(page_id) {
                     scored.push(ScoredMemory {
                         memory: node,
                         score,
                     });
                 }
-            }
         }
         Ok(scored)
     }

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use ahash::AHashSet;
 use mentedb_core::types::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -23,6 +24,56 @@ pub struct PhantomMemory {
     pub resolved: bool,
 }
 
+/// Explicit registry of known entities. The AI client registers entities it
+/// cares about so that gap detection can be precise rather than heuristic.
+pub struct EntityRegistry {
+    known_entities: AHashSet<String>,
+}
+
+impl EntityRegistry {
+    pub fn new() -> Self {
+        Self {
+            known_entities: AHashSet::new(),
+        }
+    }
+
+    pub fn register(&mut self, entity: &str) {
+        self.known_entities.insert(entity.to_string());
+    }
+
+    pub fn register_batch(&mut self, entities: &[&str]) {
+        for entity in entities {
+            self.known_entities.insert((*entity).to_string());
+        }
+    }
+
+    pub fn unregister(&mut self, entity: &str) {
+        self.known_entities.remove(entity);
+    }
+
+    pub fn is_known(&self, entity: &str) -> bool {
+        self.known_entities.contains(entity)
+    }
+
+    pub fn list(&self) -> Vec<&str> {
+        self.known_entities.iter().map(|s| s.as_str()).collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.known_entities.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.known_entities.is_empty()
+    }
+}
+
+impl Default for EntityRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Configuration for phantom memory detection.
 #[derive(Debug, Clone)]
 pub struct PhantomConfig {
@@ -32,6 +83,10 @@ pub struct PhantomConfig {
     pub max_warnings: usize,
     /// Minimum word length for technical term detection.
     pub min_word_length: usize,
+    /// Whether to use heuristic (capitalized word) detection as a fallback.
+    /// Default `true` for backward compatibility; set to `false` to rely
+    /// solely on the explicit entity registry.
+    pub use_heuristic_detection: bool,
 }
 
 impl Default for PhantomConfig {
@@ -52,6 +107,7 @@ impl Default for PhantomConfig {
             stop_words,
             max_warnings: 5,
             min_word_length: 3,
+            use_heuristic_detection: true,
         }
     }
 }
@@ -59,6 +115,7 @@ impl Default for PhantomConfig {
 pub struct PhantomTracker {
     phantoms: Vec<PhantomMemory>,
     config: PhantomConfig,
+    entity_registry: EntityRegistry,
 }
 
 impl PhantomTracker {
@@ -66,12 +123,39 @@ impl PhantomTracker {
         Self {
             phantoms: Vec::new(),
             config,
+            entity_registry: EntityRegistry::new(),
         }
     }
 
-    /// Scan content for entity references not in known_entities.
-    /// Detects: capitalized multi-word terms, quoted terms, technical terms (containing
-    /// hyphens/dots/underscores or ALL_CAPS).
+    /// Convenience: register an entity in the embedded registry.
+    pub fn register_entity(&mut self, entity: &str) {
+        self.entity_registry.register(entity);
+    }
+
+    /// Convenience: register multiple entities at once.
+    pub fn register_entities(&mut self, entities: &[&str]) {
+        self.entity_registry.register_batch(entities);
+    }
+
+    /// Return a reference to the entity registry.
+    pub fn entity_registry(&self) -> &EntityRegistry {
+        &self.entity_registry
+    }
+
+    /// Return a mutable reference to the entity registry.
+    pub fn entity_registry_mut(&mut self) -> &mut EntityRegistry {
+        &mut self.entity_registry
+    }
+
+    /// Scan content for entity references not in `known_entities`.
+    ///
+    /// Two detection strategies are combined:
+    /// 1. **Registry-based** (primary): any registered entity found in
+    ///    `content` that is NOT in `known_entities` is flagged at
+    ///    `Medium`/`High` priority.
+    /// 2. **Heuristic** (fallback): capitalized words, quoted terms, and
+    ///    technical terms are flagged at `Low` priority. Disabled when
+    ///    `PhantomConfig::use_heuristic_detection` is `false`.
     pub fn detect_gaps(
         &mut self,
         content: &str,
@@ -79,8 +163,97 @@ impl PhantomTracker {
         turn_id: u64,
     ) -> Vec<PhantomMemory> {
         let known_lower: Vec<String> = known_entities.iter().map(|e| e.to_lowercase()).collect();
+        let mut detected: Vec<(String, PhantomPriority)> = Vec::new();
+        let mut seen = AHashSet::new();
+
+        // --- Primary: registry-based detection ---
+        let content_lower = content.to_lowercase();
+        for entity in self.entity_registry.list() {
+            let entity_lower = entity.to_lowercase();
+            if content_lower.contains(&entity_lower)
+                && !known_lower.contains(&entity_lower)
+                && seen.insert(entity_lower)
+            {
+                let priority = if entity.split_whitespace().count() > 1 {
+                    PhantomPriority::High
+                } else {
+                    PhantomPriority::Medium
+                };
+                detected.push((entity.to_string(), priority));
+            }
+        }
+
+        // --- Fallback: heuristic detection (only when enabled) ---
+        if self.config.use_heuristic_detection {
+            let heuristic = self.heuristic_detect(content, &known_lower, &mut seen);
+            for entity in heuristic {
+                detected.push((entity, PhantomPriority::Low));
+            }
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+
+        let new_phantoms: Vec<PhantomMemory> = detected
+            .into_iter()
+            .map(|(entity, priority)| PhantomMemory {
+                id: Uuid::new_v4(),
+                gap_description: format!("No stored knowledge about '{}'", entity),
+                source_reference: entity,
+                source_turn: turn_id,
+                priority,
+                created_at: now,
+                resolved: false,
+            })
+            .collect();
+
+        self.phantoms.extend(new_phantoms.clone());
+        new_phantoms
+    }
+
+    /// Preferred explicit API: the caller provides exactly which entities
+    /// were mentioned. Entities not in the registry are flagged as gaps.
+    pub fn detect_gaps_explicit(
+        &mut self,
+        content: &str,
+        mentioned_entities: &[&str],
+        turn_id: u64,
+    ) -> Vec<PhantomMemory> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+
+        let _ = content; // available for future use; presence keeps API uniform
+
+        let new_phantoms: Vec<PhantomMemory> = mentioned_entities
+            .iter()
+            .filter(|e| !self.entity_registry.is_known(e))
+            .map(|entity| PhantomMemory {
+                id: Uuid::new_v4(),
+                gap_description: format!("No stored knowledge about '{}'", entity),
+                source_reference: (*entity).to_string(),
+                source_turn: turn_id,
+                priority: PhantomPriority::Medium,
+                created_at: now,
+                resolved: false,
+            })
+            .collect();
+
+        self.phantoms.extend(new_phantoms.clone());
+        new_phantoms
+    }
+
+    /// Heuristic entity detection (capitalized words, quotes, technical terms).
+    fn heuristic_detect(
+        &self,
+        content: &str,
+        known_lower: &[String],
+        seen: &mut AHashSet<String>,
+    ) -> Vec<String> {
         let mut detected = Vec::new();
-        let mut seen = ahash::AHashSet::new();
 
         // Detect quoted terms
         let mut in_quote = false;
@@ -111,7 +284,6 @@ impl PhantomTracker {
         while i < words.len() {
             let w = words[i].trim_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.');
             if !w.is_empty() && w.chars().next().is_some_and(|c| c.is_uppercase()) && w.len() >= 2 {
-                // Collect consecutive capitalized words
                 let mut entity_parts = vec![w.to_string()];
                 let mut j = i + 1;
                 while j < words.len() {
@@ -125,7 +297,6 @@ impl PhantomTracker {
                 }
 
                 let entity = entity_parts.join(" ");
-                // Skip common words that happen to be capitalized (start of sentence)
                 if entity.split_whitespace().count() == 1
                     && self.config.stop_words.contains(&entity.to_lowercase())
                 {
@@ -140,7 +311,6 @@ impl PhantomTracker {
                 }
                 i = j;
             } else {
-                // Check for technical terms: contains hyphens/dots/underscores or ALL_CAPS
                 if !w.is_empty() && w.len() >= self.config.min_word_length {
                     let is_technical = w.contains('-') || w.contains('.') || w.contains('_')
                         || (w.len() >= self.config.min_word_length && w.chars().all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_'));
@@ -156,36 +326,7 @@ impl PhantomTracker {
             }
         }
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_micros() as u64;
-
-        let new_phantoms: Vec<PhantomMemory> = detected
-            .into_iter()
-            .map(|entity| {
-                let priority = if entity.chars().all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_' || c == ' ') {
-                    PhantomPriority::High
-                } else if entity.split_whitespace().count() > 1 {
-                    PhantomPriority::Medium
-                } else {
-                    PhantomPriority::Low
-                };
-
-                PhantomMemory {
-                    id: Uuid::new_v4(),
-                    gap_description: format!("No stored knowledge about '{}'", entity),
-                    source_reference: entity,
-                    source_turn: turn_id,
-                    priority,
-                    created_at: now,
-                    resolved: false,
-                }
-            })
-            .collect();
-
-        self.phantoms.extend(new_phantoms.clone());
-        new_phantoms
+        detected
     }
 
     pub fn resolve(&mut self, phantom_id: Uuid) {
@@ -260,5 +401,162 @@ mod tests {
         tracker.detect_gaps("Deploy to Kubernetes using Helm", &[], 1);
         let warnings = tracker.format_phantom_warnings();
         assert!(warnings.contains("WARNING"));
+    }
+
+    // --- EntityRegistry CRUD ---
+
+    #[test]
+    fn test_entity_registry_crud() {
+        let mut reg = EntityRegistry::new();
+        assert!(reg.is_empty());
+
+        reg.register("Kubernetes");
+        reg.register("Terraform");
+        assert_eq!(reg.len(), 2);
+        assert!(reg.is_known("Kubernetes"));
+        assert!(!reg.is_known("Docker"));
+
+        reg.unregister("Kubernetes");
+        assert!(!reg.is_known("Kubernetes"));
+        assert_eq!(reg.len(), 1);
+    }
+
+    #[test]
+    fn test_entity_registry_batch() {
+        let mut reg = EntityRegistry::new();
+        reg.register_batch(&["Redis", "Postgres", "Kafka"]);
+        assert_eq!(reg.len(), 3);
+        assert!(reg.is_known("Redis"));
+        assert!(reg.is_known("Kafka"));
+    }
+
+    #[test]
+    fn test_entity_registry_list() {
+        let mut reg = EntityRegistry::new();
+        reg.register_batch(&["B", "A", "C"]);
+        let mut items = reg.list();
+        items.sort();
+        assert_eq!(items, vec!["A", "B", "C"]);
+    }
+
+    // --- detect_gaps_explicit ---
+
+    #[test]
+    fn test_detect_gaps_explicit_finds_unknown() {
+        let mut tracker = PhantomTracker::default();
+        tracker.register_entities(&["Kubernetes", "Terraform"]);
+
+        let gaps = tracker.detect_gaps_explicit(
+            "Deploy with Kubernetes and Docker",
+            &["Kubernetes", "Docker"],
+            1,
+        );
+
+        // Docker is not registered, so it should be flagged.
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].source_reference, "Docker");
+    }
+
+    #[test]
+    fn test_detect_gaps_explicit_no_false_positives() {
+        let mut tracker = PhantomTracker::default();
+        tracker.register_entities(&["Kubernetes", "Terraform", "Helm"]);
+
+        let gaps = tracker.detect_gaps_explicit(
+            "Using Kubernetes and Helm",
+            &["Kubernetes", "Helm"],
+            1,
+        );
+
+        // Both are registered — no gaps.
+        assert!(gaps.is_empty());
+    }
+
+    // --- Heuristic disabled via config ---
+
+    #[test]
+    fn test_heuristic_disabled() {
+        let mut config = PhantomConfig::default();
+        config.use_heuristic_detection = false;
+        let mut tracker = PhantomTracker::new(config);
+
+        // No entities registered and heuristic off — should find nothing.
+        let gaps = tracker.detect_gaps(
+            "Deploy to Kubernetes using Terraform",
+            &[],
+            1,
+        );
+        assert!(gaps.is_empty(), "Expected no gaps with heuristic disabled and empty registry, got: {:?}",
+            gaps.iter().map(|g| &g.source_reference).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_heuristic_disabled_with_registry() {
+        let mut config = PhantomConfig::default();
+        config.use_heuristic_detection = false;
+        let mut tracker = PhantomTracker::new(config);
+        tracker.register_entity("Kubernetes");
+
+        // Registry-based detection should still work even with heuristic off.
+        let gaps = tracker.detect_gaps(
+            "Deploy to Kubernetes using Terraform",
+            &[],
+            1,
+        );
+        // Kubernetes is registered and referenced but not in known_entities → flagged.
+        // Terraform is NOT registered and heuristic is off → not flagged.
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].source_reference, "Kubernetes");
+    }
+
+    // --- Integration: register, detect, resolve ---
+
+    #[test]
+    fn test_integration_register_detect_resolve() {
+        let mut tracker = PhantomTracker::default();
+        tracker.register_entities(&["Redis", "Postgres"]);
+
+        // Caller mentions Redis, Kafka, Postgres — Kafka is unknown.
+        let gaps = tracker.detect_gaps_explicit(
+            "Need Redis and Kafka and Postgres",
+            &["Redis", "Kafka", "Postgres"],
+            1,
+        );
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].source_reference, "Kafka");
+        assert!(!gaps[0].resolved);
+
+        // Resolve the gap.
+        tracker.resolve(gaps[0].id);
+        assert!(tracker.get_active_phantoms().is_empty());
+    }
+
+    // --- Heuristic fallback produces Low priority ---
+
+    #[test]
+    fn test_heuristic_fallback_low_priority() {
+        let mut tracker = PhantomTracker::default();
+        // No entities registered — heuristic only.
+        // Use lowercase prefix so "Redis" is detected as a standalone capitalized word.
+        let gaps = tracker.detect_gaps(
+            "we use Redis for caching",
+            &[],
+            1,
+        );
+        let redis_gaps: Vec<_> = gaps.iter().filter(|g| g.source_reference == "Redis").collect();
+        assert_eq!(redis_gaps.len(), 1);
+        assert_eq!(redis_gaps[0].priority, PhantomPriority::Low);
+    }
+
+    #[test]
+    fn test_registry_detection_higher_priority() {
+        let mut tracker = PhantomTracker::default();
+        tracker.register_entity("Redis");
+
+        let gaps = tracker.detect_gaps("we use Redis for caching", &[], 1);
+        let redis_gaps: Vec<_> = gaps.iter().filter(|g| g.source_reference == "Redis").collect();
+        assert_eq!(redis_gaps.len(), 1);
+        // Registry-based single-word entity → Medium priority.
+        assert_eq!(redis_gaps[0].priority, PhantomPriority::Medium);
     }
 }

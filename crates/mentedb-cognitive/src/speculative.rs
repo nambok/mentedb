@@ -113,14 +113,13 @@ impl SpeculativeCache {
             }
         }
 
-        if best_score > self.hit_threshold {
-            if let Some(idx) = best_idx {
+        if best_score > self.hit_threshold
+            && let Some(idx) = best_idx {
                 self.entries[idx].hit_count += 1;
                 self.entries[idx].last_accessed = now;
                 self.stats.hits += 1;
                 return Some(&self.entries[idx]);
             }
-        }
 
         self.stats.misses += 1;
         None
