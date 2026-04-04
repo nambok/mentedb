@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
 description = "Knowledge graph engine for MenteDB"
+readme = "../../README.md"
+keywords = ["database", "graph", "knowledge", "ai", "agent"]
+categories = ["database-implementations", "data-structures"]
 
 [dependencies]
 mentedb-core = { workspace = true }

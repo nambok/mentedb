@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
 description = "Core data types for MenteDB"
+readme = "../../README.md"
+keywords = ["database", "ai", "agent", "memory", "types"]
+categories = ["database-implementations", "data-structures"]
 
 [dependencies]
 uuid = { workspace = true }

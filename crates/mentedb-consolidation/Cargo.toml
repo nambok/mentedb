@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Memory consolidation and intelligence pipeline for MenteDB"
+readme = "../../README.md"
+keywords = ["database", "consolidation", "ai", "agent", "memory"]
+categories = ["database-implementations", "algorithms"]
 
 [dependencies]
 mentedb-core = { workspace = true }

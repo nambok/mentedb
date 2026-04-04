@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Radical cognitive features for MenteDB"
+repository.workspace = true
+description = "Cognitive memory features for MenteDB"
+readme = "../../README.md"
+keywords = ["database", "cognitive", "ai", "agent", "memory"]
+categories = ["database-implementations", "algorithms"]
 
 [dependencies]
 mentedb-core = { workspace = true }

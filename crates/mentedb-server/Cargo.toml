@@ -4,10 +4,14 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "MenteDB server with REST API, WebSocket, auth, and observability"
+readme = "../../README.md"
+keywords = ["database", "server", "api", "ai", "agent"]
+categories = ["database-implementations", "web-programming::http-server"]
 
 [dependencies]
-mentedb = { path = "../mentedb" }
+mentedb = { workspace = true }
 mentedb-core = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -21,3 +25,11 @@ axum = { version = "0.8", features = ["ws"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip"] }
 jsonwebtoken = "9"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+hyper = "1"
+http-body-util = "0.1"
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

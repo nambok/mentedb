@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
 description = "Index structures for MenteDB"
+readme = "../../README.md"
+keywords = ["database", "index", "search", "ai", "memory"]
+categories = ["database-implementations", "algorithms", "data-structures"]
 
 [dependencies]
 mentedb-core = { workspace = true }

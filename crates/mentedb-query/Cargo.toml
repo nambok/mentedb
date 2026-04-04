@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
 description = "MQL parser and query execution engine for MenteDB"
+readme = "../../README.md"
+keywords = ["database", "query", "parser", "ai", "agent"]
+categories = ["database-implementations"]
 
 [dependencies]
 mentedb-core = { workspace = true }

@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Embedding model integration for MenteDB"
+readme = "../../README.md"
+keywords = ["database", "embedding", "ai", "vector", "memory"]
+categories = ["database-implementations", "algorithms"]
 
 [dependencies]
 mentedb-core = { workspace = true }

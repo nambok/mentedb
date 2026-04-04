@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "The mind database for AI agents"
+repository.workspace = true
+description = "A purpose-built database engine for AI agent memory"
+readme = "../../README.md"
+keywords = ["database", "ai", "agent", "memory", "cognitive"]
+categories = ["database-implementations"]
 
 [dependencies]
 mentedb-core = { workspace = true }
@@ -23,6 +27,7 @@ criterion = { workspace = true }
 uuid = { workspace = true }
 mentedb-cognitive = { workspace = true }
 mentedb-consolidation = { workspace = true }
+mentedb-embedding = { workspace = true }
 
 [[bench]]
 name = "storage_bench"
