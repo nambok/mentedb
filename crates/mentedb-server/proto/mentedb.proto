@@ -1,0 +1,152 @@
+syntax = "proto3";
+package mentedb;
+
+// ---------------------------------------------------------------------------
+// Cognition Service: bidirectional streaming for live cognition alerts
+// ---------------------------------------------------------------------------
+
+service CognitionService {
+    // Bidirectional streaming RPC. The client sends a stream of cognition
+    // requests (tokens, known facts, control signals) and receives a stream
+    // of alerts (contradictions, reinforcements, corrections, forgotten).
+    rpc StreamCognition(stream CognitionRequest) returns (stream CognitionAlert);
+}
+
+message CognitionRequest {
+    oneof payload {
+        TokenPayload token = 1;
+        KnownFact known_fact = 2;
+        EndOfTurn end_of_turn = 3;
+        FlushBuffer flush = 4;
+    }
+}
+
+message TokenPayload {
+    string text = 1;
+}
+
+message KnownFact {
+    string memory_id = 1;
+    string content = 2;
+}
+
+message EndOfTurn {}
+
+message FlushBuffer {}
+
+message CognitionAlert {
+    oneof alert {
+        ContradictionAlert contradiction = 1;
+        ForgottenAlert forgotten = 2;
+        CorrectionAlert correction = 3;
+        ReinforcementAlert reinforcement = 4;
+        BufferFlushedAlert buffer_flushed = 5;
+    }
+}
+
+message ContradictionAlert {
+    string memory_id = 1;
+    string ai_said = 2;
+    string stored = 3;
+}
+
+message ForgottenAlert {
+    string memory_id = 1;
+    string summary = 2;
+}
+
+message CorrectionAlert {
+    string memory_id = 1;
+    string old_content = 2;
+    string new_content = 3;
+}
+
+message ReinforcementAlert {
+    string memory_id = 1;
+}
+
+message BufferFlushedAlert {
+    string accumulated_text = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Memory Service: standard CRUD operations on memory nodes and edges
+// ---------------------------------------------------------------------------
+
+service MemoryService {
+    rpc Store(StoreRequest) returns (StoreResponse);
+    rpc Recall(RecallRequest) returns (RecallResponse);
+    rpc Search(SearchRequest) returns (SearchResponse);
+    rpc Forget(ForgetRequest) returns (ForgetResponse);
+    rpc Relate(RelateRequest) returns (RelateResponse);
+}
+
+// Store
+
+message StoreRequest {
+    string agent_id = 1;
+    string memory_type = 2;
+    string content = 3;
+    repeated float embedding = 4;
+    repeated string tags = 5;
+    map<string, string> attributes = 6;
+    string space_id = 7;
+    float salience = 8;
+    float confidence = 9;
+}
+
+message StoreResponse {
+    string id = 1;
+    string status = 2;
+}
+
+// Recall
+
+message RecallRequest {
+    string query = 1;
+}
+
+message RecallResponse {
+    string context = 1;
+    uint64 total_tokens = 2;
+    uint64 memory_count = 3;
+}
+
+// Search
+
+message SearchRequest {
+    repeated float embedding = 1;
+    uint32 k = 2;
+}
+
+message SearchResult {
+    string id = 1;
+    float score = 2;
+}
+
+message SearchResponse {
+    repeated SearchResult results = 1;
+}
+
+// Forget
+
+message ForgetRequest {
+    string id = 1;
+}
+
+message ForgetResponse {
+    string status = 1;
+}
+
+// Relate (create edge)
+
+message RelateRequest {
+    string source = 1;
+    string target = 2;
+    string edge_type = 3;
+    float weight = 4;
+}
+
+message RelateResponse {
+    string status = 1;
+}

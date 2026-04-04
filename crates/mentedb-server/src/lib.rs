@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod error;
+pub mod grpc;
 pub mod handlers;
 pub mod rate_limit;
 pub mod routes;

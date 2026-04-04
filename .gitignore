@@ -9,3 +9,5 @@
 
 sdks/python/target/
 sdks/typescript/target/
+dashboard/node_modules/
+dashboard/dist/

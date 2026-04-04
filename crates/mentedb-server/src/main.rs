@@ -2,6 +2,7 @@
 
 mod auth;
 mod error;
+mod grpc;
 mod handlers;
 mod rate_limit;
 mod routes;
@@ -19,18 +20,23 @@ use axum::middleware;
 use mentedb::MenteDb;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
+use tonic::transport::Server as TonicServer;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
+use crate::grpc::pb::cognition_service_server::CognitionServiceServer;
+use crate::grpc::pb::memory_service_server::MemoryServiceServer;
+use crate::grpc::{CognitionServiceImpl, MemoryServiceImpl};
 use crate::rate_limit::RateLimiter;
 use crate::state::AppState;
 
-fn parse_args() -> (PathBuf, u16, Option<String>) {
+fn parse_args() -> (PathBuf, u16, u16, Option<String>) {
     let args: Vec<String> = env::args().collect();
     let mut data_dir = PathBuf::from("./mentedb-data");
     let mut port: u16 = 6677;
+    let mut grpc_port: u16 = 6678;
     let mut jwt_secret: Option<String> = None;
 
     let mut i = 1;
@@ -57,6 +63,18 @@ fn parse_args() -> (PathBuf, u16, Option<String>) {
                     std::process::exit(1);
                 }
             }
+            "--grpc-port" => {
+                if i + 1 < args.len() {
+                    grpc_port = args[i + 1].parse().unwrap_or_else(|_| {
+                        eprintln!("Error: --grpc-port must be a valid number");
+                        std::process::exit(1);
+                    });
+                    i += 2;
+                } else {
+                    eprintln!("Error: --grpc-port requires a value");
+                    std::process::exit(1);
+                }
+            }
             "--jwt-secret" => {
                 if i + 1 < args.len() {
                     jwt_secret = Some(args[i + 1].clone());
@@ -73,7 +91,7 @@ fn parse_args() -> (PathBuf, u16, Option<String>) {
         }
     }
 
-    (data_dir, port, jwt_secret)
+    (data_dir, port, grpc_port, jwt_secret)
 }
 
 #[tokio::main]
@@ -85,7 +103,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let (data_dir, port, jwt_secret) = parse_args();
+    let (data_dir, port, grpc_port, jwt_secret) = parse_args();
 
     std::fs::create_dir_all(&data_dir)?;
 
@@ -116,10 +134,11 @@ async fn main() -> Result<()> {
 
     println!("MenteDB v0.1.0");
     println!("Data directory: {}", data_dir.display());
-    println!("Listening on: 0.0.0.0:{port}");
+    println!("REST API on: 0.0.0.0:{port}");
+    println!("gRPC API on: 0.0.0.0:{grpc_port}");
     println!("Auth: {auth_mode}");
     println!();
-    println!("Endpoints:");
+    println!("REST Endpoints:");
     println!("  GET    /v1/health           health check");
     println!("  POST   /v1/memories         store a memory");
     println!("  GET    /v1/memories/:id      get a memory by ID");
@@ -130,11 +149,36 @@ async fn main() -> Result<()> {
     println!("  GET    /v1/stats            database statistics");
     println!("  POST   /v1/auth/token       generate JWT");
     println!("  GET    /v1/ws/stream        WebSocket cognition stream");
+    println!();
+    println!("gRPC Services:");
+    println!("  CognitionService.StreamCognition  bidirectional streaming");
+    println!("  MemoryService.Store               store a memory");
+    println!("  MemoryService.Recall              query via MQL");
+    println!("  MemoryService.Search              vector similarity search");
+    println!("  MemoryService.Forget              forget a memory");
+    println!("  MemoryService.Relate              create an edge");
+
+    let grpc_addr = SocketAddr::from(([0, 0, 0, 0], grpc_port));
+    let grpc_state = state.clone();
+
+    let grpc_handle = tokio::spawn(async move {
+        info!("gRPC server listening on {grpc_addr}");
+        TonicServer::builder()
+            .add_service(CognitionServiceServer::new(CognitionServiceImpl {
+                state: grpc_state.clone(),
+            }))
+            .add_service(MemoryServiceServer::new(MemoryServiceImpl {
+                state: grpc_state,
+            }))
+            .serve(grpc_addr)
+            .await
+            .expect("gRPC server failed");
+    });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
 
-    info!("MenteDB server listening on {addr}");
+    info!("MenteDB REST server listening on {addr}");
 
     axum::serve(
         listener,
@@ -142,6 +186,8 @@ async fn main() -> Result<()> {
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;
+
+    grpc_handle.abort();
 
     let mut db = db.write().await;
     db.close()?;

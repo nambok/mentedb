@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+@theme {
+  --color-zinc-925: #111113;
+  --color-emerald-accent: #34d399;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent;
+}
+
+body {
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+}

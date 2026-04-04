@@ -1,5 +1,7 @@
 # MenteDB
 
+[![Crates.io](https://img.shields.io/crates/v/mentedb)](https://crates.io/crates/mentedb) [![docs.rs](https://img.shields.io/docsrs/mentedb)](https://docs.rs/mentedb) [![CI](https://github.com/nambok/mentedb/actions/workflows/ci.yml/badge.svg)](https://github.com/nambok/mentedb/actions/workflows/ci.yml) [![License](https://img.shields.io/crates/l/mentedb)](LICENSE) [![npm](https://img.shields.io/npm/v/mentedb)](https://www.npmjs.com/package/mentedb) [![PyPI](https://img.shields.io/pypi/v/mentedb)](https://pypi.org/project/mentedb/)
+
 **The Mind Database for AI Agents**
 
 MenteDB is a purpose built database engine for AI agent memory. Not a wrapper around existing databases, but a ground up Rust storage engine that understands how AI/LLMs consume data.

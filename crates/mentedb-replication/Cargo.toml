@@ -1,0 +1,46 @@
+[package]
+name = "mentedb-replication"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Distributed replication layer using Raft consensus for MenteDB"
+
+[dependencies]
+mentedb-core = { workspace = true }
+mentedb-storage = { workspace = true }
+
+# Raft consensus
+openraft = { version = "0.10.0-alpha.17", features = ["serde"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# HTTP transport
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Async streams
+futures-util = "0.3"
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Unique IDs
+uuid = { workspace = true }
+
+# Concurrency
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }

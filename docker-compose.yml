@@ -1,0 +1,10 @@
+services:
+  mentedb:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - mentedb-data:/var/mentedb/data
+
+volumes:
+  mentedb-data:

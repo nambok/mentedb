@@ -13,7 +13,9 @@ categories = ["database-implementations", "web-programming::http-server"]
 [dependencies]
 mentedb = { workspace = true }
 mentedb-core = { workspace = true }
+mentedb-cognitive = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { version = "0.1", features = ["net"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
@@ -25,6 +27,11 @@ axum = { version = "0.8", features = ["ws"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip"] }
 jsonwebtoken = "9"
+tonic = "0.13"
+prost = "0.13"
+
+[build-dependencies]
+tonic-build = "0.13"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
