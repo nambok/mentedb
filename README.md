@@ -1,6 +1,6 @@
 # MenteDB
 
-[![Crates.io](https://img.shields.io/crates/v/mentedb)](https://crates.io/crates/mentedb) [![docs.rs](https://img.shields.io/docsrs/mentedb)](https://docs.rs/mentedb) [![CI](https://github.com/nambok/mentedb/actions/workflows/ci.yml/badge.svg)](https://github.com/nambok/mentedb/actions/workflows/ci.yml) [![License](https://img.shields.io/crates/l/mentedb)](LICENSE) [![npm](https://img.shields.io/npm/v/mentedb)](https://www.npmjs.com/package/mentedb) [![PyPI](https://img.shields.io/pypi/v/mentedb)](https://pypi.org/project/mentedb/)
+[![Crates.io](https://img.shields.io/crates/v/mentedb-core)](https://crates.io/crates/mentedb-core) [![docs.rs](https://img.shields.io/docsrs/mentedb-core)](https://docs.rs/mentedb-core) [![CI](https://github.com/nambok/mentedb/actions/workflows/ci.yml/badge.svg)](https://github.com/nambok/mentedb/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE) [![npm](https://img.shields.io/npm/v/mentedb)](https://www.npmjs.com/package/mentedb) [![PyPI](https://img.shields.io/pypi/v/mentedb)](https://pypi.org/project/mentedb/)
 
 **The Mind Database for AI Agents**
 
