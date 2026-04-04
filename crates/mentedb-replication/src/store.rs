@@ -297,8 +297,7 @@ pub struct StateMachineSnapshot {
 
 impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for StateMachineSnapshot {
     async fn build_snapshot(&mut self) -> Result<Snapshot, io::Error> {
-        let json =
-            serde_json::to_vec(&self.data).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let json = serde_json::to_vec(&self.data).map_err(io::Error::other)?;
 
         let last_applied = self.data.last_applied_log;
         let membership = self.data.last_membership.clone();
@@ -382,6 +381,8 @@ fn apply_request(data: &mut StateMachineData, req: MenteRequest) -> MenteRespons
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openraft::storage::RaftLogReader;
+    use openraft::storage::RaftLogStorage;
 
     #[test]
     fn test_log_store_new_is_empty() {

@@ -211,7 +211,7 @@ mod tests {
     fn test_ordering() {
         // Verify that ordering through OrderedF32 preserves f32 ordering
         let vals = [-1.0f32, 0.0, 0.1, 0.5, 0.9, 1.0];
-        let mut keys: Vec<_> = vals
+        let keys: Vec<_> = vals
             .iter()
             .map(|&v| super::OrderedF32::from_f32(v))
             .collect();
