@@ -13,3 +13,10 @@ ahash = { workspace = true }
 bytemuck = { workspace = true }
 parking_lot = { workspace = true }
 tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+rand = "0.8"
+
+[dev-dependencies]
+rand = "0.8"
