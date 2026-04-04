@@ -1,4 +1,4 @@
-//! Agent Registry — tracks agents that participate in the memory system.
+//! Agent Registry: tracks agents that participate in the memory system.
 
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};

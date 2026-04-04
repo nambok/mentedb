@@ -30,6 +30,7 @@ use pb::memory_service_server::MemoryService;
 // CognitionService
 // ---------------------------------------------------------------------------
 
+/// gRPC service implementation for cognitive memory operations.
 pub struct CognitionServiceImpl {
     #[allow(dead_code)]
     pub state: Arc<AppState>,
@@ -162,7 +163,9 @@ fn stream_alert_to_proto(alert: StreamAlert) -> pb::CognitionAlert {
 // MemoryService
 // ---------------------------------------------------------------------------
 
+/// gRPC service implementation for basic memory CRUD operations.
 pub struct MemoryServiceImpl {
+    /// Shared application state containing the database handle.
     pub state: Arc<AppState>,
 }
 

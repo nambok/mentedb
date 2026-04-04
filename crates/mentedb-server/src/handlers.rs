@@ -21,6 +21,7 @@ use crate::state::AppState;
 // GET /v1/health
 // ---------------------------------------------------------------------------
 
+/// Health check endpoint. Returns server uptime and status.
 pub async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let uptime = state.start_time.elapsed().as_secs();
     Json(json!({
@@ -34,6 +35,7 @@ pub async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 // GET /v1/stats
 // ---------------------------------------------------------------------------
 
+/// Returns database statistics (memory count, index size, etc.).
 pub async fn stats(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
     let uptime = state.start_time.elapsed().as_secs();
 
@@ -58,6 +60,7 @@ pub async fn stats(State(state): State<Arc<AppState>>) -> Result<impl IntoRespon
 // POST /v1/memories
 // ---------------------------------------------------------------------------
 
+/// Stores a new memory node in the database.
 pub async fn store_memory(
     State(state): State<Arc<AppState>>,
     Json(req): Json<Value>,
@@ -136,6 +139,7 @@ pub async fn store_memory(
 // GET /v1/memories/:id
 // ---------------------------------------------------------------------------
 
+/// Retrieves a single memory by its UUID.
 pub async fn get_memory(
     State(state): State<Arc<AppState>>,
     Path(id_str): Path<String>,
@@ -166,6 +170,7 @@ pub async fn get_memory(
 // DELETE /v1/memories/:id
 // ---------------------------------------------------------------------------
 
+/// Deletes a memory from the database.
 pub async fn forget_memory(
     State(state): State<Arc<AppState>>,
     Path(id_str): Path<String>,
@@ -186,6 +191,7 @@ pub async fn forget_memory(
 // POST /v1/recall
 // ---------------------------------------------------------------------------
 
+/// Recalls memories matching an MQL query string.
 pub async fn recall_memories(
     State(state): State<Arc<AppState>>,
     Json(req): Json<Value>,
@@ -213,6 +219,7 @@ pub async fn recall_memories(
 // POST /v1/search
 // ---------------------------------------------------------------------------
 
+/// Searches for memories similar to a given embedding vector.
 pub async fn search_similar(
     State(state): State<Arc<AppState>>,
     Json(req): Json<Value>,
@@ -238,6 +245,7 @@ pub async fn search_similar(
 // POST /v1/edges
 // ---------------------------------------------------------------------------
 
+/// Creates a typed, weighted edge between two memories.
 pub async fn create_edge(
     State(state): State<Arc<AppState>>,
     Json(req): Json<Value>,

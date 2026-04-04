@@ -1,4 +1,4 @@
-//! # MenteDB — The Mind Database for AI Agents
+//! # MenteDB: The Mind Database for AI Agents
 //!
 //! MenteDB is a purpose-built database engine for AI agent memory.
 //! It's a cognition preparation engine that pre-digests knowledge
@@ -6,10 +6,10 @@
 //!
 //! ## Core Concepts
 //!
-//! - **MemoryNode**: The atomic unit of knowledge (embeddings + graph + temporal + attributes)
+//! - **MemoryNode**: The atomic unit of knowledge (embeddings, graph, temporal, attributes)
 //! - **MemoryEdge**: Typed, weighted relationships between memories
-//! - **MemoryTier**: Cognitive-inspired storage hierarchy (working → episodic → semantic → procedural → archival)
-//! - **Context Assembly**: Token-budget-aware context building that respects attention patterns
+//! - **MemoryTier**: Cognitive inspired storage hierarchy (working, episodic, semantic, procedural, archival)
+//! - **Context Assembly**: Token budget aware context building that respects attention patterns
 //! - **MQL**: Mente Query Language for memory retrieval and manipulation
 //!
 //! ## Quick Start
@@ -23,6 +23,20 @@
 //! // store, recall, relate, forget...
 //! db.close().unwrap();
 //! ```
+//!
+//! ## Feature Highlights
+//!
+//! - Seven cognitive features: interference detection, pain signals, phantom tracking,
+//!   speculative caching, stream monitoring, trajectory tracking, write inference
+//! - HNSW vector index with hybrid search (vector + tags + temporal + salience)
+//! - CSR/CSC knowledge graph with belief propagation
+//! - Token budget aware context assembly with attention curve optimization
+//! - MQL query language with vector, tag, temporal, and graph traversal support
+//! - WAL based crash recovery with LZ4 compressed pages
+//!
+//! ## Repository
+//!
+//! Source code: <https://github.com/nambok/mentedb>
 
 use std::path::{Path, PathBuf};
 
@@ -37,11 +51,17 @@ use mentedb_storage::StorageEngine;
 use tracing::{debug, info};
 
 // Re-export sub-crates for direct access.
+/// Context assembly engine.
 pub use mentedb_context as context;
+/// Core types: MemoryNode, MemoryEdge, errors, config.
 pub use mentedb_core as core;
+/// Knowledge graph engine.
 pub use mentedb_graph as graph;
+/// Index structures for vector, tag, temporal, and salience search.
 pub use mentedb_index as index;
+/// MQL parser and query planner.
 pub use mentedb_query as query;
+/// Page based storage engine with WAL and buffer pool.
 pub use mentedb_storage as storage;
 
 /// Commonly used types, re-exported for convenience.

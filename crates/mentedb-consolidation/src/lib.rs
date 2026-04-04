@@ -1,8 +1,25 @@
+//! MenteDB Consolidation: memory lifecycle and intelligence pipeline.
+//!
+//! This crate manages the long term health of stored memories:
+//!
+//! - [`consolidation`]: Merges similar memories into unified summaries
+//! - [`compression`]: Reduces memory content to key facts
+//! - [`decay`]: Applies time based salience decay
+//! - [`archival`]: Moves cold memories to archival storage
+//! - [`extraction`]: Extracts structured facts from memory content
+//! - [`forget`]: GDPR compliant memory deletion with audit trails
+
+/// Archival pipeline for moving cold memories to long term storage.
 pub mod archival;
+/// Memory content compression and key fact extraction.
 pub mod compression;
+/// Consolidation engine that merges similar memories.
 pub mod consolidation;
+/// Time based salience decay.
 pub mod decay;
+/// Structured fact extraction from memory content.
 pub mod extraction;
+/// GDPR compliant memory deletion with audit trails.
 pub mod forget;
 
 pub use archival::{ArchivalConfig, ArchivalDecision, ArchivalPipeline};

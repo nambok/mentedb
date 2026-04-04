@@ -20,3 +20,6 @@ bytemuck = { workspace = true }
 smallvec = { workspace = true }
 ahash = { workspace = true }
 parking_lot = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true

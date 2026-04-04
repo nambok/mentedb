@@ -1,4 +1,4 @@
-//! Public MQL entry point — parse an MQL string into a `QueryPlan`.
+//! Public MQL entry point: parse an MQL string into a `QueryPlan`.
 
 use mentedb_core::error::MenteResult;
 

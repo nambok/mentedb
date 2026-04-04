@@ -15,14 +15,19 @@ use crate::temporal::TemporalIndex;
 /// Configuration for the composite index manager.
 #[derive(Default)]
 pub struct IndexManagerConfig {
+    /// HNSW configuration parameters.
     pub hnsw: HnswConfig,
 }
 
 /// Owns all index types and provides unified indexing and hybrid search.
 pub struct IndexManager {
+    /// Vector similarity index.
     pub hnsw: HnswIndex,
+    /// Tag and attribute bitmap index.
     pub bitmap: BitmapIndex,
+    /// Timestamp range index.
     pub temporal: TemporalIndex,
+    /// Importance score index.
     pub salience: SalienceIndex,
 }
 

@@ -1,4 +1,4 @@
-//! Conflict Resolution — detect and resolve concurrent-write conflicts.
+//! Conflict Resolution: detect and resolve concurrent-write conflicts.
 
 use serde::{Deserialize, Serialize};
 
@@ -7,9 +7,13 @@ use crate::types::{AgentId, MemoryId, Timestamp};
 /// One agent's version of a memory that may be in conflict.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConflictVersion {
+    /// The agent that produced this version.
     pub agent_id: AgentId,
+    /// The memory content for this version.
     pub content: String,
+    /// Confidence score assigned by the authoring agent.
     pub confidence: f32,
+    /// When this version was created.
     pub timestamp: Timestamp,
 }
 
@@ -25,8 +29,11 @@ pub enum Resolution {
 /// A detected conflict on a single memory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conflict {
+    /// The memory that has conflicting versions.
     pub memory_id: MemoryId,
+    /// The competing versions of this memory.
     pub versions: Vec<ConflictVersion>,
+    /// The chosen resolution, if any.
     pub resolution: Option<Resolution>,
 }
 
@@ -34,10 +41,11 @@ pub struct Conflict {
 #[derive(Debug, Default)]
 pub struct ConflictResolver;
 
-/// Threshold in microseconds — versions within this window count as concurrent.
+/// Threshold in microseconds: versions within this window count as concurrent.
 const CONFLICT_WINDOW_US: Timestamp = 1_000_000; // 1 second
 
 impl ConflictResolver {
+    /// Creates a new conflict resolver.
     pub fn new() -> Self {
         Self
     }

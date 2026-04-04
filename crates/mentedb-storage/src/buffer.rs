@@ -1,4 +1,4 @@
-//! Buffer Pool — in-memory page cache with CLOCK eviction.
+//! Buffer Pool: in-memory page cache with CLOCK eviction.
 //!
 //! Pages are loaded from disk into fixed-capacity frame slots. Pin counts
 //! prevent eviction of pages currently in use. The CLOCK algorithm sweeps
@@ -19,7 +19,7 @@ struct Frame {
     page_id: Option<PageId>,
     pin_count: u32,
     dirty: bool,
-    /// CLOCK reference bit — set on access, cleared by the sweep hand.
+    /// CLOCK reference bit: set on access, cleared by the sweep hand.
     reference: bool,
 }
 
@@ -65,7 +65,7 @@ impl BufferPool {
     /// Fetch a page into the pool (loading from disk if necessary).
     ///
     /// The page is automatically pinned (pin_count incremented).
-    /// Caller must call [`unpin_page`] when done.
+    /// Caller must call `unpin_page` when done.
     pub fn fetch_page(&self, page_id: PageId, pm: &mut PageManager) -> MenteResult<Box<Page>> {
         let mut inner = self.inner.lock();
 

@@ -1,4 +1,4 @@
-//! MenteDB Graph — knowledge graph engine with CSR/CSC storage.
+//! MenteDB Graph: knowledge graph engine with CSR/CSC storage.
 //!
 //! This crate provides:
 //! - Compressed Sparse Row (CSR) and Compressed Sparse Column (CSC) graph storage
@@ -6,10 +6,15 @@
 //! - Belief propagation and cascade updates
 //! - Subgraph extraction for context assembly
 
+/// Belief propagation across the knowledge graph.
 pub mod belief;
+/// Contradiction and supersession detection.
 pub mod contradiction;
+/// Compressed Sparse Row/Column graph storage.
 pub mod csr;
+/// High level graph manager with persistence.
 pub mod manager;
+/// BFS, DFS, shortest path, and subgraph extraction.
 pub mod traversal;
 
 pub use belief::{PropagationConfig, propagate_update, propagate_update_with_config};

@@ -35,7 +35,7 @@ impl OrderedF32 {
     }
 }
 
-/// Salience index — a BTreeMap sorted by salience score for efficient top-k retrieval.
+/// Salience index: a BTreeMap sorted by salience score for efficient top-k retrieval.
 pub struct SalienceIndex {
     inner: RwLock<SalienceInner>,
 }
@@ -45,6 +45,7 @@ struct SalienceInner {
 }
 
 impl SalienceIndex {
+    /// Creates a new empty salience index.
     pub fn new() -> Self {
         Self {
             inner: RwLock::new(SalienceInner {
@@ -94,7 +95,7 @@ impl SalienceIndex {
         }
     }
 
-    /// Get the salience score for a memory (linear scan — use sparingly).
+    /// Get the salience score for a memory (linear scan: use sparingly).
     pub fn get_salience(&self, id: MemoryId) -> Option<f32> {
         let inner = self.inner.read();
         for (&key, ids) in &inner.tree {

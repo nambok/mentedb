@@ -22,6 +22,7 @@ struct TemporalInner {
 }
 
 impl TemporalIndex {
+    /// Creates a new empty temporal index.
     pub fn new() -> Self {
         Self {
             inner: RwLock::new(TemporalInner {

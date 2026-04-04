@@ -1,4 +1,4 @@
-//! MemoryNode — the fundamental unit of storage in MenteDB.
+//! MemoryNode: the fundamental unit of storage in MenteDB.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -14,7 +14,7 @@ pub enum MemoryType {
     Semantic,
     /// A learned skill or procedure.
     Procedural,
-    /// What NOT to do — learned from failures.
+    /// What NOT to do: learned from failures.
     AntiPattern,
     /// A pre-computed reasoning chain or decision template.
     Reasoning,
@@ -22,7 +22,7 @@ pub enum MemoryType {
     Correction,
 }
 
-/// A memory node — the atomic unit of knowledge in MenteDB.
+/// A memory node: the atomic unit of knowledge in MenteDB.
 ///
 /// Combines vector embeddings, graph connections, temporal properties,
 /// and flexible attributes in a single primitive.

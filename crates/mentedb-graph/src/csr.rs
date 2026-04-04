@@ -9,12 +9,16 @@ use serde::{Deserialize, Serialize};
 /// Compact edge data stored in CSR/CSC arrays.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct StoredEdge {
+    /// The relationship type.
     pub edge_type: EdgeType,
+    /// Edge weight (0.0 to 1.0).
     pub weight: f32,
+    /// When this edge was created.
     pub created_at: Timestamp,
 }
 
 impl StoredEdge {
+    /// Converts a [`MemoryEdge`] into a compact stored representation.
     pub fn from_memory_edge(edge: &MemoryEdge) -> Self {
         Self {
             edge_type: edge.edge_type,
@@ -95,6 +99,7 @@ pub struct CsrGraph {
 }
 
 impl CsrGraph {
+    /// Creates a new empty CSR graph.
     pub fn new() -> Self {
         Self {
             id_to_idx: HashMap::default(),

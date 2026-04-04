@@ -20,3 +20,6 @@ serde = { workspace = true }
 
 [dev-dependencies]
 uuid = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true

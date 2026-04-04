@@ -28,6 +28,7 @@ struct BitmapInner {
 }
 
 impl BitmapIndex {
+    /// Creates a new empty bitmap index.
     pub fn new() -> Self {
         Self {
             inner: RwLock::new(BitmapInner {

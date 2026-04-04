@@ -17,6 +17,7 @@ pub struct GraphManager {
 }
 
 impl GraphManager {
+    /// Creates a new graph manager with an empty graph.
     pub fn new() -> Self {
         Self {
             graph: CsrGraph::new(),

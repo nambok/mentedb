@@ -29,6 +29,7 @@ pub struct MenteNetworkFactory {
 }
 
 impl MenteNetworkFactory {
+    /// Creates a new empty network transport.
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::new(),

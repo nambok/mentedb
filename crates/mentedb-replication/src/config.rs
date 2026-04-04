@@ -24,7 +24,9 @@ pub struct ReplicationConfig {
 /// Address entry for a peer node in the cluster.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PeerAddress {
+    /// Unique Raft node identifier.
     pub node_id: u64,
+    /// Network address (host:port) for this node.
     pub addr: String,
 }
 

@@ -1,4 +1,4 @@
-//! MVCC Version Tracking — simple multi-version concurrency control for memories.
+//! MVCC Version Tracking: simple multi-version concurrency control for memories.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,10 +11,15 @@ use crate::types::{AgentId, MemoryId, Timestamp};
 /// A single versioned snapshot of a memory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Version {
+    /// Monotonically increasing version identifier.
     pub version_id: u64,
+    /// The memory this version belongs to.
     pub memory_id: MemoryId,
+    /// The agent that created this version.
     pub agent_id: AgentId,
+    /// Creation timestamp of this version.
     pub timestamp: Timestamp,
+    /// Hash of the serialized memory data for change detection.
     pub data_hash: u64,
 }
 
@@ -42,6 +47,7 @@ fn now_micros() -> Timestamp {
 }
 
 impl VersionStore {
+    /// Creates a new empty version store.
     pub fn new() -> Self {
         Self::default()
     }

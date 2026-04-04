@@ -32,3 +32,6 @@ mentedb-embedding = { workspace = true }
 [[bench]]
 name = "storage_bench"
 harness = false
+
+[package.metadata.docs.rs]
+all-features = true

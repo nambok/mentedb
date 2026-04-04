@@ -1,13 +1,13 @@
-//! Write-Ahead Log — append-only log for crash recovery.
+//! Write-Ahead Log: append-only log for crash recovery.
 //!
 //! WAL entry format on disk:
 //! ```text
 //! [length: u32][lsn: u64][type: u8][page_id: u64][compressed_data: ...][crc32: u32]
 //! ```
 //!
-//! - `length` — byte count of the payload (lsn + type + page_id + compressed_data).
-//! - `compressed_data` — the data portion compressed with LZ4.
-//! - `crc32` — checksum over the entire payload.
+//! - `length`: byte count of the payload (lsn + type + page_id + compressed_data).
+//! - `compressed_data`: the data portion compressed with LZ4.
+//! - `crc32`: checksum over the entire payload.
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -43,10 +43,15 @@ impl TryFrom<u8> for WalEntryType {
 /// A single WAL entry (in-memory representation).
 #[derive(Debug, Clone)]
 pub struct WalEntry {
+    /// Log sequence number.
     pub lsn: u64,
+    /// The type of WAL operation.
     pub entry_type: WalEntryType,
+    /// The page affected by this entry.
     pub page_id: u64,
+    /// Serialized payload.
     pub data: Vec<u8>,
+    /// CRC32 checksum for integrity verification.
     pub checksum: u32,
 }
 

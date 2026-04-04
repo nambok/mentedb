@@ -1,4 +1,4 @@
-//! Query planner — converts a parsed `Statement` into a `QueryPlan`.
+//! Query planner: converts a parsed `Statement` into a `QueryPlan`.
 
 use crate::ast::*;
 use mentedb_core::edge::EdgeType;

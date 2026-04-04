@@ -1,4 +1,4 @@
-//! Event System — publish/subscribe bus for memory-graph events.
+//! Event System: publish/subscribe bus for memory-graph events.
 
 use parking_lot::RwLock;
 
@@ -73,6 +73,7 @@ impl Default for EventBus {
 }
 
 impl EventBus {
+    /// Creates a new empty event bus.
     pub fn new() -> Self {
         Self::default()
     }

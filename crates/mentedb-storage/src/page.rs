@@ -1,4 +1,4 @@
-//! Page Manager — file-backed page storage with free list management.
+//! Page Manager: file-backed page storage with free list management.
 //!
 //! Pages are 16KB fixed-size blocks used as the fundamental I/O unit.
 //! The page file layout:
@@ -12,7 +12,7 @@ use std::path::Path;
 use mentedb_core::error::{MenteError, MenteResult};
 use tracing::{debug, info, trace};
 
-/// Page size — 16KB for B-tree pages (cache-friendly, good for NVMe alignment).
+/// Page size: 16KB for B-tree pages (cache-friendly, good for NVMe alignment).
 pub const PAGE_SIZE: usize = 16 * 1024;
 
 /// Magic number identifying a MenteDB page file ("MENTEDB1").
@@ -52,7 +52,7 @@ impl From<u8> for PageType {
 pub struct PageHeader {
     /// Which page this is.
     pub page_id: u64,
-    /// Log Sequence Number — links to the WAL.
+    /// Log Sequence Number: links to the WAL.
     pub lsn: u64,
     /// CRC-32 checksum of the page content.
     pub checksum: u32,
@@ -75,7 +75,9 @@ pub const PAGE_DATA_SIZE: usize = PAGE_SIZE - HEADER_SIZE;
 /// A fixed-size, 4KB-aligned page.
 #[repr(C, align(4096))]
 pub struct Page {
+    /// The page header containing metadata (page ID, type, checksum, etc.).
     pub header: PageHeader,
+    /// Raw page data payload.
     pub data: [u8; PAGE_DATA_SIZE],
 }
 

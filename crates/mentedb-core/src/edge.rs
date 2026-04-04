@@ -1,4 +1,4 @@
-//! MemoryEdge — typed, weighted relationships between memories.
+//! MemoryEdge: typed, weighted relationships between memories.
 
 use serde::{Deserialize, Serialize};
 

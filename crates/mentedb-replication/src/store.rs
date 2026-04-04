@@ -47,6 +47,7 @@ pub struct LogStore {
 }
 
 impl LogStore {
+    /// Creates a new empty log store.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(LogStoreInner::default())),
@@ -175,7 +176,9 @@ impl RaftLogStorage<TypeConfig> for LogStore {
 /// Serializable snapshot of the state machine.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StateMachineData {
+    /// The last log entry that was applied to the state machine.
     pub last_applied_log: Option<LogId>,
+    /// Current cluster membership configuration.
     pub last_membership: StoredMembership,
     /// Memory store: maps memory_id to (content, tags).
     pub memories: BTreeMap<String, MemoryEntry>,
@@ -186,14 +189,18 @@ pub struct StateMachineData {
 /// A stored memory entry in the replicated state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MemoryEntry {
+    /// The text content of the memory.
     pub content: String,
+    /// Tags associated with the memory.
     pub tags: Vec<String>,
 }
 
 /// A stored relationship in the replicated state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RelationEntry {
+    /// The type of relationship between two memories.
     pub relation_type: String,
+    /// Strength of the relationship (0.0 to 1.0).
     pub weight: f32,
 }
 
@@ -203,6 +210,7 @@ pub struct StateMachine {
 }
 
 impl StateMachine {
+    /// Creates a new empty state machine.
     pub fn new() -> Self {
         Self {
             data: RwLock::new(StateMachineData::default()),

@@ -19,7 +19,7 @@ pub struct ScoredMemory {
 /// Attention zones based on U-curve optimization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AttentionZone {
-    /// Zone 1: Anti-patterns, corrections — AI sees first.
+    /// Zone 1: Anti-patterns, corrections: AI sees first.
     Opening,
     /// Zone 2: Direct answers, highest salience.
     Critical,
@@ -27,7 +27,7 @@ pub enum AttentionZone {
     Primary,
     /// Zone 4: Background, lower salience.
     Supporting,
-    /// Zone 5: Summary, open questions — AI sees last (reinforcement).
+    /// Zone 5: Summary, open questions: AI sees last (reinforcement).
     Closing,
 }
 

@@ -58,6 +58,7 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
+    /// Creates a new rate limiter with the given bucket capacity and refill rate.
     pub fn new(max_tokens: u32, refill_rate: u32) -> Self {
         Self {
             buckets: Arc::new(Mutex::new(HashMap::new())),

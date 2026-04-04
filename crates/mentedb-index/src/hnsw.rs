@@ -180,9 +180,13 @@ pub struct HnswIndex {
 
 /// Configuration for constructing an HNSW index.
 pub struct HnswConfig {
+    /// Maximum number of connections per node per layer.
     pub m: usize,
+    /// Size of the dynamic candidate list during construction.
     pub ef_construction: usize,
+    /// Size of the dynamic candidate list during search.
     pub ef_search: usize,
+    /// Distance metric used for similarity computation.
     pub metric: DistanceMetric,
 }
 

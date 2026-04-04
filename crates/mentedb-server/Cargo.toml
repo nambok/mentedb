@@ -40,3 +40,6 @@ http-body-util = "0.1"
 tempfile = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true

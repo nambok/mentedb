@@ -1,4 +1,4 @@
-//! Storage Engine — facade that ties the page manager, WAL, and buffer pool together.
+//! Storage Engine: facade that ties the page manager, WAL, and buffer pool together.
 
 use std::path::Path;
 

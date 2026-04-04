@@ -29,12 +29,19 @@
 //!   create relationship edges, mark obsolete memories, adjust confidence, and
 //!   trigger belief propagation automatically.
 
+/// Interference detection between confusable memories.
 pub mod interference;
+/// Pain signal registry for negative experience tracking.
 pub mod pain;
+/// Phantom memory detection for knowledge gaps.
 pub mod phantom;
+/// Speculative context pre assembly cache.
 pub mod speculative;
+/// Real time LLM output stream monitoring.
 pub mod stream;
+/// Conversation trajectory tracking and prediction.
 pub mod trajectory;
+/// Write time inference engine for automatic relationship discovery.
 pub mod write_inference;
 
 pub use interference::{InterferenceDetector, InterferencePair};

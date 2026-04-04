@@ -1,4 +1,4 @@
-//! Memory Spaces — isolated, permission-controlled namespaces for memories.
+//! Memory Spaces: isolated, permission-controlled namespaces for memories.
 
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -35,19 +35,28 @@ impl Permission {
 /// One entry in a space's access-control list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessEntry {
+    /// The agent granted access.
     pub agent_id: AgentId,
+    /// The permission level granted.
     pub permission: Permission,
 }
 
 /// A namespace that groups memories and controls access.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemorySpace {
+    /// Unique identifier for this space.
     pub id: SpaceId,
+    /// Human readable name.
     pub name: String,
+    /// The agent that owns this space.
     pub owner: AgentId,
+    /// Access control list for other agents.
     pub access_list: Vec<AccessEntry>,
+    /// When this space was created.
     pub created_at: Timestamp,
+    /// Optional capacity limit on stored memories.
     pub max_memories: Option<usize>,
+    /// Current number of memories in this space.
     pub current_count: usize,
 }
 
@@ -65,6 +74,7 @@ fn now_micros() -> Timestamp {
 }
 
 impl SpaceManager {
+    /// Creates a new empty space manager.
     pub fn new() -> Self {
         Self::default()
     }
@@ -87,10 +97,12 @@ impl SpaceManager {
         space
     }
 
+    /// Returns a reference to the space with the given ID, if it exists.
     pub fn get_space(&self, id: SpaceId) -> Option<&MemorySpace> {
         self.spaces.get(&id)
     }
 
+    /// Removes a space by ID.
     pub fn delete_space(&mut self, id: SpaceId) {
         self.spaces.remove(&id);
     }

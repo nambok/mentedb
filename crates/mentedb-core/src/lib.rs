@@ -1,4 +1,15 @@
-//! MenteDB Core — fundamental types for the mind database.
+//! MenteDB Core: fundamental types for the mind database.
+//!
+//! This crate defines the shared data model used by all MenteDB subsystems:
+//!
+//! - [`MemoryNode`]: The atomic unit of knowledge with embeddings, metadata, and tags
+//! - [`MemoryEdge`]: Typed, weighted relationships between memories
+//! - [`MemoryTier`]: Cognitive inspired storage hierarchy
+//! - [`MenteError`]: Unified error type for the workspace
+//! - [`MenteConfig`]: Top level configuration
+//! - [`Agent`] and [`MemorySpace`]: Multi tenant isolation primitives
+//! - [`EventBus`]: Publish/subscribe event system
+//! - [`Version`] and [`VersionStore`]: MVCC versioning for conflict detection
 
 pub mod agent;
 pub mod config;

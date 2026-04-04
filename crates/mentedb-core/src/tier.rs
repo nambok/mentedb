@@ -1,4 +1,4 @@
-//! Memory tiers — cognitive-inspired storage hierarchy.
+//! Memory tiers: cognitive-inspired storage hierarchy.
 
 use serde::{Deserialize, Serialize};
 

@@ -1,4 +1,4 @@
-//! Context assembler — the main entry point for context assembly.
+//! Context assembler: the main entry point for context assembly.
 
 use mentedb_core::MemoryEdge;
 
@@ -136,7 +136,7 @@ impl ContextAssembler {
         }
     }
 
-    /// Assemble with delta tracking — only sends changes from the previous turn.
+    /// Assemble with delta tracking: only sends changes from the previous turn.
     pub fn assemble_delta(
         current_memories: Vec<ScoredMemory>,
         edges: Vec<MemoryEdge>,

@@ -18,14 +18,18 @@ use crate::state::AppState;
 /// JWT claims embedded in every token.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
+    /// The agent ID this token was issued for.
     pub agent_id: String,
+    /// Token expiration as a Unix timestamp.
     pub exp: usize,
 }
 
 /// Request body for the token generation endpoint.
 #[derive(Deserialize)]
 pub struct TokenRequest {
+    /// The agent ID to issue a token for.
     pub agent_id: String,
+    /// How many hours until the token expires (default: 24).
     #[serde(default = "default_expiry_hours")]
     pub expiry_hours: u64,
 }
@@ -60,7 +64,7 @@ pub fn validate_token(secret: &str, token: &str) -> Result<Claims, ApiError> {
     .map_err(|e| ApiError::Unauthorized(format!("invalid token: {e}")))
 }
 
-/// Handler: POST /v1/auth/token — generate a new JWT.
+/// Handler: POST /v1/auth/token: generate a new JWT.
 pub async fn generate_token(
     State(state): State<Arc<AppState>>,
     Json(req): Json<TokenRequest>,
