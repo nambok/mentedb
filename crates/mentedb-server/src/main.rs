@@ -1,4 +1,7 @@
-//! MenteDB Server — TCP server for the mind database.
+//! MenteDB Server — JSON-over-HTTP REST API for the mind database.
+
+mod handlers;
+mod router;
 
 use std::env;
 use std::path::PathBuf;
@@ -62,27 +65,35 @@ async fn main() -> Result<()> {
 
     println!("MenteDB v0.1.0");
     println!("Data directory: {}", data_dir.display());
-    println!("Listening on: 0.0.0.0:{}", port);
+    println!("Listening on: 0.0.0.0:{port}");
+    println!();
+    println!("Endpoints:");
+    println!("  GET    /v1/health          — health check");
+    println!("  POST   /v1/memories        — store a memory");
+    println!("  GET    /v1/memories/:id     — get a memory by ID");
+    println!("  DELETE /v1/memories/:id     — forget a memory");
+    println!("  POST   /v1/recall          — query via MQL");
+    println!("  POST   /v1/search          — vector similarity search");
+    println!("  POST   /v1/edges           — create an edge");
 
-    let addr = format!("0.0.0.0:{}", port);
+    let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr).await?;
 
-    info!("MenteDB server listening on {}", addr);
+    info!("MenteDB server listening on {addr}");
 
     let accept_loop = async {
         loop {
             match listener.accept().await {
-                Ok((socket, peer_addr)) => {
-                    info!("New connection from {}", peer_addr);
-                    let _db = db.clone();
+                Ok((stream, peer_addr)) => {
+                    info!("connection from {peer_addr}");
+                    let db = db.clone();
                     tokio::spawn(async move {
-                        // Protocol handling will be implemented in a future version.
-                        drop(socket);
-                        info!("Connection from {} closed", peer_addr);
+                        router::handle_connection(stream, db).await;
+                        info!("connection from {peer_addr} closed");
                     });
                 }
                 Err(e) => {
-                    error!("Failed to accept connection: {}", e);
+                    error!("failed to accept connection: {e}");
                 }
             }
         }
@@ -91,11 +102,10 @@ async fn main() -> Result<()> {
     tokio::select! {
         _ = accept_loop => {}
         _ = tokio::signal::ctrl_c() => {
-            info!("Received Ctrl+C, shutting down...");
+            info!("received ctrl+c, shutting down...");
         }
     }
 
-    // Graceful shutdown: flush and close the database.
     let mut db = db.lock().await;
     db.close()?;
     info!("MenteDB server stopped");

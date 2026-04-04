@@ -13,6 +13,9 @@ bytemuck = { workspace = true }
 tracing = { workspace = true }
 ahash = { workspace = true }
 parking_lot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 uuid = { workspace = true }
+tempfile = { workspace = true }

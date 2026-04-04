@@ -21,6 +21,8 @@ thiserror = { workspace = true }
 tempfile = { workspace = true }
 criterion = { workspace = true }
 uuid = { workspace = true }
+mentedb-cognitive = { workspace = true }
+mentedb-consolidation = { workspace = true }
 
 [[bench]]
 name = "storage_bench"

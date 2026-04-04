@@ -484,6 +484,8 @@ name = "mentedb"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "mentedb-cognitive",
+ "mentedb-consolidation",
  "mentedb-context",
  "mentedb-core",
  "mentedb-graph",
@@ -557,7 +559,10 @@ dependencies = [
  "bytemuck",
  "mentedb-core",
  "parking_lot",
+ "serde",
+ "serde_json",
  "smallvec",
+ "tempfile",
  "tracing",
  "uuid",
 ]
@@ -574,6 +579,7 @@ dependencies = [
  "roaring",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
  "uuid",
 ]
@@ -595,6 +601,7 @@ name = "mentedb-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "mentedb",
  "mentedb-core",
  "serde",
@@ -602,6 +609,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

@@ -1,9 +1,13 @@
 //! Roaring bitmap tag index for fast set-based tag filtering.
 
+use std::io::Cursor;
+
 use ahash::HashMap;
 use parking_lot::RwLock;
 use roaring::RoaringBitmap;
+use serde::{Deserialize, Serialize};
 
+use mentedb_core::error::{MenteError, MenteResult};
 use mentedb_core::types::MemoryId;
 
 /// Roaring-bitmap-backed tag index.
@@ -135,6 +139,65 @@ impl BitmapIndex {
                 bm.remove(offset);
             }
         }
+    }
+}
+
+/// Serializable snapshot of the bitmap index data.
+#[derive(Serialize, Deserialize)]
+struct BitmapSnapshot {
+    /// Tag name → serialized RoaringBitmap bytes.
+    tag_bitmaps: Vec<(String, Vec<u8>)>,
+    id_to_offset: Vec<(MemoryId, u32)>,
+    offset_to_id: Vec<MemoryId>,
+}
+
+impl BitmapIndex {
+    /// Save the bitmap index to a JSON file.
+    pub fn save(&self, path: &std::path::Path) -> MenteResult<()> {
+        let inner = self.inner.read();
+        let mut tag_bitmaps = Vec::new();
+        for (tag, bm) in &inner.tag_bitmaps {
+            let mut buf = Vec::new();
+            bm.serialize_into(&mut buf)
+                .map_err(|e| MenteError::Serialization(e.to_string()))?;
+            tag_bitmaps.push((tag.clone(), buf));
+        }
+        let snapshot = BitmapSnapshot {
+            tag_bitmaps,
+            id_to_offset: inner.id_to_offset.iter().map(|(&k, &v)| (k, v)).collect(),
+            offset_to_id: inner.offset_to_id.clone(),
+        };
+        let data = serde_json::to_vec(&snapshot)
+            .map_err(|e| MenteError::Serialization(e.to_string()))?;
+        std::fs::write(path, data)?;
+        Ok(())
+    }
+
+    /// Load the bitmap index from a JSON file.
+    pub fn load(path: &std::path::Path) -> MenteResult<Self> {
+        let data = std::fs::read(path)?;
+        let snapshot: BitmapSnapshot =
+            serde_json::from_slice(&data).map_err(|e| MenteError::Serialization(e.to_string()))?;
+
+        let mut tag_bitmaps = HashMap::default();
+        for (tag, bytes) in snapshot.tag_bitmaps {
+            let bm = RoaringBitmap::deserialize_from(&mut Cursor::new(bytes))
+                .map_err(|e| MenteError::Serialization(e.to_string()))?;
+            tag_bitmaps.insert(tag, bm);
+        }
+
+        let mut id_to_offset = HashMap::default();
+        for (id, offset) in snapshot.id_to_offset {
+            id_to_offset.insert(id, offset);
+        }
+
+        Ok(Self {
+            inner: RwLock::new(BitmapInner {
+                tag_bitmaps,
+                id_to_offset,
+                offset_to_id: snapshot.offset_to_id,
+            }),
+        })
     }
 }
 

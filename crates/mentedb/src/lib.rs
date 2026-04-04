@@ -24,7 +24,7 @@
 //! db.close().unwrap();
 //! ```
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mentedb_core::types::MemoryId;
 use mentedb_core::error::MenteResult;
@@ -69,6 +69,8 @@ pub struct MenteDb {
     graph: GraphManager,
     /// Maps memory IDs to their storage page IDs for retrieval.
     page_map: HashMap<MemoryId, PageId>,
+    /// Database directory path for persistence.
+    path: PathBuf,
 }
 
 impl MenteDb {
@@ -76,8 +78,24 @@ impl MenteDb {
     pub fn open(path: &Path) -> MenteResult<Self> {
         info!("Opening MenteDB at {}", path.display());
         let storage = StorageEngine::open(path)?;
-        let index = IndexManager::default();
-        let graph = GraphManager::new();
+
+        let index_dir = path.join("indexes");
+        let graph_dir = path.join("graph");
+
+        let index = if index_dir.join("hnsw.json").exists() {
+            debug!("Loading indexes from {}", index_dir.display());
+            IndexManager::load(&index_dir)?
+        } else {
+            IndexManager::default()
+        };
+
+        let graph = if graph_dir.join("graph.json").exists() {
+            debug!("Loading graph from {}", graph_dir.display());
+            GraphManager::load(&graph_dir)?
+        } else {
+            GraphManager::new()
+        };
+
         let page_map = HashMap::new();
 
         Ok(Self {
@@ -85,6 +103,7 @@ impl MenteDb {
             index,
             graph,
             page_map,
+            path: path.to_path_buf(),
         })
     }
 
@@ -158,6 +177,8 @@ impl MenteDb {
     /// Flushes all data and closes the database.
     pub fn close(&mut self) -> MenteResult<()> {
         info!("Closing MenteDB");
+        self.index.save(&self.path.join("indexes"))?;
+        self.graph.save(&self.path.join("graph"))?;
         self.storage.checkpoint()?;
         self.storage.close()?;
         Ok(())

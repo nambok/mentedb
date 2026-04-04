@@ -2,10 +2,12 @@
 
 use ahash::HashMap;
 use mentedb_core::edge::{EdgeType, MemoryEdge};
+use mentedb_core::error::{MenteError, MenteResult};
 use mentedb_core::types::{MemoryId, Timestamp};
+use serde::{Deserialize, Serialize};
 
 /// Compact edge data stored in CSR/CSC arrays.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct StoredEdge {
     pub edge_type: EdgeType,
     pub weight: f32,
@@ -23,7 +25,7 @@ impl StoredEdge {
 }
 
 /// A pending edge in the delta log before compaction into CSR.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct DeltaEdge {
     source_idx: u32,
     target_idx: u32,
@@ -31,7 +33,7 @@ struct DeltaEdge {
 }
 
 /// Compressed Sparse Row storage for one direction (outgoing or incoming).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct CompressedStorage {
     /// Length = num_nodes + 1. row_offsets[i]..row_offsets[i+1] gives the range in col_indices/edge_data.
     row_offsets: Vec<u32>,
@@ -74,7 +76,7 @@ impl CompressedStorage {
 }
 
 /// Bidirectional graph with CSR (outgoing) and CSC (incoming) plus a delta log.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CsrGraph {
     /// Maps MemoryId -> internal u32 index.
     id_to_idx: HashMap<MemoryId, u32>,
@@ -337,6 +339,21 @@ impl CsrGraph {
             col_indices,
             edge_data,
         }
+    }
+    /// Save the graph to a JSON file.
+    pub fn save(&self, path: &std::path::Path) -> MenteResult<()> {
+        let data = serde_json::to_vec(self)
+            .map_err(|e| MenteError::Serialization(e.to_string()))?;
+        std::fs::write(path, data)?;
+        Ok(())
+    }
+
+    /// Load the graph from a JSON file.
+    pub fn load(path: &std::path::Path) -> MenteResult<Self> {
+        let data = std::fs::read(path)?;
+        let graph: Self =
+            serde_json::from_slice(&data).map_err(|e| MenteError::Serialization(e.to_string()))?;
+        Ok(graph)
     }
 }
 

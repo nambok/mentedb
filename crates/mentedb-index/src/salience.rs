@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 
+use mentedb_core::error::{MenteError, MenteResult};
 use mentedb_core::types::MemoryId;
 
 /// An f32 wrapper that provides total ordering via bit representation.
@@ -101,6 +103,47 @@ impl SalienceIndex {
             }
         }
         None
+    }
+}
+
+/// Serializable snapshot of the salience index data.
+#[derive(Serialize, Deserialize)]
+struct SalienceSnapshot {
+    /// Entries as (f32 salience, Vec<MemoryId>).
+    entries: Vec<(f32, Vec<MemoryId>)>,
+}
+
+impl SalienceIndex {
+    /// Save the salience index to a JSON file.
+    pub fn save(&self, path: &std::path::Path) -> MenteResult<()> {
+        let inner = self.inner.read();
+        let snapshot = SalienceSnapshot {
+            entries: inner
+                .tree
+                .iter()
+                .map(|(&k, v)| (k.to_f32(), v.clone()))
+                .collect(),
+        };
+        let data = serde_json::to_vec(&snapshot)
+            .map_err(|e| MenteError::Serialization(e.to_string()))?;
+        std::fs::write(path, data)?;
+        Ok(())
+    }
+
+    /// Load the salience index from a JSON file.
+    pub fn load(path: &std::path::Path) -> MenteResult<Self> {
+        let data = std::fs::read(path)?;
+        let snapshot: SalienceSnapshot =
+            serde_json::from_slice(&data).map_err(|e| MenteError::Serialization(e.to_string()))?;
+
+        let mut tree = BTreeMap::new();
+        for (salience, ids) in snapshot.entries {
+            tree.insert(OrderedF32::from_f32(salience), ids);
+        }
+
+        Ok(Self {
+            inner: RwLock::new(SalienceInner { tree }),
+        })
     }
 }
 

@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 
 use ahash::HashMap;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 
+use mentedb_core::error::{MenteError, MenteResult};
 use mentedb_core::types::{MemoryId, Timestamp};
 
 /// Temporal index using a BTreeMap for efficient range queries on timestamps.
@@ -90,6 +92,49 @@ impl TemporalIndex {
     pub fn get_timestamp(&self, id: MemoryId) -> Option<Timestamp> {
         let inner = self.inner.read();
         inner.id_to_ts.get(&id).copied()
+    }
+}
+
+/// Serializable snapshot of the temporal index data.
+#[derive(Serialize, Deserialize)]
+struct TemporalSnapshot {
+    tree: Vec<(Timestamp, Vec<MemoryId>)>,
+    id_to_ts: Vec<(MemoryId, Timestamp)>,
+}
+
+impl TemporalIndex {
+    /// Save the temporal index to a JSON file.
+    pub fn save(&self, path: &std::path::Path) -> MenteResult<()> {
+        let inner = self.inner.read();
+        let snapshot = TemporalSnapshot {
+            tree: inner.tree.iter().map(|(&k, v)| (k, v.clone())).collect(),
+            id_to_ts: inner.id_to_ts.iter().map(|(&k, &v)| (k, v)).collect(),
+        };
+        let data = serde_json::to_vec(&snapshot)
+            .map_err(|e| MenteError::Serialization(e.to_string()))?;
+        std::fs::write(path, data)?;
+        Ok(())
+    }
+
+    /// Load the temporal index from a JSON file.
+    pub fn load(path: &std::path::Path) -> MenteResult<Self> {
+        let data = std::fs::read(path)?;
+        let snapshot: TemporalSnapshot =
+            serde_json::from_slice(&data).map_err(|e| MenteError::Serialization(e.to_string()))?;
+
+        let mut tree = BTreeMap::new();
+        for (ts, ids) in snapshot.tree {
+            tree.insert(ts, ids);
+        }
+
+        let mut id_to_ts = HashMap::default();
+        for (id, ts) in snapshot.id_to_ts {
+            id_to_ts.insert(id, ts);
+        }
+
+        Ok(Self {
+            inner: RwLock::new(TemporalInner { tree, id_to_ts }),
+        })
     }
 }
 

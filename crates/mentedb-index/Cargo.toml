@@ -20,3 +20,5 @@ rand = "0.8"
 
 [dev-dependencies]
 rand = "0.8"
+tempfile = { workspace = true }
+uuid = { workspace = true }

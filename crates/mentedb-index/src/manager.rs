@@ -1,7 +1,9 @@
 //! Composite index manager that owns and coordinates all index types.
 
 use std::collections::HashSet;
+use std::path::Path;
 
+use mentedb_core::error::MenteResult;
 use mentedb_core::types::{MemoryId, Timestamp};
 use mentedb_core::MemoryNode;
 
@@ -40,6 +42,30 @@ impl IndexManager {
             temporal: TemporalIndex::new(),
             salience: SalienceIndex::new(),
         }
+    }
+
+    /// Save all indexes to the given directory.
+    pub fn save(&self, dir: &Path) -> MenteResult<()> {
+        std::fs::create_dir_all(dir)?;
+        self.hnsw.save(&dir.join("hnsw.json"))?;
+        self.bitmap.save(&dir.join("bitmap.json"))?;
+        self.temporal.save(&dir.join("temporal.json"))?;
+        self.salience.save(&dir.join("salience.json"))?;
+        Ok(())
+    }
+
+    /// Load all indexes from the given directory.
+    pub fn load(dir: &Path) -> MenteResult<Self> {
+        let hnsw = HnswIndex::load(&dir.join("hnsw.json"), HnswConfig::default().ef_search)?;
+        let bitmap = BitmapIndex::load(&dir.join("bitmap.json"))?;
+        let temporal = TemporalIndex::load(&dir.join("temporal.json"))?;
+        let salience = SalienceIndex::load(&dir.join("salience.json"))?;
+        Ok(Self {
+            hnsw,
+            bitmap,
+            temporal,
+            salience,
+        })
     }
 
     /// Index a memory node across all indexes.

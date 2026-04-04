@@ -1,5 +1,7 @@
 //! High-level knowledge graph manager.
 
+use std::path::Path;
+
 use mentedb_core::edge::MemoryEdge;
 use mentedb_core::error::{MenteError, MenteResult};
 use mentedb_core::types::MemoryId;
@@ -19,6 +21,18 @@ impl GraphManager {
         Self {
             graph: CsrGraph::new(),
         }
+    }
+
+    /// Save the graph to the given directory.
+    pub fn save(&self, dir: &Path) -> MenteResult<()> {
+        std::fs::create_dir_all(dir)?;
+        self.graph.save(&dir.join("graph.json"))
+    }
+
+    /// Load the graph from the given directory.
+    pub fn load(dir: &Path) -> MenteResult<Self> {
+        let graph = CsrGraph::load(&dir.join("graph.json"))?;
+        Ok(Self { graph })
     }
 
     /// Access the underlying graph (for traversals, etc.).

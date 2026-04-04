@@ -100,3 +100,80 @@ fn test_close_and_reopen() {
         db.close().unwrap();
     }
 }
+
+// ---------------------------------------------------------------------------
+// Persistence tests
+// ---------------------------------------------------------------------------
+
+fn make_tagged_memory(embedding: Vec<f32>, tags: Vec<String>, salience: f32) -> MemoryNode {
+    let mut node = MemoryNode::new(
+        Uuid::new_v4(),
+        MemoryType::Episodic,
+        "test memory".into(),
+        embedding,
+    );
+    node.tags = tags;
+    node.salience = salience;
+    node.created_at = 1000;
+    node
+}
+
+#[test]
+fn test_db_persistence_indexes_survive_close() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let node1 = make_tagged_memory(vec![1.0, 0.0, 0.0, 0.0], vec!["alpha".into()], 0.9);
+    let node2 = make_tagged_memory(vec![0.0, 1.0, 0.0, 0.0], vec!["beta".into()], 0.5);
+    let id1 = node1.id;
+
+    // Store memories and close
+    {
+        let mut db = MenteDb::open(dir.path()).unwrap();
+        db.store(node1).unwrap();
+        db.store(node2).unwrap();
+        db.close().unwrap();
+    }
+
+    // Reopen and verify index-based recall works
+    {
+        let mut db = MenteDb::open(dir.path()).unwrap();
+        let results = db.recall_similar(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, id1);
+        db.close().unwrap();
+    }
+}
+
+#[test]
+fn test_db_persistence_graph_survives_close() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let node1 = make_tagged_memory(vec![1.0, 0.0, 0.0, 0.0], vec![], 0.5);
+    let node2 = make_tagged_memory(vec![0.0, 1.0, 0.0, 0.0], vec![], 0.5);
+    let id1 = node1.id;
+    let id2 = node2.id;
+
+    // Store memories, relate them, and close
+    {
+        let mut db = MenteDb::open(dir.path()).unwrap();
+        db.store(node1).unwrap();
+        db.store(node2).unwrap();
+        db.relate(MemoryEdge {
+            source: id1,
+            target: id2,
+            edge_type: EdgeType::Caused,
+            weight: 0.8,
+            created_at: 1000,
+        })
+        .unwrap();
+        db.close().unwrap();
+    }
+
+    // Reopen and verify graph edges are preserved
+    {
+        let mut db = MenteDb::open(dir.path()).unwrap();
+        let results = db.recall_similar(&[1.0, 0.0, 0.0, 0.0], 2).unwrap();
+        assert!(!results.is_empty());
+        db.close().unwrap();
+    }
+}

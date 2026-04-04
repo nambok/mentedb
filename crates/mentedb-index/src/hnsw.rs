@@ -390,6 +390,19 @@ impl HnswIndex {
             inner: RwLock::new(inner),
         })
     }
+
+    /// Save the index to a JSON file.
+    pub fn save(&self, path: &std::path::Path) -> MenteResult<()> {
+        let data = self.serialize()?;
+        std::fs::write(path, data)?;
+        Ok(())
+    }
+
+    /// Load the index from a JSON file.
+    pub fn load(path: &std::path::Path, ef_search: usize) -> MenteResult<Self> {
+        let data = std::fs::read(path)?;
+        Self::deserialize(&data, ef_search)
+    }
 }
 
 // ---------------------------------------------------------------------------

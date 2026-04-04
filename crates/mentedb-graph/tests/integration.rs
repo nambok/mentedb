@@ -155,3 +155,67 @@ fn test_remove_and_compact() {
     let out = mgr.graph().outgoing(n[0]);
     assert!(out.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Persistence tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_graph_manager_save_load() {
+    let dir = tempfile::tempdir().unwrap();
+    let graph_dir = dir.path().join("graph");
+
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+    let c = Uuid::new_v4();
+
+    {
+        let mut mgr = GraphManager::new();
+        mgr.add_memory(a);
+        mgr.add_memory(b);
+        mgr.add_memory(c);
+        mgr.add_relationship(&edge(a, b, EdgeType::Caused, 0.8)).unwrap();
+        mgr.add_relationship(&edge(b, c, EdgeType::Related, 0.5)).unwrap();
+        mgr.save(&graph_dir).unwrap();
+    }
+
+    let mgr2 = GraphManager::load(&graph_dir).unwrap();
+
+    assert!(mgr2.graph().contains_node(a));
+    assert!(mgr2.graph().contains_node(b));
+    assert!(mgr2.graph().contains_node(c));
+    assert_eq!(mgr2.graph().node_count(), 3);
+
+    let out_a = mgr2.graph().outgoing(a);
+    assert_eq!(out_a.len(), 1);
+    assert_eq!(out_a[0].0, b);
+    assert_eq!(out_a[0].1.edge_type, EdgeType::Caused);
+
+    let (nodes, edges) = mgr2.get_context_subgraph(a, 2);
+    assert_eq!(nodes.len(), 3);
+    assert_eq!(edges.len(), 2);
+}
+
+#[test]
+fn test_graph_save_load_after_compact() {
+    let dir = tempfile::tempdir().unwrap();
+    let graph_dir = dir.path().join("graph");
+
+    let a = Uuid::new_v4();
+    let b = Uuid::new_v4();
+
+    {
+        let mut mgr = GraphManager::new();
+        mgr.add_memory(a);
+        mgr.add_memory(b);
+        mgr.add_relationship(&edge(a, b, EdgeType::Supports, 0.9)).unwrap();
+        mgr.compact();
+        mgr.save(&graph_dir).unwrap();
+    }
+
+    let mgr2 = GraphManager::load(&graph_dir).unwrap();
+    let out = mgr2.graph().outgoing(a);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].0, b);
+    assert_eq!(out[0].1.edge_type, EdgeType::Supports);
+}
