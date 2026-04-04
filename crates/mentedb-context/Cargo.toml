@@ -8,7 +8,11 @@ description = "Context assembly engine for MenteDB"
 
 [dependencies]
 mentedb-core = { workspace = true }
-mentedb-index = { workspace = true }
-mentedb-graph = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+ahash = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }

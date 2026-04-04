@@ -8,8 +8,10 @@ description = "MQL parser and query execution engine for MenteDB"
 
 [dependencies]
 mentedb-core = { workspace = true }
-mentedb-index = { workspace = true }
-mentedb-graph = { workspace = true }
-mentedb-context = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -325,11 +325,12 @@ dependencies = [
 name = "mentedb-context"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "mentedb-core",
- "mentedb-graph",
- "mentedb-index",
+ "serde",
  "thiserror",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -377,12 +378,12 @@ dependencies = [
 name = "mentedb-query"
 version = "0.1.0"
 dependencies = [
- "mentedb-context",
  "mentedb-core",
- "mentedb-graph",
- "mentedb-index",
+ "serde",
+ "serde_json",
  "thiserror",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
