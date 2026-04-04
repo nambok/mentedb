@@ -44,25 +44,79 @@ Every database ever built assumes the consumer can compensate for bad data organ
 
 ## Architecture
 
-```text
-┌─────────────────────────────────────────────────┐
-│  MQL Parser & Query Engine                      │
-├─────────────────────────────────────────────────┤
-│  Context Assembly │ Belief      │ Memory        │
-│  Engine           │ Propagation │ Consolidation │
-├─────────────────────────────────────────────────┤
-│  HNSW Vector  │ Roaring   │ PGM Learned │ CSR  │
-│  Index        │ Bitmaps   │ Index       │ Graph│
-├─────────────────────────────────────────────────┤
-│  Buffer Pool │ WAL │ Page Manager │ Allocator   │
-├─────────────────────────────────────────────────┤
-│  io_uring │ mmap │ Direct I/O │ Sealed memfd   │
-└─────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph API["API Layer"]
+        MQL["MQL Parser"]
+        QE["Query Planner"]
+        GRPC["gRPC / REST"]
+    end
+
+    subgraph Cognitive["Cognitive Engine"]
+        CTX["Context Assembly<br/>U curve, delta aware"]
+        STREAM["Stream Cognition<br/>live push corrections"]
+        SPEC["Speculative Pre Assembly<br/>predict next context"]
+        PAIN["Pain Signals<br/>mistake aversion"]
+        PHANTOM["Phantom Memories<br/>knowledge gap tracking"]
+        TRAJ["Trajectory Tracker<br/>thought continuation"]
+    end
+
+    subgraph Intelligence["Inference Layer"]
+        BP["Belief Propagation"]
+        WI["Write Time Inference"]
+        INTERF["Interference Detection"]
+    end
+
+    subgraph Index["Index Layer"]
+        HNSW["HNSW Vector Index"]
+        ROAR["Roaring Bitmap Tags"]
+        TEMP["Temporal Index"]
+        SAL["Salience Index"]
+    end
+
+    subgraph Graph["Knowledge Graph"]
+        CSR["CSR/CSC Storage"]
+        TRAV["BFS / DFS Traversal"]
+        CONTRA["Contradiction Detection"]
+    end
+
+    subgraph Storage["Storage Engine"]
+        BUF["Buffer Pool<br/>CLOCK eviction"]
+        WAL["Write Ahead Log<br/>LZ4, CRC32"]
+        PAGE["Page Manager<br/>16KB pages"]
+    end
+
+    subgraph OS["OS / Hardware"]
+        URING["io_uring"]
+        MMAP["mmap + hugepages"]
+        DIO["Direct I/O"]
+        MPK["Memory Protection Keys"]
+    end
+
+    MQL --> QE
+    GRPC --> QE
+    QE --> CTX
+    QE --> Index
+    QE --> Graph
+
+    CTX --> STREAM
+    CTX --> SPEC
+    CTX --> PAIN
+    CTX --> PHANTOM
+    CTX --> TRAJ
+
+    WI --> Graph
+    WI --> Index
+    BP --> Graph
+    INTERF --> Index
+
+    Index --> Storage
+    Graph --> Storage
+
+    BUF --> PAGE
+    WAL --> PAGE
+    PAGE --> OS
 ```
-
-## Status
-
-**Early development** Phase 1 (storage foundation) complete. Phase 2 (indexes and graph) in progress.
 
 ## Building
 
