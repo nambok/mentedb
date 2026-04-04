@@ -6,6 +6,7 @@ use serde_json::json;
 
 /// Unified API error type.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ApiError {
     BadRequest(String),
     NotFound(String),

@@ -1,75 +1,90 @@
-//! HTTP endpoint handlers for the MenteDB REST API.
+//! Axum handler functions for the MenteDB REST API.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use mentedb::MenteDb;
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::{AttributeValue, MemoryType};
 use mentedb_core::{MemoryEdge, MemoryNode};
 use serde_json::{Map, Value, json};
-use tokio::sync::Mutex;
 use tracing::error;
 use uuid::Uuid;
 
-use crate::router::Response;
+use crate::error::ApiError;
+use crate::state::AppState;
 
-type Db = Arc<Mutex<MenteDb>>;
+// ---------------------------------------------------------------------------
+// GET /v1/health
+// ---------------------------------------------------------------------------
 
-pub async fn health() -> Response {
-    Response::ok(json!({ "status": "ok", "version": "0.1.0" }))
+pub async fn health(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let uptime = state.start_time.elapsed().as_secs();
+    Json(json!({
+        "status": "ok",
+        "version": "0.1.0",
+        "uptime_seconds": uptime,
+    }))
 }
 
-pub async fn store_memory(db: Db, body: &[u8]) -> Response {
-    let req: Value = match serde_json::from_slice(body) {
-        Ok(v) => v,
-        Err(e) => return Response::bad_request(&format!("invalid JSON: {e}")),
+// ---------------------------------------------------------------------------
+// GET /v1/stats
+// ---------------------------------------------------------------------------
+
+pub async fn stats(
+    State(state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let uptime = state.start_time.elapsed().as_secs();
+
+    // Scan to count memories (no public count method on MenteDb).
+    let mut db = state.db.write().await;
+    let memory_count = match db.recall("RECALL memories LIMIT 10000") {
+        Ok(window) => window.blocks.iter().map(|b| b.memories.len()).sum::<usize>(),
+        Err(_) => 0,
     };
 
-    let agent_id = match parse_uuid(&req, "agent_id") {
-        Ok(id) => id,
-        Err(r) => return r,
-    };
+    Ok(Json(json!({
+        "memory_count": memory_count,
+        "uptime_seconds": uptime,
+    })))
+}
 
-    let memory_type = match parse_memory_type(&req) {
-        Ok(mt) => mt,
-        Err(r) => return r,
-    };
+// ---------------------------------------------------------------------------
+// POST /v1/memories
+// ---------------------------------------------------------------------------
 
-    let content = match req.get("content").and_then(|v| v.as_str()) {
-        Some(s) => s.to_string(),
-        None => return Response::bad_request("missing or invalid 'content'"),
-    };
+pub async fn store_memory(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    let agent_id = parse_uuid(&req, "agent_id")?;
+    let memory_type = parse_memory_type(&req)?;
 
-    let embedding: Vec<f32> = match req.get("embedding").and_then(|v| v.as_array()) {
-        Some(arr) => {
-            let mut emb = Vec::with_capacity(arr.len());
-            for v in arr {
-                match v.as_f64() {
-                    Some(f) => emb.push(f as f32),
-                    None => return Response::bad_request("embedding values must be numbers"),
-                }
-            }
-            emb
-        }
-        None => vec![],
-    };
+    let content = req
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError::BadRequest("missing or invalid 'content'".into()))?
+        .to_string();
+
+    let embedding = parse_embedding(&req, false)?;
 
     let tags: Vec<String> = match req.get("tags").and_then(|v| v.as_array()) {
-        Some(arr) => arr
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect(),
+        Some(arr) => arr.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
         None => vec![],
     };
 
     let attributes = parse_attributes(req.get("attributes"));
 
     let space_id = match req.get("space_id") {
-        Some(v) => match v.as_str().and_then(|s| Uuid::parse_str(s).ok()) {
-            Some(id) => id,
-            None => return Response::bad_request("invalid 'space_id'"),
-        },
+        Some(v) => v
+            .as_str()
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .ok_or_else(|| ApiError::BadRequest("invalid 'space_id'".into()))?,
         None => Uuid::nil(),
     };
 
@@ -80,15 +95,8 @@ pub async fn store_memory(db: Db, body: &[u8]) -> Response {
 
     let id = Uuid::new_v4();
 
-    let salience = req
-        .get("salience")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.5) as f32;
-
-    let confidence = req
-        .get("confidence")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(1.0) as f32;
+    let salience = req.get("salience").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+    let confidence = req.get("confidence").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
 
     let node = MemoryNode {
         id,
@@ -106,134 +114,135 @@ pub async fn store_memory(db: Db, body: &[u8]) -> Response {
         tags,
     };
 
-    let mut db = db.lock().await;
-    match db.store(node) {
-        Ok(()) => Response::created(json!({ "id": id.to_string(), "status": "stored" })),
-        Err(e) => {
-            error!("store failed: {e}");
-            Response::internal_error(&format!("store failed: {e}"))
-        }
-    }
+    let mut db = state.db.write().await;
+    db.store(node).map_err(|e| {
+        error!("store failed: {e}");
+        ApiError::Internal(format!("store failed: {e}"))
+    })?;
+
+    Ok((StatusCode::CREATED, Json(json!({ "id": id.to_string(), "status": "stored" }))))
 }
 
-pub async fn get_memory(db: Db, id_str: &str) -> Response {
-    let id = match Uuid::parse_str(id_str) {
-        Ok(id) => id,
-        Err(_) => return Response::bad_request("invalid memory ID"),
-    };
+// ---------------------------------------------------------------------------
+// GET /v1/memories/:id
+// ---------------------------------------------------------------------------
 
-    // Use MQL recall with a tag-based fallback scan, then filter by ID.
+pub async fn get_memory(
+    State(state): State<Arc<AppState>>,
+    Path(id_str): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let id = Uuid::parse_str(&id_str)
+        .map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
+
     // PointLookup exists in QueryPlan but is not reachable via MQL syntax,
-    // so we scan and filter client-side. This is inefficient but correct
-    // until MenteDb exposes a public get(id) method.
-    let query = "RECALL memories LIMIT 1000".to_string();
-    let mut db = db.lock().await;
-    match db.recall(&query) {
-        Ok(window) => {
-            for block in &window.blocks {
-                for scored in &block.memories {
-                    if scored.memory.id == id {
-                        return Response::ok(memory_node_to_json(&scored.memory));
-                    }
-                }
+    // so we scan and filter client-side until MenteDb exposes a public get(id).
+    let mut db = state.db.write().await;
+    let window = db.recall("RECALL memories LIMIT 1000").map_err(|e| {
+        error!("recall failed: {e}");
+        ApiError::NotFound(format!("memory {id} not found"))
+    })?;
+
+    for block in &window.blocks {
+        for scored in &block.memories {
+            if scored.memory.id == id {
+                return Ok(Json(memory_node_to_json(&scored.memory)));
             }
-            Response::not_found(&format!("memory {id} not found"))
-        }
-        Err(e) => {
-            error!("recall failed: {e}");
-            Response::not_found(&format!("memory {id} not found"))
         }
     }
+
+    Err(ApiError::NotFound(format!("memory {id} not found")))
 }
 
-pub async fn recall_memories(db: Db, body: &[u8]) -> Response {
-    let req: Value = match serde_json::from_slice(body) {
-        Ok(v) => v,
-        Err(e) => return Response::bad_request(&format!("invalid JSON: {e}")),
-    };
+// ---------------------------------------------------------------------------
+// DELETE /v1/memories/:id
+// ---------------------------------------------------------------------------
 
-    let query = match req.get("query").and_then(|v| v.as_str()) {
-        Some(q) => q,
-        None => return Response::bad_request("missing 'query' field"),
-    };
+pub async fn forget_memory(
+    State(state): State<Arc<AppState>>,
+    Path(id_str): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let id = Uuid::parse_str(&id_str)
+        .map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
 
-    let mut db = db.lock().await;
-    match db.recall(query) {
-        Ok(window) => {
-            let memory_count: usize = window.blocks.iter().map(|b| b.memories.len()).sum();
-            Response::ok(json!({
-                "context": window.format,
-                "total_tokens": window.total_tokens,
-                "memory_count": memory_count,
-            }))
-        }
-        Err(e) => {
-            error!("recall failed: {e}");
-            Response::internal_error(&format!("recall failed: {e}"))
-        }
-    }
+    let mut db = state.db.write().await;
+    db.forget(id).map_err(|e| {
+        error!("forget failed: {e}");
+        ApiError::Internal(format!("forget failed: {e}"))
+    })?;
+
+    Ok(Json(json!({ "status": "deleted" })))
 }
 
-pub async fn search_similar(db: Db, body: &[u8]) -> Response {
-    let req: Value = match serde_json::from_slice(body) {
-        Ok(v) => v,
-        Err(e) => return Response::bad_request(&format!("invalid JSON: {e}")),
-    };
+// ---------------------------------------------------------------------------
+// POST /v1/recall
+// ---------------------------------------------------------------------------
 
-    let embedding: Vec<f32> = match req.get("embedding").and_then(|v| v.as_array()) {
-        Some(arr) => {
-            let mut emb = Vec::with_capacity(arr.len());
-            for v in arr {
-                match v.as_f64() {
-                    Some(f) => emb.push(f as f32),
-                    None => return Response::bad_request("embedding values must be numbers"),
-                }
-            }
-            emb
-        }
-        None => return Response::bad_request("missing 'embedding' array"),
-    };
+pub async fn recall_memories(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    let query = req
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError::BadRequest("missing 'query' field".into()))?;
 
+    let mut db = state.db.write().await;
+    let window = db.recall(query).map_err(|e| {
+        error!("recall failed: {e}");
+        ApiError::Internal(format!("recall failed: {e}"))
+    })?;
+
+    let memory_count: usize = window.blocks.iter().map(|b| b.memories.len()).sum();
+    Ok(Json(json!({
+        "context": window.format,
+        "total_tokens": window.total_tokens,
+        "memory_count": memory_count,
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1/search
+// ---------------------------------------------------------------------------
+
+pub async fn search_similar(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    let embedding = parse_embedding(&req, true)?;
     let k = req.get("k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
-    let mut db = db.lock().await;
-    match db.recall_similar(&embedding, k) {
-        Ok(results) => {
-            let items: Vec<Value> = results
-                .iter()
-                .map(|(id, score)| json!({ "id": id.to_string(), "score": score }))
-                .collect();
-            Response::ok(json!({ "results": items }))
-        }
-        Err(e) => {
-            error!("search failed: {e}");
-            Response::internal_error(&format!("search failed: {e}"))
-        }
-    }
+    let mut db = state.db.write().await;
+    let results = db.recall_similar(&embedding, k).map_err(|e| {
+        error!("search failed: {e}");
+        ApiError::Internal(format!("search failed: {e}"))
+    })?;
+
+    let items: Vec<Value> = results
+        .iter()
+        .map(|(id, score)| json!({ "id": id.to_string(), "score": score }))
+        .collect();
+
+    Ok(Json(json!({ "results": items })))
 }
 
-pub async fn create_edge(db: Db, body: &[u8]) -> Response {
-    let req: Value = match serde_json::from_slice(body) {
-        Ok(v) => v,
-        Err(e) => return Response::bad_request(&format!("invalid JSON: {e}")),
-    };
+// ---------------------------------------------------------------------------
+// POST /v1/edges
+// ---------------------------------------------------------------------------
 
-    let source = match parse_uuid(&req, "source") {
-        Ok(id) => id,
-        Err(r) => return r,
-    };
-    let target = match parse_uuid(&req, "target") {
-        Ok(id) => id,
-        Err(r) => return r,
-    };
+pub async fn create_edge(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    let source = parse_uuid(&req, "source")?;
+    let target = parse_uuid(&req, "target")?;
 
-    let edge_type = match req.get("edge_type").and_then(|v| v.as_str()) {
-        Some(s) => match parse_edge_type(s) {
-            Some(et) => et,
-            None => return Response::bad_request(&format!("unknown edge_type: {s}")),
-        },
-        None => return Response::bad_request("missing 'edge_type'"),
-    };
+    let edge_type_str = req
+        .get("edge_type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError::BadRequest("missing 'edge_type'".into()))?;
+
+    let edge_type = parse_edge_type(edge_type_str)
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown edge_type: {edge_type_str}")))?;
 
     let weight = req.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
 
@@ -250,55 +259,43 @@ pub async fn create_edge(db: Db, body: &[u8]) -> Response {
         created_at: now,
     };
 
-    let mut db = db.lock().await;
-    match db.relate(edge) {
-        Ok(()) => Response::created(json!({ "status": "created" })),
-        Err(e) => {
-            error!("relate failed: {e}");
-            Response::internal_error(&format!("relate failed: {e}"))
-        }
-    }
-}
+    let mut db = state.db.write().await;
+    db.relate(edge).map_err(|e| {
+        error!("relate failed: {e}");
+        ApiError::Internal(format!("relate failed: {e}"))
+    })?;
 
-pub async fn forget_memory(db: Db, id_str: &str) -> Response {
-    let id = match Uuid::parse_str(id_str) {
-        Ok(id) => id,
-        Err(_) => return Response::bad_request("invalid memory ID"),
-    };
-
-    let mut db = db.lock().await;
-    match db.forget(id) {
-        Ok(()) => Response::ok(json!({ "status": "deleted" })),
-        Err(e) => {
-            error!("forget failed: {e}");
-            Response::internal_error(&format!("forget failed: {e}"))
-        }
-    }
+    Ok((StatusCode::CREATED, Json(json!({ "status": "created" }))))
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn parse_uuid(val: &Value, field: &str) -> Result<Uuid, Response> {
-    match val.get(field).and_then(|v| v.as_str()) {
-        Some(s) => Uuid::parse_str(s).map_err(|_| Response::bad_request(&format!("invalid UUID for '{field}'"))),
-        None => Err(Response::bad_request(&format!("missing '{field}'"))),
-    }
+fn parse_uuid(val: &Value, field: &str) -> Result<Uuid, ApiError> {
+    val.get(field)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError::BadRequest(format!("missing '{field}'")))
+        .and_then(|s| {
+            Uuid::parse_str(s)
+                .map_err(|_| ApiError::BadRequest(format!("invalid UUID for '{field}'")))
+        })
 }
 
-fn parse_memory_type(val: &Value) -> Result<MemoryType, Response> {
-    match val.get("memory_type").and_then(|v| v.as_str()) {
-        Some(s) => match s.to_lowercase().as_str() {
-            "episodic" => Ok(MemoryType::Episodic),
-            "semantic" => Ok(MemoryType::Semantic),
-            "procedural" => Ok(MemoryType::Procedural),
-            "antipattern" | "anti_pattern" => Ok(MemoryType::AntiPattern),
-            "reasoning" => Ok(MemoryType::Reasoning),
-            "correction" => Ok(MemoryType::Correction),
-            _ => Err(Response::bad_request(&format!("unknown memory_type: {s}"))),
-        },
-        None => Err(Response::bad_request("missing 'memory_type'")),
+fn parse_memory_type(val: &Value) -> Result<MemoryType, ApiError> {
+    let s = val
+        .get("memory_type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError::BadRequest("missing 'memory_type'".into()))?;
+
+    match s.to_lowercase().as_str() {
+        "episodic" => Ok(MemoryType::Episodic),
+        "semantic" => Ok(MemoryType::Semantic),
+        "procedural" => Ok(MemoryType::Procedural),
+        "antipattern" | "anti_pattern" => Ok(MemoryType::AntiPattern),
+        "reasoning" => Ok(MemoryType::Reasoning),
+        "correction" => Ok(MemoryType::Correction),
+        _ => Err(ApiError::BadRequest(format!("unknown memory_type: {s}"))),
     }
 }
 
@@ -313,6 +310,23 @@ fn parse_edge_type(s: &str) -> Option<EdgeType> {
         "derived" => Some(EdgeType::Derived),
         "partof" | "part_of" => Some(EdgeType::PartOf),
         _ => None,
+    }
+}
+
+fn parse_embedding(val: &Value, required: bool) -> Result<Vec<f32>, ApiError> {
+    match val.get("embedding").and_then(|v| v.as_array()) {
+        Some(arr) => {
+            let mut emb = Vec::with_capacity(arr.len());
+            for v in arr {
+                let f = v
+                    .as_f64()
+                    .ok_or_else(|| ApiError::BadRequest("embedding values must be numbers".into()))?;
+                emb.push(f as f32);
+            }
+            Ok(emb)
+        }
+        None if required => Err(ApiError::BadRequest("missing 'embedding' array".into())),
+        None => Ok(vec![]),
     }
 }
 
