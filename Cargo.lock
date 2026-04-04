@@ -340,6 +340,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mentedb-consolidation"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "mentedb-core",
+ "serde",
+ "tempfile",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "mentedb-context"
 version = "0.1.0"
 dependencies = [
@@ -355,8 +367,10 @@ dependencies = [
 name = "mentedb-core"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "bytemuck",
  "bytes",
+ "parking_lot",
  "serde",
  "smallvec",
  "thiserror",

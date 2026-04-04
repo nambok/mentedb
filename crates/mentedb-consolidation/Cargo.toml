@@ -1,0 +1,17 @@
+[package]
+name = "mentedb-consolidation"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Memory consolidation and intelligence pipeline for MenteDB"
+
+[dependencies]
+mentedb-core = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+ahash = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

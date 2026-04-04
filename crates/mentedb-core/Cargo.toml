@@ -13,3 +13,5 @@ thiserror = { workspace = true }
 bytes = { workspace = true }
 bytemuck = { workspace = true }
 smallvec = { workspace = true }
+ahash = { workspace = true }
+parking_lot = { workspace = true }
