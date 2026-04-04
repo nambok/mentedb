@@ -1,0 +1,14 @@
+[project]
+name = "mentedb-crewai"
+version = "0.1.0"
+description = "MenteDB integration for CrewAI and AutoGen"
+license = "Apache-2.0"
+requires-python = ">=3.9"
+dependencies = [
+    "mentedb>=0.1.0",
+    "crewai>=0.30",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

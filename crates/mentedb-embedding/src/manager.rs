@@ -64,7 +64,7 @@ impl EmbeddingManager {
         }
 
         if !missing_texts.is_empty() {
-            let missing_refs: Vec<&str> = missing_texts.iter().copied().collect();
+            let missing_refs: Vec<&str> = missing_texts.to_vec();
             let computed = self.provider.embed_batch(&missing_refs)?;
 
             for (idx, embedding) in missing_indices.into_iter().zip(computed) {

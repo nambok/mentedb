@@ -1,4 +1,5 @@
 [workspace]
+exclude = ["sdks/typescript"]
 members = [
     "crates/mentedb",
     "crates/mentedb-core",

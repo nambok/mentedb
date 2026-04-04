@@ -40,6 +40,10 @@ pub enum MenteError {
         space_id: crate::types::SpaceId,
     },
 
+    /// A resource limit has been exhausted.
+    #[error("resource exhausted: {0}")]
+    ResourceExhausted(String),
+
     /// An I/O error occurred.
     #[error(transparent)]
     Io(#[from] std::io::Error),

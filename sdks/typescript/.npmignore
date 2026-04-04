@@ -1,0 +1,9 @@
+src/
+target/
+Cargo.toml
+Cargo.lock
+build.rs
+__tests__/
+tsconfig.json
+*.node
+.cargo/

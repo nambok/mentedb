@@ -1,0 +1,29 @@
+{
+  "name": "mentedb",
+  "version": "0.1.0",
+  "description": "The mind database for AI agents",
+  "main": "npm/index.js",
+  "types": "npm/index.d.ts",
+  "scripts": {
+    "build": "napi build --release",
+    "test": "jest"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nambok/mentedb"
+  },
+  "keywords": [
+    "database",
+    "ai",
+    "agents",
+    "memory",
+    "rust",
+    "vector",
+    "knowledge-graph"
+  ],
+  "napi": {
+    "name": "mentedb",
+    "triples": {}
+  }
+}

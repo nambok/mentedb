@@ -1,0 +1,26 @@
+[package]
+name = "mentedb-node"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Node.js/TypeScript bindings for MenteDB"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2", features = ["napi9", "serde-json"] }
+napi-derive = "2"
+mentedb-core = { path = "../../crates/mentedb-core" }
+mentedb-storage = { path = "../../crates/mentedb-storage" }
+mentedb-index = { path = "../../crates/mentedb-index" }
+mentedb-graph = { path = "../../crates/mentedb-graph" }
+mentedb-context = { path = "../../crates/mentedb-context" }
+mentedb-cognitive = { path = "../../crates/mentedb-cognitive" }
+mentedb-embedding = { path = "../../crates/mentedb-embedding" }
+mentedb = { path = "../../crates/mentedb" }
+uuid = { version = "1", features = ["v4"] }
+serde_json = "1"
+
+[build-dependencies]
+napi-build = "2"

@@ -137,12 +137,8 @@ pub fn shortest_path(
         return Some(vec![from]);
     }
 
-    let Some(_) = graph.get_idx(from) else {
-        return None;
-    };
-    let Some(_) = graph.get_idx(to) else {
-        return None;
-    };
+    let _ = graph.get_idx(from)?;
+    let _ = graph.get_idx(to)?;
 
     let mut visited = HashSet::default();
     let mut parent: HashMap<MemoryId, MemoryId> = HashMap::default();

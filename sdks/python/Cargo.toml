@@ -1,0 +1,26 @@
+[workspace]
+
+[package]
+name = "mentedb-python"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Python bindings for MenteDB"
+
+[lib]
+name = "mentedb_python"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+mentedb = { path = "../../crates/mentedb" }
+mentedb-core = { path = "../../crates/mentedb-core" }
+mentedb-storage = { path = "../../crates/mentedb-storage" }
+mentedb-index = { path = "../../crates/mentedb-index" }
+mentedb-graph = { path = "../../crates/mentedb-graph" }
+mentedb-context = { path = "../../crates/mentedb-context" }
+mentedb-cognitive = { path = "../../crates/mentedb-cognitive" }
+mentedb-consolidation = { path = "../../crates/mentedb-consolidation" }
+mentedb-embedding = { path = "../../crates/mentedb-embedding" }
+uuid = { version = "1", features = ["v4"] }
+serde_json = "1"

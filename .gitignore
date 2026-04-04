@@ -6,3 +6,6 @@
 .idea/
 .vscode/
 *.log
+
+sdks/python/target/
+sdks/typescript/target/

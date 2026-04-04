@@ -6,6 +6,7 @@
 //! - **Buffer pool** — fixed-capacity page cache with CLOCK eviction
 //! - **Storage engine** — unified facade for memory node persistence
 
+pub mod backup;
 pub mod buffer;
 pub mod engine;
 pub mod page;

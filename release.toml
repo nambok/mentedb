@@ -1,0 +1,3 @@
+[workspace]
+shared-version = true
+tag-name = "v{{version}}"
