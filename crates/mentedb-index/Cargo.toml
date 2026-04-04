@@ -1,0 +1,15 @@
+[package]
+name = "mentedb-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Index structures for MenteDB"
+
+[dependencies]
+mentedb-core = { workspace = true }
+roaring = { workspace = true }
+ahash = { workspace = true }
+bytemuck = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }

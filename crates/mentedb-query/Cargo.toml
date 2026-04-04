@@ -1,0 +1,15 @@
+[package]
+name = "mentedb-query"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "MQL parser and query execution engine for MenteDB"
+
+[dependencies]
+mentedb-core = { workspace = true }
+mentedb-index = { workspace = true }
+mentedb-graph = { workspace = true }
+mentedb-context = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

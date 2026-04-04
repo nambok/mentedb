@@ -1,0 +1,60 @@
+[workspace]
+members = [
+    "crates/mentedb",
+    "crates/mentedb-core",
+    "crates/mentedb-storage",
+    "crates/mentedb-index",
+    "crates/mentedb-graph",
+    "crates/mentedb-query",
+    "crates/mentedb-context",
+    "crates/mentedb-server",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Nam Rodriguez <nambok@gmail.com>"]
+license = "Apache-2.0"
+repository = "https://github.com/nambok/mentedb"
+description = "A purpose-built database engine for AI agent memory"
+
+[workspace.dependencies]
+# Core
+uuid = { version = "1", features = ["v4", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+bytes = "1"
+bytemuck = { version = "1", features = ["derive"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Collections & Data Structures
+roaring = "0.10"
+ahash = "0.8"
+parking_lot = "0.12"
+crossbeam = "0.8"
+crossbeam-utils = "0.8"
+smallvec = "1"
+
+# Compression
+lz4_flex = "0.11"
+
+# Hashing & Checksums
+crc32fast = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Internal crates
+mentedb-core = { path = "crates/mentedb-core" }
+mentedb-storage = { path = "crates/mentedb-storage" }
+mentedb-index = { path = "crates/mentedb-index" }
+mentedb-graph = { path = "crates/mentedb-graph" }
+mentedb-query = { path = "crates/mentedb-query" }
+mentedb-context = { path = "crates/mentedb-context" }
+mentedb-server = { path = "crates/mentedb-server" }

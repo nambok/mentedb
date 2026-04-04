@@ -1,0 +1,14 @@
+[package]
+name = "mentedb-graph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Knowledge graph engine for MenteDB"
+
+[dependencies]
+mentedb-core = { workspace = true }
+mentedb-index = { workspace = true }
+smallvec = { workspace = true }
+bytemuck = { workspace = true }
+tracing = { workspace = true }

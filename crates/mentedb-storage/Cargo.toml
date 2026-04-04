@@ -1,0 +1,17 @@
+[package]
+name = "mentedb-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Storage engine for MenteDB"
+
+[dependencies]
+mentedb-core = { workspace = true }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+parking_lot = { workspace = true }
+crossbeam = { workspace = true }
+crc32fast = { workspace = true }
+lz4_flex = { workspace = true }
+tracing = { workspace = true }
