@@ -8,12 +8,94 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  id-token: write
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs['mentedb--release_created'] || steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs['mentedb--tag_name'] || steps.release.outputs.tag_name }}
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get install -y protobuf-compiler
+      - name: Publish crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          for crate in mentedb-core mentedb-storage mentedb-index mentedb-graph mentedb-embedding mentedb-cognitive mentedb-consolidation mentedb-context mentedb-extraction mentedb-query mentedb; do
+            echo "Publishing $crate..."
+            cargo publish -p "$crate" --no-verify || echo "Skipping $crate (already published or error)"
+            sleep 30
+          done
+
+  publish-python:
+    name: Build Python wheels
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: sdks/python
+          command: build
+          args: --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: sdks/python/target/wheels/
+
+  upload-pypi:
+    name: Publish to PyPI
+    needs: publish-python
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
+  publish-npm:
+    name: Publish to npm
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: cd sdks/typescript && npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
