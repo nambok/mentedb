@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.10](https://github.com/nambok/mentedb/compare/mentedb-v0.2.9...mentedb-v0.2.10) (2026-04-05)
+
+
+### Bug Fixes
+
+* rebuild page map on open for cross-session persistence ([930b3e4](https://github.com/nambok/mentedb/commit/930b3e44cb3cb78a8b0b0de254932a3222c4dd30))
+
 ## [0.2.9](https://github.com/nambok/mentedb/compare/mentedb-v0.2.8...mentedb-v0.2.9) (2026-04-05)
 
 

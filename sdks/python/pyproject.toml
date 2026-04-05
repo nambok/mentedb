@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "mentedb"
-version = "0.2.9"
+version = "0.2.10"
 description = "The mind database for AI agents"
 readme = "README.md"
 license = "Apache-2.0"
