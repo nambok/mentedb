@@ -410,6 +410,8 @@ cargo doc --open         # Documentation
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+Found a bug or have a feature request? [Open an issue](https://github.com/nambok/mentedb/issues).
+
 ## License
 
 Apache 2.0, see [LICENSE](LICENSE) for details.
