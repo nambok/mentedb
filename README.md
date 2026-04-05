@@ -112,7 +112,7 @@ For Claude CLI, Copilot CLI, Cursor, Windsurf, and any MCP compatible client.
 cargo install mentedb-mcp
 ```
 
-See [mentedb-mcp](https://github.com/nambok/mentedb-mcp) for configuration.
+See [mentedb-mcp](https://github.com/nambok/mentedb-mcp) for setup, configuration, and the full list of tools.
 
 **10 tools available:** `store_memory`, `recall_memory`, `search_memories`, `relate_memories`, `forget_memory`, `assemble_context`, `get_stats`, `register_entity`, `get_cognitive_state`, `ingest_conversation`
 
