@@ -9,6 +9,10 @@ use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::{MemoryNode, MemoryType};
 use mentedb_core::types::{AgentId, MemoryId};
 use mentedb_core::MemoryEdge;
+use mentedb_extraction::{
+    ExtractionConfig, ExtractionPipeline, HttpExtractionProvider, LlmProvider,
+    map_extraction_type_to_memory_type,
+};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use uuid::Uuid;
@@ -74,6 +78,19 @@ pub struct RecallResult {
 pub struct SearchResult {
     pub id: String,
     pub score: f64,
+}
+
+// ---------------------------------------------------------------------------
+// IngestResult
+// ---------------------------------------------------------------------------
+
+#[napi(object)]
+pub struct IngestResult {
+    pub memories_stored: u32,
+    pub rejected_low_quality: u32,
+    pub rejected_duplicate: u32,
+    pub contradictions: u32,
+    pub stored_ids: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -197,11 +214,108 @@ impl MenteDB {
         self.inner.forget(id).map_err(mente_err)
     }
 
+    /// Extract memories from a conversation and store them.
+    ///
+    /// Requires `MENTEDB_LLM_PROVIDER` and `MENTEDB_LLM_API_KEY` env vars to be set,
+    /// or pass `provider` ("openai", "anthropic", "ollama") explicitly.
+    #[napi]
+    pub fn ingest(
+        &mut self,
+        conversation: String,
+        provider: Option<String>,
+        agent_id: Option<String>,
+    ) -> Result<IngestResult> {
+        let config = build_ts_extraction_config(provider.as_deref())?;
+
+        let http_provider = HttpExtractionProvider::new(config.clone())
+            .map_err(|e| Error::from_reason(format!("{e}")))?;
+        let pipeline = ExtractionPipeline::new(http_provider, config.clone());
+
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| Error::from_reason(format!("{e}")))?;
+        let all_memories = rt
+            .block_on(pipeline.extract_from_conversation(&conversation))
+            .map_err(|e| Error::from_reason(format!("{e}")))?;
+
+        let total = all_memories.len();
+        let quality_passed = pipeline.filter_quality(&all_memories);
+        let rejected_low_quality = (total - quality_passed.len()) as u32;
+
+        let aid = match agent_id {
+            Some(ref s) => parse_uuid(s)?,
+            None => AgentId::nil().into(),
+        };
+
+        let mut stored_ids = Vec::new();
+        for memory in &quality_passed {
+            let mt = map_extraction_type_to_memory_type(&memory.memory_type);
+            let mut node = MemoryNode::new(aid, mt, memory.content.clone(), vec![]);
+            node.tags = memory.tags.clone();
+            node.salience = memory.confidence;
+            node.confidence = memory.confidence;
+            let id = node.id;
+            self.inner.store(node).map_err(mente_err)?;
+            stored_ids.push(id.to_string());
+        }
+
+        Ok(IngestResult {
+            memories_stored: stored_ids.len() as u32,
+            rejected_low_quality,
+            rejected_duplicate: 0,
+            contradictions: 0,
+            stored_ids,
+        })
+    }
+
     /// Flush and close the database.
     #[napi]
     pub fn close(&mut self) -> Result<()> {
         self.inner.close().map_err(mente_err)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Extraction config helper
+// ---------------------------------------------------------------------------
+
+fn build_ts_extraction_config(provider_override: Option<&str>) -> Result<ExtractionConfig> {
+    let provider_str = match provider_override {
+        Some(p) => p.to_string(),
+        None => std::env::var("MENTEDB_LLM_PROVIDER").unwrap_or_default(),
+    };
+
+    let provider = match provider_str.to_lowercase().as_str() {
+        "openai" => LlmProvider::OpenAI,
+        "anthropic" => LlmProvider::Anthropic,
+        "ollama" => LlmProvider::Ollama,
+        _ => {
+            return Err(Error::from_reason(
+                "LLM provider not configured. Set MENTEDB_LLM_PROVIDER env var or pass provider argument.",
+            ));
+        }
+    };
+
+    let api_key = std::env::var("MENTEDB_LLM_API_KEY").ok();
+    let api_url = std::env::var("MENTEDB_LLM_BASE_URL")
+        .unwrap_or_else(|_| provider.default_url().to_string());
+    let model = std::env::var("MENTEDB_LLM_MODEL")
+        .unwrap_or_else(|_| provider.default_model().to_string());
+    let quality_threshold = std::env::var("MENTEDB_EXTRACTION_QUALITY_THRESHOLD")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.7);
+
+    Ok(ExtractionConfig {
+        provider,
+        api_key,
+        api_url,
+        model,
+        max_extractions_per_conversation: 50,
+        quality_threshold,
+        deduplication_threshold: 0.85,
+        enable_contradiction_check: true,
+        enable_deduplication: true,
+    })
 }
 
 // ---------------------------------------------------------------------------

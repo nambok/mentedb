@@ -18,9 +18,11 @@ mentedb-graph = { path = "../../crates/mentedb-graph" }
 mentedb-context = { path = "../../crates/mentedb-context" }
 mentedb-cognitive = { path = "../../crates/mentedb-cognitive" }
 mentedb-embedding = { path = "../../crates/mentedb-embedding" }
+mentedb-extraction = { path = "../../crates/mentedb-extraction" }
 mentedb = { path = "../../crates/mentedb" }
 uuid = { version = "1", features = ["v4"] }
 serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [build-dependencies]
 napi-build = "2"

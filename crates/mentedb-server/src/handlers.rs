@@ -13,6 +13,10 @@ use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::{AttributeValue, MemoryType};
 use mentedb_core::space::Permission;
 use mentedb_core::{MemoryEdge, MemoryNode};
+use mentedb_extraction::{
+    ExtractionConfig, ExtractionPipeline, HttpExtractionProvider,
+    map_extraction_type_to_memory_type,
+};
 use serde_json::{Map, Value, json};
 use tracing::error;
 use uuid::Uuid;
@@ -128,7 +132,7 @@ pub async fn store_memory(
         agent_id,
         memory_type,
         embedding,
-        content,
+        content: content.clone(),
         created_at: now,
         accessed_at: now,
         access_count: 0,
@@ -144,6 +148,26 @@ pub async fn store_memory(
         error!("store failed: {e}");
         ApiError::Internal(format!("store failed: {e}"))
     })?;
+
+    // Auto-extract: if enabled and content looks like a conversation, run extraction
+    if state.auto_extract && state.extraction_config.is_some() && looks_like_conversation(&content) {
+        let extraction_config = state.extraction_config.clone().unwrap();
+        match run_extraction(&extraction_config, &content, agent_id, space_id, &mut db).await {
+            Ok(extract_stats) => {
+                return Ok((
+                    StatusCode::CREATED,
+                    Json(json!({
+                        "id": id.to_string(),
+                        "status": "stored",
+                        "auto_extract": extract_stats,
+                    })),
+                ));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "auto-extraction failed, memory stored without extraction");
+            }
+        }
+    }
 
     Ok((
         StatusCode::CREATED,
@@ -343,6 +367,131 @@ pub async fn create_edge(
     })?;
 
     Ok((StatusCode::CREATED, Json(json!({ "status": "created" }))))
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1/ingest
+// ---------------------------------------------------------------------------
+
+/// Ingest a conversation: extract memories via LLM, filter, and store them.
+pub async fn ingest_conversation(
+    State(state): State<Arc<AppState>>,
+    agent: Option<Extension<AuthenticatedAgent>>,
+    Json(req): Json<Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    let agent_id = AgentId(parse_uuid(&req, "agent_id")?);
+    if let Some(Extension(ref authed)) = agent {
+        let tid: AgentId = authed
+            .agent_id
+            .parse()
+            .map_err(|_| ApiError::Internal("token contains invalid agent_id UUID".into()))?;
+        if tid != agent_id {
+            return Err(ApiError::Forbidden(
+                "agent_id in request body does not match token".into(),
+            ));
+        }
+    }
+
+    let extraction_config = state.extraction_config.as_ref().ok_or_else(|| {
+        ApiError::ServiceUnavailable(
+            "LLM provider not configured. Set MENTEDB_LLM_PROVIDER env var.".into(),
+        )
+    })?;
+
+    let conversation = req
+        .get("conversation")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError::BadRequest("missing or invalid 'conversation'".into()))?;
+
+    let space_id = match req.get("space_id") {
+        Some(v) => v
+            .as_str()
+            .and_then(|s| s.parse::<SpaceId>().ok())
+            .ok_or_else(|| ApiError::BadRequest("invalid 'space_id'".into()))?,
+        None => SpaceId::nil(),
+    };
+
+    let mut db = state.db.write().await;
+    let stats =
+        run_extraction(extraction_config, conversation, agent_id, space_id, &mut db).await?;
+
+    Ok((StatusCode::OK, Json(stats)))
+}
+
+/// Run the extraction pipeline and store accepted memories. Returns JSON stats.
+async fn run_extraction(
+    config: &ExtractionConfig,
+    conversation: &str,
+    agent_id: AgentId,
+    space_id: SpaceId,
+    db: &mut mentedb::MenteDb,
+) -> Result<Value, ApiError> {
+    let provider = HttpExtractionProvider::new(config.clone()).map_err(|e| {
+        error!("extraction provider init failed: {e}");
+        ApiError::Internal(format!("extraction provider init failed: {e}"))
+    })?;
+
+    let pipeline = ExtractionPipeline::new(provider, config.clone());
+
+    let all_memories = pipeline
+        .extract_from_conversation(conversation)
+        .await
+        .map_err(|e| {
+            error!("extraction failed: {e}");
+            ApiError::Internal(format!("extraction failed: {e}"))
+        })?;
+
+    let total_extracted = all_memories.len();
+    let quality_passed = pipeline.filter_quality(&all_memories);
+    let rejected_low_quality = total_extracted - quality_passed.len();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64;
+
+    let mut stored_ids = Vec::new();
+    for memory in &quality_passed {
+        let memory_type = map_extraction_type_to_memory_type(&memory.memory_type);
+        let id = MemoryId::new();
+        let node = MemoryNode {
+            id,
+            agent_id,
+            memory_type,
+            embedding: vec![],
+            content: memory.content.clone(),
+            created_at: now,
+            accessed_at: now,
+            access_count: 0,
+            salience: memory.confidence,
+            confidence: memory.confidence,
+            space_id,
+            attributes: std::collections::HashMap::new(),
+            tags: memory.tags.clone(),
+        };
+        match db.store(node) {
+            Ok(()) => stored_ids.push(id.to_string()),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to store extracted memory, skipping");
+            }
+        }
+    }
+
+    Ok(json!({
+        "memories_stored": stored_ids.len(),
+        "rejected_low_quality": rejected_low_quality,
+        "rejected_duplicate": 0,
+        "contradictions": 0,
+        "stored_ids": stored_ids,
+    }))
+}
+
+/// Heuristic: does this content look like a multi-turn conversation?
+fn looks_like_conversation(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    let patterns = ["user:", "assistant:", "human:", "ai:", "\nq:", "\na:"];
+    let matches = patterns.iter().filter(|p| lower.contains(*p)).count();
+    matches >= 2
 }
 
 // ---------------------------------------------------------------------------

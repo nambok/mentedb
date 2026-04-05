@@ -1599,6 +1599,7 @@ dependencies = [
  "mentedb",
  "mentedb-cognitive",
  "mentedb-core",
+ "mentedb-extraction",
  "prost",
  "serde",
  "serde_json",

@@ -457,6 +457,8 @@ mod tests {
             jwt_secret: None,
             admin_key: None,
             start_time: Instant::now(),
+            extraction_config: None,
+            auto_extract: false,
         });
         (state, tmp)
     }
@@ -751,6 +753,8 @@ mod tests {
                 jwt_secret: Some(secret.into()),
                 admin_key: Some("ak".into()),
                 start_time: Instant::now(),
+                extraction_config: None,
+                auto_extract: false,
             }),
             tmp,
         )

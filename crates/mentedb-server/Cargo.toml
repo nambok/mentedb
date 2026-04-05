@@ -14,6 +14,7 @@ categories = ["database-implementations", "web-programming::http-server"]
 mentedb = { workspace = true }
 mentedb-core = { workspace = true }
 mentedb-cognitive = { workspace = true }
+mentedb-extraction = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { version = "0.1", features = ["net"] }
 serde = { workspace = true }
@@ -41,6 +42,7 @@ http-body-util = "0.1"
 tempfile = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+mentedb-extraction = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true

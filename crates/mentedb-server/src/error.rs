@@ -14,6 +14,7 @@ pub enum ApiError {
     Forbidden(String),
     RateLimited,
     Internal(String),
+    ServiceUnavailable(String),
 }
 
 impl std::fmt::Display for ApiError {
@@ -25,6 +26,7 @@ impl std::fmt::Display for ApiError {
             Self::Forbidden(msg) => write!(f, "forbidden: {msg}"),
             Self::RateLimited => write!(f, "rate limited"),
             Self::Internal(msg) => write!(f, "internal error: {msg}"),
+            Self::ServiceUnavailable(msg) => write!(f, "service unavailable: {msg}"),
         }
     }
 }
@@ -41,6 +43,7 @@ impl IntoResponse for ApiError {
                 "too many requests".to_string(),
             ),
             Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
+            Self::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg.clone()),
         };
 
         let body = json!({ "error": message });
