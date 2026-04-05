@@ -53,6 +53,7 @@ cd sdks/typescript && npm run build
 - No emojis in code, comments, docs, or commit messages
 - No dashes (em dash or en dash) in prose. Use commas instead. Dashes in CLI flags and code are fine.
 - Commit style: conventional (feat:, fix:, chore:), single line, no emojis
+- NEVER include Co-authored-by or Authored-by trailers in commits
 
 ## Key types
 
