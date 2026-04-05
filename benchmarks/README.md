@@ -230,7 +230,26 @@ failure.
 5. **It scales.** 100 memories across 3 projects with 6 belief changes, sub-ms
    search, and correct supersession at every query.
 
-6. **Mem0 cannot do this.** In a direct comparison, Mem0 returned stale data and
-   took 21 seconds. MenteDB returned correct data in 4.7ms. Graph-based belief
-   propagation is fundamentally better than flat vector search for memory that
-   changes over time.
+6. **Mem0 cannot do this.** In a direct comparison, Mem0 returned stale data.
+   MenteDB returned only the current belief. Graph-based belief propagation is
+   fundamentally better than flat vector search for memory that changes over time.
+
+## Caveats
+
+We believe in honest benchmarking. Here is what these results do NOT prove:
+
+1. **Mem0 speed comparison includes API latency.** Mem0's 21s includes OpenAI
+   API calls for every `add()`. With a local embedding model, Mem0 would be
+   faster. The correctness difference (PASS vs FAIL on stale belief suppression)
+   is the real finding, not the raw speed number.
+
+2. **100 memories is small.** The sustained conversation test is a good starting
+   point, but production workloads with 10K+ memories would be more convincing.
+   The Criterion benchmarks show sub-ms context assembly at 10K, but the
+   quality benchmarks have not yet been validated at that scale.
+
+3. **Hash embeddings are not semantic.** The engine benchmarks use `search_text`
+   with hash embeddings (character n-gram based), not OpenAI or Cohere vectors.
+   Real-world retrieval quality depends on the embedding model. MenteDB now
+   supports pluggable providers (OpenAI, Cohere, Voyage) but these benchmarks
+   have not yet been run with real semantic embeddings.

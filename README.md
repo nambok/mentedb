@@ -344,7 +344,7 @@ docker-compose up -d
 | Speedup | **4,459x faster** | baseline |
 | Belief propagation | Graph edges suppress stale | Flat vector, no supersession |
 
-Mem0 returned both "Uses PostgreSQL" (stale) and "Prefers SQLite" (current). MenteDB returned only the current belief.
+Mem0 returned both "Uses PostgreSQL" (stale) and "Prefers SQLite" (current). MenteDB returned only the current belief. The speed difference includes Mem0's OpenAI API latency, so the correctness gap (PASS vs FAIL) is the more meaningful comparison.
 
 ### Performance Benchmarks (Criterion)
 
