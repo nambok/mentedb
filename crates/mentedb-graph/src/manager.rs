@@ -4,7 +4,7 @@ use std::path::Path;
 
 use mentedb_core::edge::MemoryEdge;
 use mentedb_core::error::{MenteError, MenteResult};
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{MemoryId};
 
 use crate::belief::propagate_update;
 use crate::contradiction::find_contradictions;
@@ -102,8 +102,7 @@ impl Default for GraphManager {
 mod tests {
     use super::*;
     use mentedb_core::edge::EdgeType;
-    use uuid::Uuid;
-
+    
     fn make_edge(src: MemoryId, tgt: MemoryId, etype: EdgeType) -> MemoryEdge {
         MemoryEdge {
             source: src,
@@ -117,8 +116,8 @@ mod tests {
     #[test]
     fn test_add_memory_and_relationship() {
         let mut mgr = GraphManager::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
         mgr.add_memory(a);
         mgr.add_memory(b);
         assert!(
@@ -130,8 +129,8 @@ mod tests {
     #[test]
     fn test_relationship_missing_node() {
         let mut mgr = GraphManager::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
         mgr.add_memory(a);
         // b not added
         assert!(
@@ -143,9 +142,9 @@ mod tests {
     #[test]
     fn test_context_subgraph() {
         let mut mgr = GraphManager::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
         mgr.add_memory(a);
         mgr.add_memory(b);
         mgr.add_memory(c);
@@ -162,8 +161,8 @@ mod tests {
     #[test]
     fn test_compact() {
         let mut mgr = GraphManager::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
         mgr.add_memory(a);
         mgr.add_memory(b);
         mgr.add_relationship(&make_edge(a, b, EdgeType::Caused))
@@ -177,8 +176,8 @@ mod tests {
     #[test]
     fn test_belief_propagation() {
         let mut mgr = GraphManager::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
         mgr.add_memory(a);
         mgr.add_memory(b);
         mgr.add_relationship(&MemoryEdge {

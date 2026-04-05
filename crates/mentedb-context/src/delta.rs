@@ -2,7 +2,7 @@
 
 use ahash::AHashSet;
 use mentedb_core::MemoryNode;
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{MemoryId};
 
 /// Result of computing a delta between two context sets.
 #[derive(Debug, Clone)]
@@ -107,12 +107,11 @@ impl Default for DeltaTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
-
+    
     #[test]
     fn test_compute_delta_all_new() {
         let tracker = DeltaTracker::new();
-        let ids = vec![Uuid::new_v4(), Uuid::new_v4()];
+        let ids = vec![MemoryId::new(), MemoryId::new()];
         let delta = tracker.compute_delta(&ids, &tracker.last_served);
         assert_eq!(delta.added.len(), 2);
         assert!(delta.removed.is_empty());
@@ -121,9 +120,9 @@ mod tests {
 
     #[test]
     fn test_compute_delta_mixed() {
-        let kept = Uuid::new_v4();
-        let old = Uuid::new_v4();
-        let new = Uuid::new_v4();
+        let kept = MemoryId::new();
+        let old = MemoryId::new();
+        let new = MemoryId::new();
 
         let mut previous = AHashSet::new();
         previous.insert(kept);
@@ -142,7 +141,7 @@ mod tests {
     fn test_update_advances_turn() {
         let mut tracker = DeltaTracker::new();
         assert_eq!(tracker.last_turn_id, 0);
-        tracker.update(&[Uuid::new_v4()]);
+        tracker.update(&[MemoryId::new()]);
         assert_eq!(tracker.last_turn_id, 1);
         assert_eq!(tracker.last_served.len(), 1);
     }
@@ -152,7 +151,7 @@ mod tests {
         use mentedb_core::memory::MemoryType;
 
         let mem = mentedb_core::MemoryNode::new(
-            Uuid::new_v4(),
+            MemoryId::new(),
             MemoryType::Episodic,
             "user switched to MySQL on March 15".to_string(),
             vec![],

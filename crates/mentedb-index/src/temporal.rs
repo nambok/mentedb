@@ -148,14 +148,13 @@ impl Default for TemporalIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
-
+    
     #[test]
     fn test_insert_and_range() {
         let idx = TemporalIndex::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
 
         idx.insert(a, 100);
         idx.insert(b, 200);
@@ -170,9 +169,9 @@ mod tests {
     #[test]
     fn test_latest() {
         let idx = TemporalIndex::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
 
         idx.insert(a, 100);
         idx.insert(b, 200);
@@ -187,7 +186,7 @@ mod tests {
     #[test]
     fn test_remove() {
         let idx = TemporalIndex::new();
-        let a = Uuid::new_v4();
+        let a = MemoryId::new();
         idx.insert(a, 100);
         idx.remove(a, 100);
 
@@ -197,7 +196,7 @@ mod tests {
     #[test]
     fn test_remove_by_id() {
         let idx = TemporalIndex::new();
-        let a = Uuid::new_v4();
+        let a = MemoryId::new();
         idx.insert(a, 500);
         idx.remove_by_id(a);
 

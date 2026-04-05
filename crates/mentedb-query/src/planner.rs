@@ -199,8 +199,7 @@ mod tests {
     use super::*;
     use crate::lexer::tokenize;
     use crate::parser::Parser;
-    use uuid::Uuid;
-
+    
     fn plan_mql(input: &str) -> QueryPlan {
         let tokens = tokenize(input).unwrap();
         let stmt = Parser::parse(&tokens).unwrap();
@@ -250,7 +249,7 @@ mod tests {
                 assert_eq!(
                     id,
                     "550e8400-e29b-41d4-a716-446655440000"
-                        .parse::<Uuid>()
+                        .parse::<MemoryId>()
                         .unwrap()
                 );
             }

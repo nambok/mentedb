@@ -112,8 +112,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use uuid::Uuid;
-
+    
     #[test]
     fn subscribe_and_publish() {
         let bus = EventBus::new();
@@ -122,7 +121,7 @@ mod tests {
         bus.subscribe(move |_| {
             c.fetch_add(1, Ordering::Relaxed);
         });
-        bus.publish(MenteEvent::SpaceCreated { id: Uuid::new_v4() });
+        bus.publish(MenteEvent::SpaceCreated { id: SpaceId::new() });
         assert_eq!(count.load(Ordering::Relaxed), 1);
     }
 
@@ -135,7 +134,7 @@ mod tests {
             c.fetch_add(1, Ordering::Relaxed);
         });
         bus.unsubscribe(sid);
-        bus.publish(MenteEvent::SpaceCreated { id: Uuid::new_v4() });
+        bus.publish(MenteEvent::SpaceCreated { id: SpaceId::new() });
         assert_eq!(count.load(Ordering::Relaxed), 0);
     }
 
@@ -149,7 +148,7 @@ mod tests {
                 c.fetch_add(1, Ordering::Relaxed);
             });
         }
-        bus.publish(MenteEvent::MemoryDeleted { id: Uuid::new_v4() });
+        bus.publish(MenteEvent::MemoryDeleted { id: MemoryId::new() });
         assert_eq!(count.load(Ordering::Relaxed), 3);
     }
 }

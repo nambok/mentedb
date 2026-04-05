@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn test_forget_by_agent_id() {
         let engine = ForgetEngine::new();
-        let agent = uuid::Uuid::new_v4();
+        let agent = AgentId::new();
         let mut m1 = make_memory("a", vec![1.0]);
         m1.agent_id = agent;
         let mut m2 = make_memory("b", vec![1.0]);
@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn test_forget_by_space_id() {
         let engine = ForgetEngine::new();
-        let space = uuid::Uuid::new_v4();
+        let space = SpaceId::new();
         let mut m1 = make_memory("a", vec![1.0]);
         m1.space_id = space;
 
@@ -191,7 +191,7 @@ mod tests {
         let request = ForgetRequest {
             agent_id: None,
             space_id: None,
-            memory_ids: vec![uuid::Uuid::new_v4()],
+            memory_ids: vec![MemoryId::new()],
             reason: "GDPR request".into(),
             requested_at: 5000,
         };

@@ -7,7 +7,7 @@ use mentedb_cognitive::trajectory::{
 };
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::{MemoryNode, MemoryType};
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{AgentId, MemoryId};
 use mentedb_core::MemoryEdge;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -109,7 +109,7 @@ impl MenteDB {
 
         let aid = match agent_id {
             Some(ref s) => parse_uuid(s)?,
-            None => Uuid::nil(),
+            None => AgentId::nil().into(),
         };
 
         let mut node = MemoryNode::new(aid, mt, content, emb);

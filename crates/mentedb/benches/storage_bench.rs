@@ -4,7 +4,7 @@ use mentedb::core::memory::{MemoryNode, MemoryType};
 use mentedb::index::hnsw::{HnswConfig, HnswIndex};
 use mentedb::query::mql::Mql;
 use mentedb::storage::StorageEngine;
-use uuid::Uuid;
+use mentedb_core::types::{AgentId};
 
 fn random_embedding(dim: usize) -> Vec<f32> {
     // Simple pseudo-random via system time mixed with counter.
@@ -34,7 +34,7 @@ fn random_embedding(dim: usize) -> Vec<f32> {
 
 fn make_memory(i: usize) -> MemoryNode {
     MemoryNode::new(
-        Uuid::new_v4(),
+        AgentId::new(),
         MemoryType::Episodic,
         format!("benchmark memory content for item number {i}"),
         random_embedding(128),
@@ -65,7 +65,7 @@ fn bench_hnsw_search(c: &mut Criterion) {
     let index = HnswIndex::new(HnswConfig::default());
     for _ in 0..10_000 {
         index
-            .insert(Uuid::new_v4(), &random_embedding(128))
+            .insert(AgentId::new(), &random_embedding(128))
             .unwrap();
     }
 
@@ -111,7 +111,7 @@ fn bench_mql_parse(c: &mut Criterion) {
             2 => format!(r#"RECALL memories WHERE content ~> "topic number {i}" LIMIT 10"#),
             3 => format!(
                 "TRAVERSE {} DEPTH 3 WHERE edge_type = caused",
-                Uuid::new_v4()
+                AgentId::new()
             ),
             _ => format!("RECALL memories WHERE salience > 0.{i:02} LIMIT 20"),
         })

@@ -8,7 +8,7 @@ use mentedb::context::{
     budget::{BudgetAllocation, TokenBudget, estimate_tokens},
 };
 use mentedb::prelude::*;
-use uuid::Uuid;
+use mentedb_core::types::{AgentId};
 
 fn main() {
     println!("=== Token Budget ===\n");
@@ -48,7 +48,7 @@ fn demonstrate_token_budget() {
 
 /// Create scored memories and assemble them with a given format.
 fn demonstrate_assembly(format: OutputFormat) {
-    let agent_id = Uuid::new_v4();
+    let agent_id = AgentId::new();
     let memories = create_sample_memories(agent_id);
 
     let config = AssemblyConfig {

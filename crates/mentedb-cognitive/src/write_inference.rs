@@ -1,7 +1,7 @@
 use mentedb_core::MemoryNode;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{MemoryId};
 
 #[derive(Debug, Clone)]
 pub enum InferredAction {
@@ -188,7 +188,7 @@ mod tests {
 
     fn make_memory(content: &str, embedding: Vec<f32>, mem_type: MemoryType) -> MemoryNode {
         let mut m = MemoryNode::new(
-            uuid::Uuid::new_v4(),
+            AgentId::new(),
             mem_type,
             content.to_string(),
             embedding,
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn test_flag_contradiction() {
-        let agent = uuid::Uuid::new_v4();
+        let agent = AgentId::new();
         let mut existing =
             make_memory("uses PostgreSQL", vec![1.0, 0.0, 0.0], MemoryType::Semantic);
         existing.agent_id = agent;

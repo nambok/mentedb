@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::types::{AgentId, SpaceId, Timestamp};
 
@@ -82,7 +81,7 @@ impl SpaceManager {
     /// Create a new space owned by `owner`.
     pub fn create_space(&mut self, name: &str, owner: AgentId) -> MemorySpace {
         let space = MemorySpace {
-            id: Uuid::new_v4(),
+            id: SpaceId::new(),
             name: name.to_string(),
             owner,
             access_list: vec![AccessEntry {
@@ -155,7 +154,7 @@ mod tests {
     use super::*;
 
     fn agent() -> AgentId {
-        Uuid::new_v4()
+        AgentId::new()
     }
 
     #[test]

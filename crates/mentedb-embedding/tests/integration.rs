@@ -2,7 +2,7 @@ use mentedb_core::memory::{MemoryNode, MemoryType};
 use mentedb_embedding::{
     EmbeddingCache, EmbeddingManager, EmbeddingProvider, HashEmbeddingProvider,
 };
-use uuid::Uuid;
+use mentedb_core::types::{AgentId};
 
 #[test]
 fn test_hash_provider_consistency() {
@@ -105,7 +105,7 @@ fn test_embed_memory_sets_embedding() {
     let mut manager = EmbeddingManager::new(Box::new(provider), 100);
 
     let mut node = MemoryNode::new(
-        Uuid::new_v4(),
+        AgentId::new(),
         MemoryType::Semantic,
         "This is a test memory about Rust programming.".to_string(),
         vec![], // empty embedding

@@ -18,7 +18,7 @@ use mentedb_context::{AssemblyConfig, ContextAssembler, ScoredMemory};
 use mentedb_embedding::{EmbeddingProvider, HashEmbeddingProvider};
 
 use tempfile::tempdir;
-use uuid::Uuid;
+use mentedb_core::types::{AgentId, MemoryId};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,7 +44,7 @@ fn embed(provider: &HashEmbeddingProvider, text: &str) -> Vec<f32> {
 }
 
 fn make_memory_from_text(
-    agent_id: Uuid,
+    agent_id: AgentId,
     content: &str,
     mem_type: MemoryType,
     provider: &HashEmbeddingProvider,
@@ -54,7 +54,7 @@ fn make_memory_from_text(
 }
 
 fn make_memory_with_tags(
-    agent_id: Uuid,
+    agent_id: AgentId,
     content: &str,
     mem_type: MemoryType,
     tags: Vec<String>,
@@ -66,7 +66,7 @@ fn make_memory_with_tags(
 }
 
 fn make_memory_at_time(
-    agent_id: Uuid,
+    agent_id: AgentId,
     content: &str,
     mem_type: MemoryType,
     created_at: u64,
@@ -92,7 +92,7 @@ fn make_memory_at_time(
 fn test_multi_turn_coding_conversation() {
     let dir = tempdir().unwrap();
     let mut db = MenteDb::open(dir.path()).unwrap();
-    let agent_id = Uuid::new_v4();
+    let agent_id = AgentId::new();
     let provider = embedder();
 
     let conversation: Vec<(&str, MemoryType)> = vec![
@@ -307,7 +307,7 @@ fn test_multi_turn_coding_conversation() {
 fn test_customer_support_agent() {
     let dir = tempdir().unwrap();
     let mut db = MenteDb::open(dir.path()).unwrap();
-    let agent_id = Uuid::new_v4();
+    let agent_id = AgentId::new();
     let provider = embedder();
 
     // Customer A: billing dispute about double charge
@@ -448,7 +448,7 @@ fn test_customer_support_agent() {
 fn test_research_assistant_knowledge_accumulation() {
     let dir = tempdir().unwrap();
     let mut db = MenteDb::open(dir.path()).unwrap();
-    let agent_id = Uuid::new_v4();
+    let agent_id = AgentId::new();
     let provider = embedder();
 
     let base_time = now_us() - 8 * DAY_US;
@@ -679,7 +679,7 @@ fn test_concurrent_multi_agent_writes() {
         let db = Arc::clone(&db);
         let provider = Arc::clone(&provider);
         let all_ids = Arc::clone(&all_ids);
-        let agent_id = Uuid::new_v4();
+        let agent_id = AgentId::new();
 
         let handle = thread::spawn(move || {
             let topics: Vec<String> = (0..memories_per_agent)
@@ -849,7 +849,7 @@ fn test_concurrent_multi_agent_writes() {
 /// high-salience content, and that the token count stays within limits.
 #[test]
 fn test_large_context_window_assembly() {
-    let agent_id = Uuid::new_v4();
+    let agent_id = AgentId::new();
     let provider = embedder();
 
     // Build 200 scored memories with varying salience and realistic content
@@ -1005,7 +1005,7 @@ fn test_large_context_window_assembly() {
 fn test_contradiction_chain() {
     let dir = tempdir().unwrap();
     let mut db = MenteDb::open(dir.path()).unwrap();
-    let agent_id = Uuid::new_v4();
+    let agent_id = AgentId::new();
     let provider = embedder();
 
     // Use very low thresholds to catch contradictions with hash embeddings.

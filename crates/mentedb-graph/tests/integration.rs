@@ -3,6 +3,7 @@
 use mentedb_core::edge::{EdgeType, MemoryEdge};
 use mentedb_graph::*;
 use uuid::Uuid;
+use mentedb_core::types::{MemoryId};
 
 type MemoryId = uuid::Uuid;
 
@@ -17,7 +18,7 @@ fn edge(src: MemoryId, tgt: MemoryId, etype: EdgeType, weight: f32) -> MemoryEdg
 }
 
 fn ids(n: usize) -> Vec<MemoryId> {
-    (0..n).map(|_| Uuid::new_v4()).collect()
+    (0..n).map(|_| MemoryId::new()).collect()
 }
 
 #[test]
@@ -171,9 +172,9 @@ fn test_graph_manager_save_load() {
     let dir = tempfile::tempdir().unwrap();
     let graph_dir = dir.path().join("graph");
 
-    let a = Uuid::new_v4();
-    let b = Uuid::new_v4();
-    let c = Uuid::new_v4();
+    let a = MemoryId::new();
+    let b = MemoryId::new();
+    let c = MemoryId::new();
 
     {
         let mut mgr = GraphManager::new();
@@ -209,8 +210,8 @@ fn test_graph_save_load_after_compact() {
     let dir = tempfile::tempdir().unwrap();
     let graph_dir = dir.path().join("graph");
 
-    let a = Uuid::new_v4();
-    let b = Uuid::new_v4();
+    let a = MemoryId::new();
+    let b = MemoryId::new();
 
     {
         let mut mgr = GraphManager::new();

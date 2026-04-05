@@ -1,16 +1,16 @@
 use mentedb_cognitive::*;
 use mentedb_core::MemoryNode;
 use mentedb_core::memory::MemoryType;
-use uuid::Uuid;
+use mentedb_core::types::{AgentId, MemoryId};
 
 fn make_memory(content: &str, embedding: Vec<f32>, mem_type: MemoryType) -> MemoryNode {
-    MemoryNode::new(Uuid::new_v4(), mem_type, content.to_string(), embedding)
+    MemoryNode::new(AgentId::new(), mem_type, content.to_string(), embedding)
 }
 
 #[test]
 fn test_stream_cognition_contradiction() {
     let stream = CognitionStream::new(256);
-    let mid = Uuid::new_v4();
+    let mid = MemoryId::new();
 
     // Feed a sentence that contradicts a known fact
     stream.feed_token("The system actually uses MySQL instead of PostgreSQL now");
@@ -36,7 +36,7 @@ fn test_stream_cognition_contradiction() {
 
 #[test]
 fn test_write_inference_contradiction() {
-    let agent = Uuid::new_v4();
+    let agent = AgentId::new();
 
     let mut existing = make_memory(
         "The backend uses PostgreSQL",
@@ -144,8 +144,8 @@ fn test_pain_trigger_matching() {
     let mut registry = PainRegistry::default();
 
     registry.record_pain(PainSignal {
-        id: Uuid::new_v4(),
-        memory_id: Uuid::new_v4(),
+        id: MemoryId::new(),
+        memory_id: MemoryId::new(),
         intensity: 0.95,
         trigger_keywords: vec!["mongodb".to_string(), "nosql".to_string()],
         description: "User strongly opposed MongoDB suggestion".to_string(),
@@ -174,7 +174,7 @@ fn test_speculative_cache() {
         |topic| {
             Some((
                 format!("Pre-assembled context for: {}", topic),
-                vec![Uuid::new_v4()],
+                vec![MemoryId::new()],
             ))
         },
     );

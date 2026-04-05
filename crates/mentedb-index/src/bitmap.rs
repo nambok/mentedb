@@ -8,7 +8,7 @@ use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
 use mentedb_core::error::{MenteError, MenteResult};
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{MemoryId};
 
 /// Roaring-bitmap-backed tag index.
 ///
@@ -211,12 +211,11 @@ impl Default for BitmapIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
-
+    
     #[test]
     fn test_add_and_query_tag() {
         let idx = BitmapIndex::new();
-        let id = Uuid::new_v4();
+        let id = MemoryId::new();
         idx.add_tag(id, "important");
 
         let results = idx.query_tag("important");
@@ -232,7 +231,7 @@ mod tests {
     #[test]
     fn test_remove_tag() {
         let idx = BitmapIndex::new();
-        let id = Uuid::new_v4();
+        let id = MemoryId::new();
         idx.add_tag(id, "foo");
         idx.remove_tag(id, "foo");
 
@@ -242,8 +241,8 @@ mod tests {
     #[test]
     fn test_tags_and() {
         let idx = BitmapIndex::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
 
         idx.add_tag(a, "x");
         idx.add_tag(a, "y");
@@ -256,8 +255,8 @@ mod tests {
     #[test]
     fn test_tags_or() {
         let idx = BitmapIndex::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
 
         idx.add_tag(a, "x");
         idx.add_tag(b, "y");
@@ -269,7 +268,7 @@ mod tests {
     #[test]
     fn test_remove_all() {
         let idx = BitmapIndex::new();
-        let id = Uuid::new_v4();
+        let id = MemoryId::new();
         idx.add_tag(id, "a");
         idx.add_tag(id, "b");
         idx.remove_all(id);

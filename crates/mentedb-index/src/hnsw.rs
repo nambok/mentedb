@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use mentedb_core::MenteError;
 use mentedb_core::error::MenteResult;
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{MemoryId};
 
 // ---------------------------------------------------------------------------
 // Distance metrics
@@ -561,8 +561,7 @@ fn select_neighbours(candidates: &[Candidate], max_count: usize) -> Vec<Candidat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
-
+    
     fn make_vec(dim: usize, val: f32) -> Vec<f32> {
         vec![val; dim]
     }
@@ -578,7 +577,7 @@ mod tests {
             metric: DistanceMetric::Euclidean,
             ..Default::default()
         });
-        let id = Uuid::new_v4();
+        let id = MemoryId::new();
         idx.insert(id, &make_vec(8, 1.0)).unwrap();
 
         let results = idx.search(&make_vec(8, 1.0), 1);
@@ -593,8 +592,8 @@ mod tests {
             metric: DistanceMetric::Euclidean,
             ..Default::default()
         });
-        let id_a = Uuid::new_v4();
-        let id_b = Uuid::new_v4();
+        let id_a = MemoryId::new();
+        let id_b = MemoryId::new();
         idx.insert(id_a, &make_vec(8, 0.0)).unwrap();
         idx.insert(id_b, &make_vec(8, 10.0)).unwrap();
 
@@ -606,7 +605,7 @@ mod tests {
     #[test]
     fn test_remove() {
         let idx = HnswIndex::new(HnswConfig::default());
-        let id = Uuid::new_v4();
+        let id = MemoryId::new();
         idx.insert(id, &make_vec(4, 1.0)).unwrap();
         assert_eq!(idx.len(), 1);
 
@@ -620,7 +619,7 @@ mod tests {
     #[test]
     fn test_duplicate_insert() {
         let idx = HnswIndex::new(HnswConfig::default());
-        let id = Uuid::new_v4();
+        let id = MemoryId::new();
         idx.insert(id, &make_vec(4, 1.0)).unwrap();
         assert!(idx.insert(id, &make_vec(4, 2.0)).is_err());
     }
@@ -637,7 +636,7 @@ mod tests {
         let dim = 16;
         let mut ids = Vec::new();
         for _ in 0..100 {
-            let id = Uuid::new_v4();
+            let id = MemoryId::new();
             ids.push(id);
             idx.insert(id, &random_vec(dim)).unwrap();
         }
@@ -653,7 +652,7 @@ mod tests {
             metric: DistanceMetric::Cosine,
             ..Default::default()
         });
-        let id = Uuid::new_v4();
+        let id = MemoryId::new();
         let vec = random_vec(8);
         idx.insert(id, &vec).unwrap();
 

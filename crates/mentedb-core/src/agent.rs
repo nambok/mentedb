@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::types::{AgentId, SpaceId, Timestamp};
 
@@ -45,11 +44,11 @@ impl AgentRegistry {
     /// Register a new agent and return it.
     pub fn register(&mut self, name: &str) -> Agent {
         let agent = Agent {
-            id: Uuid::new_v4(),
+            id: AgentId::new(),
             name: name.to_string(),
             created_at: now_micros(),
             metadata: HashMap::new(),
-            default_space: Uuid::nil(),
+            default_space: SpaceId::nil(),
         };
         self.agents.insert(agent.id, agent.clone());
         agent

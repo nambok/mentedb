@@ -32,12 +32,15 @@ use crate::grpc::{CognitionServiceImpl, MemoryServiceImpl};
 use crate::rate_limit::RateLimiter;
 use crate::state::AppState;
 
-fn parse_args() -> (PathBuf, u16, u16, Option<String>) {
+struct ServerConfig { data_dir: PathBuf, port: u16, grpc_port: u16, jwt_secret: Option<String>, admin_key: Option<String>, require_auth: bool }
+fn parse_args() -> ServerConfig {
     let args: Vec<String> = env::args().collect();
     let mut data_dir = PathBuf::from("./mentedb-data");
     let mut port: u16 = 6677;
     let mut grpc_port: u16 = 6678;
     let mut jwt_secret: Option<String> = None;
+    let mut admin_key: Option<String> = None;
+    let mut require_auth = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -84,14 +87,14 @@ fn parse_args() -> (PathBuf, u16, u16, Option<String>) {
                     std::process::exit(1);
                 }
             }
-            _ => {
-                eprintln!("Unknown argument: {}", args[i]);
-                std::process::exit(1);
-            }
+            "--admin-key" => { if i+1<args.len() { admin_key = Some(args[i+1].clone()); i+=2; } else { eprintln!("Error: --admin-key requires a value"); std::process::exit(1); } }
+            "--require-auth" => { require_auth = true; i += 1; }
+            _ => { eprintln!("Unknown argument: {}", args[i]); std::process::exit(1); }
         }
     }
-
-    (data_dir, port, grpc_port, jwt_secret)
+    if jwt_secret.is_none() && let Ok(v) = env::var("MENTEDB_JWT_SECRET") { jwt_secret = Some(v); }
+    if admin_key.is_none() && let Ok(v) = env::var("MENTEDB_ADMIN_KEY") { admin_key = Some(v); }
+    ServerConfig { data_dir, port, grpc_port, jwt_secret, admin_key, require_auth }
 }
 
 #[tokio::main]
@@ -103,7 +106,11 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let (data_dir, port, grpc_port, jwt_secret) = parse_args();
+    let config = parse_args();
+    let (data_dir, port, grpc_port, jwt_secret) = (config.data_dir, config.port, config.grpc_port, config.jwt_secret.clone());
+    let admin_key = config.admin_key.clone();
+    if config.require_auth && jwt_secret.is_none() { eprintln!("Error: --require-auth was set but no --jwt-secret provided"); std::process::exit(1); }
+    if jwt_secret.is_none() { eprintln!("WARNING: Running without authentication. All endpoints are open. Set --jwt-secret for production use."); }
 
     std::fs::create_dir_all(&data_dir)?;
 
@@ -118,7 +125,9 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(AppState {
         db: db.clone(),
+        spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: jwt_secret.clone(),
+        admin_key: admin_key.clone(),
         start_time: Instant::now(),
     });
 

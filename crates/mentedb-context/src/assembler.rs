@@ -6,7 +6,6 @@ use crate::budget::TokenBudget;
 use crate::delta::DeltaTracker;
 use crate::layout::{ContextBlock, ContextLayout, ScoredMemory};
 use crate::serializer::{CompactFormat, ContextSerializer, DeltaFormat, StructuredFormat};
-
 /// Output format for context serialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
@@ -236,7 +235,7 @@ mod tests {
     use mentedb_core::memory::MemoryType;
 
     fn make_scored(content: &str, score: f32, salience: f32, mem_type: MemoryType) -> ScoredMemory {
-        let mut m = MemoryNode::new(uuid::Uuid::new_v4(), mem_type, content.to_string(), vec![]);
+        let mut m = MemoryNode::new(AgentId::new(), mem_type, content.to_string(), vec![]);
         m.salience = salience;
         ScoredMemory { memory: m, score }
     }

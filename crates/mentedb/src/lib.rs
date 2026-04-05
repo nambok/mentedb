@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 
 use mentedb_context::{AssemblyConfig, ContextAssembler, ContextWindow, ScoredMemory};
 use mentedb_core::error::MenteResult;
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{MemoryId};
 use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
 use mentedb_graph::GraphManager;
 use mentedb_index::IndexManager;

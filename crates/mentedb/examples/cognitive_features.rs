@@ -8,7 +8,6 @@ use mentedb_cognitive::{
     TrajectoryNode, TrajectoryTracker, trajectory::DecisionState,
 };
 use mentedb_core::types::{MemoryId, Timestamp};
-use uuid::Uuid;
 
 fn main() {
     println!("=== Stream Cognition ===\n");
@@ -41,7 +40,7 @@ fn demonstrate_stream_cognition() {
     // Check the buffered output against known facts.
     // The stored fact says "dark mode" but the LLM said "light mode."
     let known_facts: Vec<(MemoryId, String)> = vec![(
-        Uuid::new_v4(),
+        MemoryId::new(),
         "User prefers dark mode in all editors".to_string(),
     )];
 
@@ -188,8 +187,8 @@ fn demonstrate_pain_signals() {
 
     // Record a pain signal from a past mistake.
     let signal = PainSignal {
-        id: Uuid::new_v4(),
-        memory_id: Uuid::new_v4(),
+        id: MemoryId::new(),
+        memory_id: MemoryId::new(),
         intensity: 0.9,
         trigger_keywords: vec!["deploy".into(), "production".into(), "rollback".into()],
         description: "Deployed untested code to production, required emergency rollback"
@@ -201,8 +200,8 @@ fn demonstrate_pain_signals() {
 
     // Record another pain signal.
     let signal2 = PainSignal {
-        id: Uuid::new_v4(),
-        memory_id: Uuid::new_v4(),
+        id: MemoryId::new(),
+        memory_id: MemoryId::new(),
         intensity: 0.6,
         trigger_keywords: vec!["cache".into(), "stale".into(), "invalidation".into()],
         description: "Cache invalidation bug caused stale data to be served for 2 hours"

@@ -90,13 +90,12 @@ impl VersionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
-
+    
     #[test]
     fn record_and_get_latest() {
         let mut store = VersionStore::new();
-        let mid = Uuid::new_v4();
-        let aid = Uuid::new_v4();
+        let mid = MemoryId::new();
+        let aid = AgentId::new();
         store.record_write(mid, aid, 111);
         store.record_write(mid, aid, 222);
         assert_eq!(store.get_latest(mid).unwrap().data_hash, 222);
@@ -105,8 +104,8 @@ mod tests {
     #[test]
     fn version_ids_increment() {
         let mut store = VersionStore::new();
-        let mid = Uuid::new_v4();
-        let aid = Uuid::new_v4();
+        let mid = MemoryId::new();
+        let aid = AgentId::new();
         let v1 = store.record_write(mid, aid, 1);
         let v2 = store.record_write(mid, aid, 2);
         assert_eq!(v2, v1 + 1);
@@ -115,8 +114,8 @@ mod tests {
     #[test]
     fn get_history() {
         let mut store = VersionStore::new();
-        let mid = Uuid::new_v4();
-        let aid = Uuid::new_v4();
+        let mid = MemoryId::new();
+        let aid = AgentId::new();
         store.record_write(mid, aid, 10);
         store.record_write(mid, aid, 20);
         store.record_write(mid, aid, 30);
@@ -126,8 +125,8 @@ mod tests {
     #[test]
     fn get_version_at() {
         let mut store = VersionStore::new();
-        let mid = Uuid::new_v4();
-        let aid = Uuid::new_v4();
+        let mid = MemoryId::new();
+        let aid = AgentId::new();
         store.record_write(mid, aid, 1);
         // The latest write should be findable at a very large timestamp.
         let ver = store.get_version_at(mid, u64::MAX);
@@ -137,7 +136,7 @@ mod tests {
     #[test]
     fn empty_history() {
         let store = VersionStore::new();
-        assert!(store.get_latest(Uuid::new_v4()).is_none());
-        assert!(store.get_history(Uuid::new_v4()).is_empty());
+        assert!(store.get_latest(MemoryId::new()).is_none());
+        assert!(store.get_history(MemoryId::new()).is_empty());
     }
 }

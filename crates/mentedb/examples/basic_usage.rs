@@ -5,14 +5,14 @@
 use std::path::Path;
 
 use mentedb::prelude::*;
-use uuid::Uuid;
+use mentedb_core::types::{AgentId};
 
 fn main() -> MenteResult<()> {
     // Open (or create) a database at a local directory.
     let mut db = MenteDb::open(Path::new("./example_data"))?;
 
     // Create an agent identity for this example.
-    let agent_id = Uuid::new_v4();
+    let agent_id = AgentId::new();
 
     // Store three memories with embeddings.
     // In a real application, embeddings come from a model like OpenAI's

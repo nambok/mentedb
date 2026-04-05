@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::RwLock;
 
 use crate::error::{MenteError, MenteResult};
-use crate::types::AgentId;
+use crate::types::{AgentId};
 
 /// Configurable resource limits.
 #[derive(Debug, Clone)]
@@ -155,8 +155,7 @@ impl ResourceTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
-
+    
     #[test]
     fn within_limits_succeeds() {
         let tracker = ResourceTracker::new(ResourceLimits {
@@ -164,7 +163,7 @@ mod tests {
             max_memory_bytes: Some(10_000),
             ..Default::default()
         });
-        let agent = Uuid::new_v4();
+        let agent = AgentId::new();
         assert!(tracker.check_can_write(agent, 100).is_ok());
         tracker.record_write(agent, 100);
         assert_eq!(tracker.usage().total_memories, 1);
@@ -177,7 +176,7 @@ mod tests {
             max_memories: Some(2),
             ..Default::default()
         });
-        let agent = Uuid::new_v4();
+        let agent = AgentId::new();
 
         tracker.record_write(agent, 50);
         tracker.record_write(agent, 50);
@@ -193,8 +192,8 @@ mod tests {
             max_memories_per_agent: Some(1),
             ..Default::default()
         });
-        let agent_a = Uuid::new_v4();
-        let agent_b = Uuid::new_v4();
+        let agent_a = AgentId::new();
+        let agent_b = AgentId::new();
 
         tracker.record_write(agent_a, 50);
         // agent_a is now at limit

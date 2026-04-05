@@ -8,7 +8,6 @@ use mentedb_core::MemoryNode;
 use mentedb_core::memory::MemoryType;
 
 use crate::budget::estimate_tokens;
-
 /// A memory with an associated relevance score.
 #[derive(Debug, Clone)]
 pub struct ScoredMemory {
@@ -195,7 +194,7 @@ mod tests {
 
     fn make_memory(content: &str, memory_type: MemoryType, salience: f32) -> MemoryNode {
         let mut m = MemoryNode::new(
-            uuid::Uuid::new_v4(),
+            AgentId::new(),
             memory_type,
             content.to_string(),
             vec![],

@@ -8,10 +8,10 @@ use mentedb_core::MemoryEdge;
 use mentedb_core::MemoryNode;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
-use uuid::Uuid;
+use mentedb_core::types::{AgentId};
 
 fn make_memory(content: &str, mem_type: MemoryType, salience: f32) -> MemoryNode {
-    let mut m = MemoryNode::new(Uuid::new_v4(), mem_type, content.to_string(), vec![]);
+    let mut m = MemoryNode::new(AgentId::new(), mem_type, content.to_string(), vec![]);
     m.salience = salience;
     m.tags = vec!["test".to_string()];
     m

@@ -1,10 +1,9 @@
 use mentedb_core::types::{MemoryId, Timestamp};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PainSignal {
-    pub id: Uuid,
+    pub id: MemoryId,
     pub memory_id: MemoryId,
     pub intensity: f32,
     pub trigger_keywords: Vec<String>,
@@ -113,8 +112,8 @@ mod tests {
 
     fn make_signal(keywords: Vec<&str>, intensity: f32) -> PainSignal {
         PainSignal {
-            id: Uuid::new_v4(),
-            memory_id: Uuid::new_v4(),
+            id: MemoryId::new(),
+            memory_id: MemoryId::new(),
             intensity,
             trigger_keywords: keywords.into_iter().map(String::from).collect(),
             description: "Test pain signal".to_string(),

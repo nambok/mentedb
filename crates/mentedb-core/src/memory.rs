@@ -1,9 +1,9 @@
 //! MemoryNode: the fundamental unit of storage in MenteDB.
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::types::*;
+use crate::types::{AgentId, MemoryId, SpaceId};
 
 /// The type classification of a memory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -70,7 +70,7 @@ impl MemoryNode {
             .as_micros() as u64;
 
         Self {
-            id: Uuid::new_v4(),
+            id: MemoryId::new(),
             agent_id,
             memory_type,
             embedding,
@@ -80,7 +80,7 @@ impl MemoryNode {
             access_count: 0,
             salience: 1.0,
             confidence: 1.0,
-            space_id: Uuid::nil(),
+            space_id: SpaceId::nil(),
             attributes: std::collections::HashMap::new(),
             tags: Vec::new(),
         }

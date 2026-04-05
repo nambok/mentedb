@@ -23,6 +23,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/edges", post(handlers::create_edge))
         .route("/v1/stats", get(handlers::stats))
         .route("/v1/auth/token", post(crate::auth::generate_token))
+        .route("/v1/spaces", post(handlers::create_space).get(handlers::list_spaces))
+        .route("/v1/spaces/{id}/grant", post(handlers::grant_space_access))
         .route("/v1/ws/stream", get(websocket::ws_handler))
         .with_state(state)
 }

@@ -5,13 +5,14 @@ use mentedb_consolidation::{
 use mentedb_core::MemoryNode;
 use mentedb_core::memory::MemoryType;
 use std::collections::HashMap;
+use mentedb_core::types::{AgentId, MemoryId, SpaceId};
 
 const DAY_US: u64 = 24 * 3600 * 1_000_000;
 
 fn make_memory(content: &str, embedding: Vec<f32>) -> MemoryNode {
     MemoryNode {
-        id: uuid::Uuid::new_v4(),
-        agent_id: uuid::Uuid::new_v4(),
+        id: MemoryId::new(),
+        agent_id: AgentId::new(),
         memory_type: MemoryType::Episodic,
         embedding,
         content: content.to_string(),
@@ -20,7 +21,7 @@ fn make_memory(content: &str, embedding: Vec<f32>) -> MemoryNode {
         access_count: 0,
         salience: 0.5,
         confidence: 0.8,
-        space_id: uuid::Uuid::new_v4(),
+        space_id: SpaceId::new(),
         attributes: HashMap::new(),
         tags: Vec::new(),
     }
@@ -29,8 +30,8 @@ fn make_memory(content: &str, embedding: Vec<f32>) -> MemoryNode {
 #[test]
 fn test_full_pipeline() {
     let now = 100 * DAY_US;
-    let agent_id = uuid::Uuid::new_v4();
-    let space_id = uuid::Uuid::new_v4();
+    let agent_id = AgentId::new();
+    let space_id = SpaceId::new();
 
     // Create test memories
     let mut memories: Vec<MemoryNode> = vec![

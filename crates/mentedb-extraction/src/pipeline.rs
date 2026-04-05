@@ -1,5 +1,6 @@
 use mentedb_cognitive::write_inference::{InferredAction, WriteInferenceEngine};
 use mentedb_core::MemoryNode;
+use mentedb_core::types::{AgentId, MemoryId};
 use mentedb_embedding::provider::EmbeddingProvider;
 
 use crate::config::ExtractionConfig;
@@ -16,7 +17,7 @@ pub struct CognitiveFinding {
     /// Human-readable description of the finding.
     pub description: String,
     /// ID of the existing memory involved, if any.
-    pub related_memory_id: Option<uuid::Uuid>,
+    pub related_memory_id: Option<MemoryId>,
 }
 
 /// Types of cognitive findings.
@@ -145,7 +146,7 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
 
         let memory_type = map_extraction_type_to_memory_type(&new_memory.memory_type);
         let temp_node = MemoryNode::new(
-            uuid::Uuid::nil(),
+            AgentId::nil(),
             memory_type,
             new_memory.content.clone(),
             embedding,

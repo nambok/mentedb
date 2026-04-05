@@ -8,7 +8,7 @@ use mentedb_cognitive::trajectory::{
 };
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
-use mentedb_core::types::{Embedding, MemoryId, Timestamp};
+use mentedb_core::types::{AgentId, Embedding, MemoryId, Timestamp};
 use mentedb_core::{MemoryEdge, MemoryNode};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -96,7 +96,7 @@ impl MenteDB {
 
         let aid = match agent_id {
             Some(s) => parse_uuid(s)?,
-            None => Uuid::new_v4(),
+            None => AgentId::new().into(),
         };
 
         let mt = parse_memory_type(memory_type)?;
@@ -453,7 +453,7 @@ impl PainRegistry {
     ) -> PyResult<()> {
         let mid = parse_uuid(memory_id)?;
         let signal = PainSignal {
-            id: Uuid::new_v4(),
+            id: MemoryId::new(),
             memory_id: mid,
             intensity,
             trigger_keywords: triggers,

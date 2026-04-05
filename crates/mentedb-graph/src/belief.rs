@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use ahash::{HashMap, HashSet};
 use mentedb_core::edge::EdgeType;
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{MemoryId};
 
 use crate::csr::CsrGraph;
 
@@ -120,8 +120,7 @@ pub fn propagate_update_with_config(
 mod tests {
     use super::*;
     use mentedb_core::edge::MemoryEdge;
-    use uuid::Uuid;
-
+    
     fn make_edge(src: MemoryId, tgt: MemoryId, etype: EdgeType, weight: f32) -> MemoryEdge {
         MemoryEdge {
             source: src,
@@ -135,8 +134,8 @@ mod tests {
     #[test]
     fn test_caused_propagation() {
         let mut g = CsrGraph::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
         g.add_edge(&make_edge(a, b, EdgeType::Caused, 1.0));
 
         let result = propagate_update(&g, a, 0.5);
@@ -150,8 +149,8 @@ mod tests {
     #[test]
     fn test_contradicts_propagation() {
         let mut g = CsrGraph::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
         g.add_edge(&make_edge(a, b, EdgeType::Contradicts, 1.0));
 
         let result = propagate_update(&g, a, 0.8);
@@ -164,8 +163,8 @@ mod tests {
     #[test]
     fn test_supersedes_propagation() {
         let mut g = CsrGraph::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
         g.add_edge(&make_edge(a, b, EdgeType::Supersedes, 1.0));
 
         let result = propagate_update(&g, a, 0.9);
@@ -179,7 +178,7 @@ mod tests {
     fn test_max_depth_limit() {
         // Build a chain of 10 Caused edges; only first 5 should propagate
         let mut g = CsrGraph::new();
-        let ids: Vec<MemoryId> = (0..10).map(|_| Uuid::new_v4()).collect();
+        let ids: Vec<MemoryId> = (0..10).map(|_| MemoryId::new()).collect();
         for i in 0..9 {
             g.add_edge(&make_edge(ids[i], ids[i + 1], EdgeType::Caused, 1.0));
         }
@@ -194,8 +193,8 @@ mod tests {
     #[test]
     fn test_unrelated_edges_dont_propagate() {
         let mut g = CsrGraph::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
         g.add_edge(&make_edge(a, b, EdgeType::Related, 1.0));
 
         let result = propagate_update(&g, a, 0.5);

@@ -7,11 +7,11 @@ use mentedb_index::manager::IndexManagerConfig;
 use mentedb_index::{
     BitmapIndex, DistanceMetric, HnswIndex, IndexManager, SalienceIndex, TemporalIndex,
 };
-use uuid::Uuid;
+use mentedb_core::types::{MemoryId};
 
 fn make_node(embedding: Vec<f32>, tags: Vec<&str>, salience: f32, created_at: u64) -> MemoryNode {
     let mut node = MemoryNode::new(
-        uuid::Uuid::new_v4(),
+        AgentId::new(),
         MemoryType::Episodic,
         "integration test memory".into(),
         embedding,
@@ -172,8 +172,8 @@ fn test_hnsw_save_load() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hnsw.json");
 
-    let id1 = Uuid::new_v4();
-    let id2 = Uuid::new_v4();
+    let id1 = MemoryId::new();
+    let id2 = MemoryId::new();
     let vec1 = vec![1.0, 0.0, 0.0, 0.0];
     let vec2 = vec![0.0, 1.0, 0.0, 0.0];
 
@@ -199,8 +199,8 @@ fn test_bitmap_save_load() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bitmap.json");
 
-    let id1 = Uuid::new_v4();
-    let id2 = Uuid::new_v4();
+    let id1 = MemoryId::new();
+    let id2 = MemoryId::new();
 
     {
         let idx = BitmapIndex::new();
@@ -224,9 +224,9 @@ fn test_temporal_save_load() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("temporal.json");
 
-    let id1 = Uuid::new_v4();
-    let id2 = Uuid::new_v4();
-    let id3 = Uuid::new_v4();
+    let id1 = MemoryId::new();
+    let id2 = MemoryId::new();
+    let id3 = MemoryId::new();
 
     {
         let idx = TemporalIndex::new();
@@ -250,9 +250,9 @@ fn test_salience_save_load() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("salience.json");
 
-    let id1 = Uuid::new_v4();
-    let id2 = Uuid::new_v4();
-    let id3 = Uuid::new_v4();
+    let id1 = MemoryId::new();
+    let id2 = MemoryId::new();
+    let id3 = MemoryId::new();
 
     {
         let idx = SalienceIndex::new();
@@ -276,7 +276,7 @@ fn test_index_manager_save_load() {
 
     let node = {
         let mut n = MemoryNode::new(
-            Uuid::new_v4(),
+            AgentId::new(),
             MemoryType::Episodic,
             "test memory".into(),
             vec![1.0, 0.0, 0.0, 0.0],

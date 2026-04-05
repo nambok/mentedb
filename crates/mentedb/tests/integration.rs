@@ -1,10 +1,10 @@
 use mentedb::MenteDb;
 use mentedb::prelude::*;
-use uuid::Uuid;
+use mentedb_core::types::{AgentId};
 
 fn make_memory(content: &str, embedding: Vec<f32>) -> MemoryNode {
     MemoryNode::new(
-        Uuid::new_v4(),
+        AgentId::new(),
         MemoryType::Episodic,
         content.to_string(),
         embedding,
@@ -113,7 +113,7 @@ fn test_close_and_reopen() {
 
 fn make_tagged_memory(embedding: Vec<f32>, tags: Vec<String>, salience: f32) -> MemoryNode {
     let mut node = MemoryNode::new(
-        Uuid::new_v4(),
+        AgentId::new(),
         MemoryType::Episodic,
         "test memory".into(),
         embedding,

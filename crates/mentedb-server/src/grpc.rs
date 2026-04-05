@@ -17,6 +17,7 @@ use tonic::{Request, Response, Status, Streaming};
 use tracing::{error, info};
 use uuid::Uuid;
 
+use crate::auth;
 use crate::state::AppState;
 
 pub mod pb {
@@ -25,6 +26,7 @@ pub mod pb {
 
 use pb::cognition_service_server::CognitionService;
 use pb::memory_service_server::MemoryService;
+use mentedb_core::types::{AgentId, MemoryId, SpaceId};
 
 // ---------------------------------------------------------------------------
 // CognitionService
@@ -47,10 +49,11 @@ impl CognitionService for CognitionServiceImpl {
         &self,
         request: Request<Streaming<pb::CognitionRequest>>,
     ) -> Result<Response<Self::StreamCognitionStream>, Status> {
+        authenticate_grpc_streaming(&self.state, request.metadata())?;
         info!("gRPC cognition stream opened");
 
         let stream_engine = Arc::new(CognitionStream::new(1000));
-        let known_facts: Arc<std::sync::Mutex<Vec<(Uuid, String)>>> =
+        let known_facts: Arc<std::sync::Mutex<Vec<(MemoryId, String)>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
 
         let (tx, rx) = mpsc::channel(128);
@@ -88,7 +91,7 @@ impl CognitionService for CognitionServiceImpl {
                         }
                     }
                     pb::cognition_request::Payload::KnownFact(kf) => {
-                        let mid = Uuid::parse_str(&kf.memory_id).unwrap_or_else(|_| Uuid::nil());
+                        let mid = kf.memory_id.parse::<MemoryId>().unwrap_or_else(|_| MemoryId::nil());
                         facts.lock().unwrap().push((mid, kf.content));
                     }
                     pb::cognition_request::Payload::EndOfTurn(_) => {
@@ -175,14 +178,19 @@ impl MemoryService for MemoryServiceImpl {
         &self,
         request: Request<pb::StoreRequest>,
     ) -> Result<Response<pb::StoreResponse>, Status> {
+        let caller = authenticate_grpc_request(&self.state, &request)?;
         let req = request.into_inner();
 
-        let agent_id = parse_uuid_field(&req.agent_id, "agent_id")?;
+        let agent_id = AgentId(parse_uuid_field(&req.agent_id, "agent_id")?);
+        if let Some(ref ta) = caller {
+            let tu: AgentId = ta.parse().map_err(|_| Status::internal("bad token agent_id"))?;
+            if tu != agent_id { return Err(Status::permission_denied("agent_id mismatch")); }
+        }
         let memory_type = parse_memory_type_str(&req.memory_type)?;
         let space_id = if req.space_id.is_empty() {
-            Uuid::nil()
+            SpaceId::nil()
         } else {
-            parse_uuid_field(&req.space_id, "space_id")?
+            SpaceId(parse_uuid_field(&req.space_id, "space_id")?)
         };
 
         let salience = if req.salience == 0.0 {
@@ -201,7 +209,7 @@ impl MemoryService for MemoryServiceImpl {
             .unwrap_or_default()
             .as_micros() as u64;
 
-        let id = Uuid::new_v4();
+        let id = MemoryId::new();
 
         let attributes = req
             .attributes
@@ -241,6 +249,7 @@ impl MemoryService for MemoryServiceImpl {
         &self,
         request: Request<pb::RecallRequest>,
     ) -> Result<Response<pb::RecallResponse>, Status> {
+        authenticate_grpc_request(&self.state, &request)?;
         let req = request.into_inner();
 
         let mut db = self.state.db.write().await;
@@ -262,6 +271,7 @@ impl MemoryService for MemoryServiceImpl {
         &self,
         request: Request<pb::SearchRequest>,
     ) -> Result<Response<pb::SearchResponse>, Status> {
+        authenticate_grpc_request(&self.state, &request)?;
         let req = request.into_inner();
         let k = if req.k == 0 { 10 } else { req.k as usize };
 
@@ -290,8 +300,9 @@ impl MemoryService for MemoryServiceImpl {
         &self,
         request: Request<pb::ForgetRequest>,
     ) -> Result<Response<pb::ForgetResponse>, Status> {
+        authenticate_grpc_request(&self.state, &request)?;
         let req = request.into_inner();
-        let id = parse_uuid_field(&req.id, "id")?;
+        let id = MemoryId(parse_uuid_field(&req.id, "id")?);
 
         let mut db = self.state.db.write().await;
         db.forget(id).map_err(|e| {
@@ -308,9 +319,10 @@ impl MemoryService for MemoryServiceImpl {
         &self,
         request: Request<pb::RelateRequest>,
     ) -> Result<Response<pb::RelateResponse>, Status> {
+        authenticate_grpc_request(&self.state, &request)?;
         let req = request.into_inner();
-        let source = parse_uuid_field(&req.source, "source")?;
-        let target = parse_uuid_field(&req.target, "target")?;
+        let source = MemoryId(parse_uuid_field(&req.source, "source")?);
+        let target = MemoryId(parse_uuid_field(&req.target, "target")?);
         let edge_type = parse_edge_type_str(&req.edge_type)?;
         let weight = if req.weight == 0.0 { 1.0 } else { req.weight };
 
@@ -337,6 +349,26 @@ impl MemoryService for MemoryServiceImpl {
             status: "created".into(),
         }))
     }
+}
+
+
+#[allow(clippy::result_large_err)]
+fn authenticate_grpc_request<T>(state: &AppState, request: &Request<T>) -> Result<Option<String>, Status> {
+    let secret = match &state.jwt_secret { Some(s) => s, None => return Ok(None) };
+    let token = request.metadata().get("authorization").and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| Status::unauthenticated("missing or invalid authorization metadata"))?;
+    auth::validate_token(secret, token).map(|c| Some(c.agent_id))
+        .map_err(|e| Status::unauthenticated(format!("invalid token: {e}")))
+}
+#[allow(clippy::result_large_err)]
+fn authenticate_grpc_streaming(state: &AppState, metadata: &tonic::metadata::MetadataMap) -> Result<Option<String>, Status> {
+    let secret = match &state.jwt_secret { Some(s) => s, None => return Ok(None) };
+    let token = metadata.get("authorization").and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or_else(|| Status::unauthenticated("missing or invalid authorization metadata"))?;
+    auth::validate_token(secret, token).map(|c| Some(c.agent_id))
+        .map_err(|e| Status::unauthenticated(format!("invalid token: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +429,7 @@ mod tests {
         let state = Arc::new(AppState {
             db: Arc::new(RwLock::new(db)),
             jwt_secret: None,
+            admin_key: None,
             start_time: Instant::now(),
         });
         (state, tmp)
@@ -409,7 +442,7 @@ mod tests {
             state: state.clone(),
         };
 
-        let agent_id = Uuid::new_v4().to_string();
+        let agent_id = AgentId::new().to_string();
         let store_req = Request::new(pb::StoreRequest {
             agent_id: agent_id.clone(),
             memory_type: "episodic".into(),
@@ -444,7 +477,7 @@ mod tests {
             state: state.clone(),
         };
 
-        let agent_id = Uuid::new_v4().to_string();
+        let agent_id = AgentId::new().to_string();
         let store_resp = svc
             .store(Request::new(pb::StoreRequest {
                 agent_id,
@@ -477,7 +510,7 @@ mod tests {
             state: state.clone(),
         };
 
-        let agent_id = Uuid::new_v4().to_string();
+        let agent_id = AgentId::new().to_string();
         let id1 = svc
             .store(Request::new(pb::StoreRequest {
                 agent_id: agent_id.clone(),
@@ -566,7 +599,7 @@ mod tests {
         let mut inbound = response.into_inner();
 
         // Register a known fact
-        let mid = Uuid::new_v4();
+        let mid = MemoryId::new();
         tx.send(pb::CognitionRequest {
             payload: Some(pb::cognition_request::Payload::KnownFact(pb::KnownFact {
                 memory_id: mid.to_string(),
@@ -649,7 +682,7 @@ mod tests {
 
         let result = svc
             .store(Request::new(pb::StoreRequest {
-                agent_id: Uuid::new_v4().to_string(),
+                agent_id: AgentId::new().to_string(),
                 memory_type: "nonexistent".into(),
                 content: "test".into(),
                 embedding: vec![],
@@ -680,5 +713,45 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    fn make_auth_test_state(secret: &str) -> (Arc<AppState>, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let db = MenteDb::open(tmp.path()).unwrap();
+        (Arc::new(AppState { db: Arc::new(RwLock::new(db)), jwt_secret: Some(secret.into()), admin_key: Some("ak".into()), start_time: Instant::now() }), tmp)
+    }
+    #[tokio::test]
+    async fn test_grpc_auth_required_when_secret_set() {
+        let (s, _t) = make_auth_test_state("s");
+        let svc = MemoryServiceImpl { state: s };
+        let r = svc.recall(Request::new(pb::RecallRequest { query: "RECALL memories LIMIT 10".into() })).await;
+        assert!(r.is_err()); assert_eq!(r.unwrap_err().code(), tonic::Code::Unauthenticated);
+    }
+    #[tokio::test]
+    async fn test_grpc_auth_succeeds_with_valid_token() {
+        let (s, _t) = make_auth_test_state("s");
+        let svc = MemoryServiceImpl { state: s };
+        let a = AgentId::new(); let tok = crate::auth::create_token("s", &a.to_string(), 1);
+        let mut r = Request::new(pb::StoreRequest { agent_id: a.to_string(), memory_type: "episodic".into(), content: "t".into(), embedding: vec![], tags: vec![], attributes: HashMap::new(), space_id: String::new(), salience: 0.5, confidence: 1.0 });
+        r.metadata_mut().insert("authorization", format!("Bearer {tok}").parse().unwrap());
+        assert_eq!(svc.store(r).await.unwrap().into_inner().status, "stored");
+    }
+    #[tokio::test]
+    async fn test_grpc_auth_rejects_wrong_agent_id() {
+        let (s, _t) = make_auth_test_state("s");
+        let svc = MemoryServiceImpl { state: s };
+        let ta = AgentId::new(); let ra = AgentId::new();
+        let tok = crate::auth::create_token("s", &ta.to_string(), 1);
+        let mut r = Request::new(pb::StoreRequest { agent_id: ra.to_string(), memory_type: "episodic".into(), content: "t".into(), embedding: vec![], tags: vec![], attributes: HashMap::new(), space_id: String::new(), salience: 0.5, confidence: 1.0 });
+        r.metadata_mut().insert("authorization", format!("Bearer {tok}").parse().unwrap());
+        assert_eq!(svc.store(r).await.unwrap_err().code(), tonic::Code::PermissionDenied);
+    }
+    #[tokio::test]
+    async fn test_grpc_auth_invalid_token() {
+        let (s, _t) = make_auth_test_state("s");
+        let svc = MemoryServiceImpl { state: s };
+        let mut r = Request::new(pb::RecallRequest { query: "RECALL memories LIMIT 10".into() });
+        r.metadata_mut().insert("authorization", "Bearer bad.tok".parse().unwrap());
+        assert_eq!(svc.recall(r).await.unwrap_err().code(), tonic::Code::Unauthenticated);
     }
 }

@@ -149,8 +149,7 @@ impl ConflictResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
-
+    
     fn make_version(
         agent: AgentId,
         content: &str,
@@ -168,16 +167,16 @@ mod tests {
     #[test]
     fn no_conflict_single_version() {
         let r = ConflictResolver::new();
-        let mid = Uuid::new_v4();
-        let v = make_version(Uuid::new_v4(), "a", 0.9, 100);
+        let mid = MemoryId::new();
+        let v = make_version(AgentId::new(), "a", 0.9, 100);
         assert!(r.detect_conflict(mid, &[v]).is_none());
     }
 
     #[test]
     fn no_conflict_same_agent() {
         let r = ConflictResolver::new();
-        let mid = Uuid::new_v4();
-        let a = Uuid::new_v4();
+        let mid = MemoryId::new();
+        let a = AgentId::new();
         let v1 = make_version(a, "a", 0.9, 100);
         let v2 = make_version(a, "b", 0.8, 200);
         assert!(r.detect_conflict(mid, &[v1, v2]).is_none());
@@ -186,9 +185,9 @@ mod tests {
     #[test]
     fn detect_conflict_different_agents() {
         let r = ConflictResolver::new();
-        let mid = Uuid::new_v4();
-        let a1 = Uuid::new_v4();
-        let a2 = Uuid::new_v4();
+        let mid = MemoryId::new();
+        let a1 = AgentId::new();
+        let a2 = AgentId::new();
         let v1 = make_version(a1, "v1", 0.8, 1_000_000);
         let v2 = make_version(a2, "v2", 0.9, 1_500_000);
         let conflict = r.detect_conflict(mid, &[v1, v2]);
@@ -199,10 +198,10 @@ mod tests {
     #[test]
     fn resolve_keep_latest() {
         let r = ConflictResolver::new();
-        let a1 = Uuid::new_v4();
-        let a2 = Uuid::new_v4();
+        let a1 = AgentId::new();
+        let a2 = AgentId::new();
         let conflict = Conflict {
-            memory_id: Uuid::new_v4(),
+            memory_id: MemoryId::new(),
             versions: vec![
                 make_version(a1, "old", 0.9, 100),
                 make_version(a2, "new", 0.5, 200),
@@ -216,10 +215,10 @@ mod tests {
     #[test]
     fn resolve_keep_highest_confidence() {
         let r = ConflictResolver::new();
-        let a1 = Uuid::new_v4();
-        let a2 = Uuid::new_v4();
+        let a1 = AgentId::new();
+        let a2 = AgentId::new();
         let conflict = Conflict {
-            memory_id: Uuid::new_v4(),
+            memory_id: MemoryId::new(),
             versions: vec![
                 make_version(a1, "confident", 0.95, 100),
                 make_version(a2, "unsure", 0.3, 200),

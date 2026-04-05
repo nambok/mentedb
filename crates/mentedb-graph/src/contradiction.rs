@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use ahash::HashSet;
 use mentedb_core::edge::EdgeType;
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{MemoryId};
 
 use crate::csr::CsrGraph;
 
@@ -143,8 +143,7 @@ pub fn detect_cycles(graph: &CsrGraph, edge_types: &[EdgeType]) -> Vec<Vec<Memor
 mod tests {
     use super::*;
     use mentedb_core::edge::MemoryEdge;
-    use uuid::Uuid;
-
+    
     fn make_edge(src: MemoryId, tgt: MemoryId, etype: EdgeType, weight: f32) -> MemoryEdge {
         MemoryEdge {
             source: src,
@@ -158,9 +157,9 @@ mod tests {
     #[test]
     fn test_direct_contradictions() {
         let mut g = CsrGraph::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
 
         g.add_edge(&make_edge(a, b, EdgeType::Contradicts, 1.0));
         g.add_edge(&make_edge(c, a, EdgeType::Contradicts, 1.0));
@@ -173,9 +172,9 @@ mod tests {
     #[test]
     fn test_transitive_contradictions() {
         let mut g = CsrGraph::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
 
         // a is supported by b, and b contradicts c
         g.add_edge(&make_edge(b, a, EdgeType::Supports, 1.0));
@@ -188,9 +187,9 @@ mod tests {
     #[test]
     fn test_find_superseded() {
         let mut g = CsrGraph::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
 
         g.add_edge(&make_edge(a, b, EdgeType::Supersedes, 1.0));
         g.add_edge(&make_edge(b, c, EdgeType::Supersedes, 1.0));
@@ -204,9 +203,9 @@ mod tests {
     #[test]
     fn test_detect_cycle() {
         let mut g = CsrGraph::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
 
         g.add_edge(&make_edge(a, b, EdgeType::Caused, 1.0));
         g.add_edge(&make_edge(b, c, EdgeType::Caused, 1.0));
@@ -220,9 +219,9 @@ mod tests {
     #[test]
     fn test_no_cycle() {
         let mut g = CsrGraph::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
 
         g.add_edge(&make_edge(a, b, EdgeType::Caused, 1.0));
         g.add_edge(&make_edge(b, c, EdgeType::Caused, 1.0));

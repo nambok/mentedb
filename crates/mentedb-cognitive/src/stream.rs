@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{MemoryId};
 use parking_lot::Mutex;
 
 #[derive(Debug, Clone)]
@@ -166,8 +166,7 @@ impl CognitionStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
-
+    
     #[test]
     fn test_feed_and_drain() {
         let stream = CognitionStream::new(100);
@@ -190,7 +189,7 @@ mod tests {
     #[test]
     fn test_contradiction_alert() {
         let stream = CognitionStream::new(100);
-        let mid = Uuid::new_v4();
+        let mid = MemoryId::new();
         stream.feed_token("The system does not use PostgreSQL, actually it uses MySQL");
 
         let facts = vec![(mid, "The system uses PostgreSQL for storage".to_string())];

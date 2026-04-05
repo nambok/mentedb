@@ -174,7 +174,7 @@ mod tests {
                 "database schema design".to_string(),
                 "API authentication".to_string(),
             ],
-            |topic| Some((format!("Context for {}", topic), vec![uuid::Uuid::new_v4()])),
+            |topic| Some((format!("Context for {}", topic), vec![MemoryId::new()])),
         );
 
         assert_eq!(cache.stats().cache_size, 2);

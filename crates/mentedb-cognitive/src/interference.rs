@@ -1,5 +1,5 @@
 use mentedb_core::MemoryNode;
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{MemoryId};
 
 #[derive(Debug, Clone)]
 pub struct InterferencePair {
@@ -141,7 +141,7 @@ mod tests {
 
     fn make_memory(content: &str, embedding: Vec<f32>) -> MemoryNode {
         MemoryNode::new(
-            uuid::Uuid::new_v4(),
+            AgentId::new(),
             MemoryType::Semantic,
             content.to_string(),
             embedding,
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn test_arrange_separation() {
-        let ids: Vec<MemoryId> = (0..4).map(|_| uuid::Uuid::new_v4()).collect();
+        let ids: Vec<MemoryId> = (0..4).map(|_| AgentId::new()).collect();
         let pairs = vec![InterferencePair {
             memory_a: ids[0],
             memory_b: ids[1],

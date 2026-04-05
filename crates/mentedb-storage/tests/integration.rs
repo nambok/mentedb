@@ -3,7 +3,7 @@
 use mentedb_core::MemoryNode;
 use mentedb_core::memory::MemoryType;
 use mentedb_storage::StorageEngine;
-use uuid::Uuid;
+use mentedb_core::types::{AgentId};
 
 #[test]
 fn test_store_and_load_memory() {
@@ -11,7 +11,7 @@ fn test_store_and_load_memory() {
     let mut engine = StorageEngine::open(dir.path()).unwrap();
 
     let node = MemoryNode::new(
-        Uuid::new_v4(),
+        AgentId::new(),
         MemoryType::Episodic,
         "The user prefers Rust over Go".to_string(),
         vec![0.1, 0.2, 0.3, 0.4],
@@ -35,7 +35,7 @@ fn test_multiple_memories() {
     let nodes: Vec<MemoryNode> = (0..10)
         .map(|i| {
             MemoryNode::new(
-                Uuid::new_v4(),
+                AgentId::new(),
                 MemoryType::Semantic,
                 format!("memory #{i}"),
                 vec![i as f32; 4],
@@ -61,7 +61,7 @@ fn test_persist_across_reopen() {
     let dir = tempfile::tempdir().unwrap();
 
     let node = MemoryNode::new(
-        Uuid::new_v4(),
+        AgentId::new(),
         MemoryType::Procedural,
         "persisted memory".to_string(),
         vec![3.14, 2.72],
@@ -87,7 +87,7 @@ fn test_checkpoint_and_reload() {
     let dir = tempfile::tempdir().unwrap();
 
     let node = MemoryNode::new(
-        Uuid::new_v4(),
+        AgentId::new(),
         MemoryType::AntiPattern,
         "don't use global state".to_string(),
         vec![0.0, 1.0],

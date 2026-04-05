@@ -8,6 +8,7 @@ use mentedb_core::conflict::{ConflictResolver, ConflictVersion, Resolution};
 use mentedb_core::event::{EventBus, MenteEvent};
 use mentedb_core::mvcc::VersionStore;
 use mentedb_core::space::{Permission, SpaceManager};
+use mentedb_core::types::{AgentId, MemoryId};
 
 #[test]
 fn full_agent_space_workflow() {
@@ -45,7 +46,7 @@ fn version_tracking_across_agents() {
     let bob = agents.register("bob");
 
     let mut versions = VersionStore::new();
-    let mid = uuid::Uuid::new_v4();
+    let mid = MemoryId::new();
 
     let v1 = versions.record_write(mid, alice.id, 0xAA);
     let v2 = versions.record_write(mid, bob.id, 0xBB);
@@ -68,8 +69,8 @@ fn event_bus_integration() {
         c.fetch_add(1, Ordering::Relaxed);
     });
 
-    let mid = uuid::Uuid::new_v4();
-    let aid = uuid::Uuid::new_v4();
+    let mid = MemoryId::new();
+    let aid = AgentId::new();
     bus.publish(MenteEvent::MemoryCreated {
         id: mid,
         agent_id: aid,
@@ -89,7 +90,7 @@ fn conflict_detection_and_resolution() {
     let bob = agents.register("bob");
 
     let resolver = ConflictResolver::new();
-    let mid = uuid::Uuid::new_v4();
+    let mid = MemoryId::new();
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

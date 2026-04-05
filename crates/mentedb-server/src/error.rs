@@ -11,6 +11,7 @@ pub enum ApiError {
     BadRequest(String),
     NotFound(String),
     Unauthorized(String),
+    Forbidden(String),
     RateLimited,
     Internal(String),
 }
@@ -21,6 +22,7 @@ impl std::fmt::Display for ApiError {
             Self::BadRequest(msg) => write!(f, "bad request: {msg}"),
             Self::NotFound(msg) => write!(f, "not found: {msg}"),
             Self::Unauthorized(msg) => write!(f, "unauthorized: {msg}"),
+            Self::Forbidden(msg) => write!(f, "forbidden: {msg}"),
             Self::RateLimited => write!(f, "rate limited"),
             Self::Internal(msg) => write!(f, "internal error: {msg}"),
         }
@@ -33,6 +35,7 @@ impl IntoResponse for ApiError {
             Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             Self::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
+            Self::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             Self::RateLimited => (
                 StatusCode::TOO_MANY_REQUESTS,
                 "too many requests".to_string(),

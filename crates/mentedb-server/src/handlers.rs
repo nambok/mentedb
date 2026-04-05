@@ -7,8 +7,11 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use axum::Extension;
+use crate::auth::AuthenticatedAgent;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::{AttributeValue, MemoryType};
+use mentedb_core::space::Permission;
 use mentedb_core::{MemoryEdge, MemoryNode};
 use serde_json::{Map, Value, json};
 use tracing::error;
@@ -16,6 +19,7 @@ use uuid::Uuid;
 
 use crate::error::ApiError;
 use crate::state::AppState;
+use mentedb_core::types::{AgentId, MemoryId, SpaceId};
 
 // ---------------------------------------------------------------------------
 // GET /v1/health
@@ -63,9 +67,17 @@ pub async fn stats(State(state): State<Arc<AppState>>) -> Result<impl IntoRespon
 /// Stores a new memory node in the database.
 pub async fn store_memory(
     State(state): State<Arc<AppState>>,
+    agent: Option<Extension<AuthenticatedAgent>>,
     Json(req): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let agent_id = parse_uuid(&req, "agent_id")?;
+    let agent_id = AgentId(parse_uuid(&req, "agent_id")?);
+    if let Some(Extension(ref authed)) = agent {
+        let tid: AgentId = authed.agent_id.parse()
+            .map_err(|_| ApiError::Internal("token contains invalid agent_id UUID".into()))?;
+        if tid != agent_id {
+            return Err(ApiError::Forbidden("agent_id in request body does not match token".into()));
+        }
+    }
     let memory_type = parse_memory_type(&req)?;
 
     let content = req
@@ -89,9 +101,9 @@ pub async fn store_memory(
     let space_id = match req.get("space_id") {
         Some(v) => v
             .as_str()
-            .and_then(|s| Uuid::parse_str(s).ok())
+            .and_then(|s| s.parse::<SpaceId>().ok())
             .ok_or_else(|| ApiError::BadRequest("invalid 'space_id'".into()))?,
-        None => Uuid::nil(),
+        None => SpaceId::nil(),
     };
 
     let now = std::time::SystemTime::now()
@@ -99,7 +111,7 @@ pub async fn store_memory(
         .unwrap_or_default()
         .as_micros() as u64;
 
-    let id = Uuid::new_v4();
+    let id = MemoryId::new();
 
     let salience = req.get("salience").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
     let confidence = req
@@ -142,10 +154,10 @@ pub async fn store_memory(
 /// Retrieves a single memory by its UUID.
 pub async fn get_memory(
     State(state): State<Arc<AppState>>,
+    agent: Option<Extension<AuthenticatedAgent>>,
     Path(id_str): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let id =
-        Uuid::parse_str(&id_str).map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
+    let id: MemoryId = id_str.parse().map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
 
     // PointLookup exists in QueryPlan but is not reachable via MQL syntax,
     // so we scan and filter client-side until MenteDb exposes a public get(id).
@@ -158,6 +170,13 @@ pub async fn get_memory(
     for block in &window.blocks {
         for scored in &block.memories {
             if scored.memory.id == id {
+                if let Some(Extension(ref authed)) = agent {
+                    let tid: AgentId = authed.agent_id.parse()
+                        .map_err(|_| ApiError::Internal("token contains invalid agent_id UUID".into()))?;
+                    if scored.memory.agent_id != tid {
+                        return Err(ApiError::Forbidden("memory belongs to a different agent".into()));
+                    }
+                }
                 return Ok(Json(memory_node_to_json(&scored.memory)));
             }
         }
@@ -173,12 +192,32 @@ pub async fn get_memory(
 /// Deletes a memory from the database.
 pub async fn forget_memory(
     State(state): State<Arc<AppState>>,
+    agent: Option<Extension<AuthenticatedAgent>>,
     Path(id_str): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let id =
-        Uuid::parse_str(&id_str).map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
+    let id: MemoryId = id_str.parse().map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
 
     let mut db = state.db.write().await;
+    if let Some(Extension(ref authed)) = agent {
+        let tid: AgentId = authed.agent_id.parse()
+            .map_err(|_| ApiError::Internal("token contains invalid agent_id UUID".into()))?;
+        let window = db.recall("RECALL memories LIMIT 1000").map_err(|e| {
+            error!("recall failed: {e}"); ApiError::Internal(format!("recall failed: {e}"))
+        })?;
+        let mut found = false;
+        for block in &window.blocks {
+            for scored in &block.memories {
+                if scored.memory.id == id {
+                    if scored.memory.agent_id != tid {
+                        return Err(ApiError::Forbidden("memory belongs to a different agent".into()));
+                    }
+                    found = true; break;
+                }
+            }
+            if found { break; }
+        }
+        if !found { return Err(ApiError::NotFound(format!("memory {id} not found"))); }
+    }
     db.forget(id).map_err(|e| {
         error!("forget failed: {e}");
         ApiError::Internal(format!("forget failed: {e}"))
@@ -250,8 +289,8 @@ pub async fn create_edge(
     State(state): State<Arc<AppState>>,
     Json(req): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let source = parse_uuid(&req, "source")?;
-    let target = parse_uuid(&req, "target")?;
+    let source = MemoryId(parse_uuid(&req, "source")?);
+    let target = MemoryId(parse_uuid(&req, "target")?);
 
     let edge_type_str = req
         .get("edge_type")
@@ -401,4 +440,48 @@ fn memory_node_to_json(node: &MemoryNode) -> Value {
         "attributes": attrs,
         "tags": node.tags,
     })
+}
+
+fn parse_permission(s: &str) -> Result<Permission, ApiError> {
+    match s.to_lowercase().as_str() {
+        "read" => Ok(Permission::Read), "write" => Ok(Permission::Write),
+        "readwrite" | "read_write" => Ok(Permission::ReadWrite), "admin" => Ok(Permission::Admin),
+        _ => Err(ApiError::BadRequest(format!("unknown permission: {s}"))),
+    }
+}
+fn resolve_agent_id(agent: &Option<Extension<AuthenticatedAgent>>, body: Option<&Value>) -> Result<AgentId, ApiError> {
+    if let Some(Extension(a)) = agent {
+        return a.agent_id.parse::<AgentId>().map_err(|_| ApiError::Unauthorized("invalid agent_id in token".into()));
+    }
+    if let Some(val) = body { return Ok(AgentId(parse_uuid(val, "agent_id")?)); }
+    Err(ApiError::Unauthorized("no agent_id available".into()))
+}
+fn is_admin_token(agent: &Option<Extension<AuthenticatedAgent>>) -> bool {
+    matches!(agent, Some(Extension(a)) if a.admin)
+}
+pub async fn create_space(State(state): State<Arc<AppState>>, agent: Option<Extension<AuthenticatedAgent>>, Json(req): Json<Value>) -> Result<impl IntoResponse, ApiError> {
+    let agent_id = resolve_agent_id(&agent, Some(&req))?;
+    let name = req.get("name").and_then(|v| v.as_str()).ok_or_else(|| ApiError::BadRequest("missing 'name' field".into()))?;
+    let mut spaces = state.spaces.write().await;
+    let space = spaces.create_space(name, agent_id);
+    Ok((StatusCode::CREATED, Json(json!({"id": space.id.to_string(), "name": space.name, "owner": space.owner.to_string()}))))
+}
+pub async fn list_spaces(State(state): State<Arc<AppState>>, agent: Option<Extension<AuthenticatedAgent>>) -> Result<impl IntoResponse, ApiError> {
+    let agent_id = resolve_agent_id(&agent, None)?;
+    let spaces = state.spaces.read().await;
+    let list: Vec<Value> = spaces.list_spaces_for_agent(agent_id).iter().map(|s| json!({"id": s.id.to_string(), "name": s.name, "owner": s.owner.to_string()})).collect();
+    Ok(Json(json!({"spaces": list})))
+}
+pub async fn grant_space_access(State(state): State<Arc<AppState>>, agent: Option<Extension<AuthenticatedAgent>>, Path(space_id_str): Path<String>, Json(req): Json<Value>) -> Result<impl IntoResponse, ApiError> {
+    let space_id: SpaceId = space_id_str.parse().map_err(|_| ApiError::BadRequest("invalid space ID".into()))?;
+    let caller_id = resolve_agent_id(&agent, None)?;
+    let target_agent = AgentId(parse_uuid(&req, "agent_id")?);
+    let perm_str = req.get("permission").and_then(|v| v.as_str()).ok_or_else(|| ApiError::BadRequest("missing 'permission' field".into()))?;
+    let perm = parse_permission(perm_str)?;
+    let mut spaces = state.spaces.write().await;
+    if !is_admin_token(&agent) && !spaces.check_access(space_id, caller_id, Permission::Admin) {
+        return Err(ApiError::Forbidden("only space owner or admin can grant access".into()));
+    }
+    spaces.grant_access(space_id, target_agent, perm);
+    Ok(Json(json!({"status": "granted"})))
 }

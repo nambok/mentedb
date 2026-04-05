@@ -6,7 +6,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use mentedb_core::error::{MenteError, MenteResult};
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{MemoryId};
 
 /// An f32 wrapper that provides total ordering via bit representation.
 /// This converts f32 to a sortable u32 key, handling NaN/negative/positive correctly.
@@ -157,14 +157,13 @@ impl Default for SalienceIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
-
+    
     #[test]
     fn test_insert_and_top_k() {
         let idx = SalienceIndex::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
 
         idx.insert(a, 0.3);
         idx.insert(b, 0.9);
@@ -179,7 +178,7 @@ mod tests {
     #[test]
     fn test_update() {
         let idx = SalienceIndex::new();
-        let a = Uuid::new_v4();
+        let a = MemoryId::new();
         idx.insert(a, 0.5);
         idx.update(a, 0.5, 0.9);
 
@@ -191,7 +190,7 @@ mod tests {
     #[test]
     fn test_remove() {
         let idx = SalienceIndex::new();
-        let a = Uuid::new_v4();
+        let a = MemoryId::new();
         idx.insert(a, 0.5);
         idx.remove(a, 0.5);
 

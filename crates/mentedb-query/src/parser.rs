@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::ast::*;
 use crate::lexer::{Token, TokenKind};
+use mentedb_core::types::{MemoryId};
 
 pub struct Parser<'a> {
     tokens: &'a [Token],
@@ -262,8 +263,8 @@ impl<'a> Parser<'a> {
                 // Strip surrounding quotes
                 let inner = tok.lexeme[1..tok.lexeme.len() - 1].to_string();
                 // Check if this looks like a UUID inside quotes
-                if let Ok(uuid) = inner.parse::<Uuid>() {
-                    return Ok(Value::Uuid(uuid));
+                if let Ok(uuid) = inner.parse::<MemoryId>() {
+                    return Ok(Value::Uuid(uuid.into()));
                 }
                 Ok(Value::Text(inner))
             }
@@ -372,7 +373,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_uuid(&mut self) -> MenteResult<Uuid> {
+    fn parse_uuid(&mut self) -> MenteResult<MemoryId> {
         let tok = self.advance();
         match tok.kind {
             TokenKind::UuidLit => tok
@@ -487,7 +488,7 @@ mod tests {
                 assert_eq!(
                     f.target,
                     "550e8400-e29b-41d4-a716-446655440000"
-                        .parse::<Uuid>()
+                        .parse::<MemoryId>()
                         .unwrap()
                 );
             }

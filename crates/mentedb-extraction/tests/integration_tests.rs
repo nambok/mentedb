@@ -3,6 +3,7 @@ use mentedb_core::memory::MemoryType;
 use mentedb_embedding::HashEmbeddingProvider;
 use mentedb_embedding::provider::EmbeddingProvider;
 use mentedb_extraction::{
+use mentedb_core::types::{AgentId};
     ExtractedMemory, ExtractionConfig, ExtractionPipeline, ExtractionStats, MockExtractionProvider,
 };
 
@@ -13,7 +14,7 @@ fn make_embedding_provider() -> HashEmbeddingProvider {
 fn make_existing_memory(content: &str, provider: &HashEmbeddingProvider) -> MemoryNode {
     let embedding = provider.embed(content).unwrap();
     MemoryNode::new(
-        uuid::Uuid::nil(),
+        AgentId::nil(),
         MemoryType::Semantic,
         content.to_string(),
         embedding,

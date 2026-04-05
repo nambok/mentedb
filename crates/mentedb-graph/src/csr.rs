@@ -371,8 +371,7 @@ impl Default for CsrGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
-
+    
     fn make_edge(src: MemoryId, tgt: MemoryId, etype: EdgeType) -> MemoryEdge {
         MemoryEdge {
             source: src,
@@ -386,7 +385,7 @@ mod tests {
     #[test]
     fn test_add_node_idempotent() {
         let mut g = CsrGraph::new();
-        let id = Uuid::new_v4();
+        let id = MemoryId::new();
         let idx1 = g.add_node(id);
         let idx2 = g.add_node(id);
         assert_eq!(idx1, idx2);
@@ -396,9 +395,9 @@ mod tests {
     #[test]
     fn test_add_and_query_edges() {
         let mut g = CsrGraph::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
 
         g.add_edge(&make_edge(a, b, EdgeType::Caused));
         g.add_edge(&make_edge(a, c, EdgeType::Related));
@@ -414,8 +413,8 @@ mod tests {
     #[test]
     fn test_remove_edge() {
         let mut g = CsrGraph::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
 
         g.add_edge(&make_edge(a, b, EdgeType::Caused));
         assert_eq!(g.outgoing(a).len(), 1);
@@ -427,9 +426,9 @@ mod tests {
     #[test]
     fn test_compact() {
         let mut g = CsrGraph::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
 
         g.add_edge(&make_edge(a, b, EdgeType::Caused));
         g.add_edge(&make_edge(b, c, EdgeType::Before));
@@ -447,9 +446,9 @@ mod tests {
     #[test]
     fn test_compact_with_removals() {
         let mut g = CsrGraph::new();
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        let c = Uuid::new_v4();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
 
         g.add_edge(&make_edge(a, b, EdgeType::Caused));
         g.add_edge(&make_edge(a, c, EdgeType::Related));

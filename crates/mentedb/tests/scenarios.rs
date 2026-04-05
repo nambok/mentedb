@@ -24,7 +24,7 @@ use mentedb_core::{
 };
 
 use tempfile::tempdir;
-use uuid::Uuid;
+use mentedb_core::types::{AgentId, MemoryId};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,7 +61,7 @@ fn make_similar_embedding(base_seed: u32, noise: f32) -> Vec<f32> {
     emb
 }
 
-fn make_memory(agent_id: Uuid, content: &str, mem_type: MemoryType, seed: u32) -> MemoryNode {
+fn make_memory(agent_id: AgentId, content: &str, mem_type: MemoryType, seed: u32) -> MemoryNode {
     MemoryNode::new(
         agent_id,
         mem_type,
@@ -71,7 +71,7 @@ fn make_memory(agent_id: Uuid, content: &str, mem_type: MemoryType, seed: u32) -
 }
 
 fn make_memory_at(
-    agent_id: Uuid,
+    agent_id: AgentId,
     content: &str,
     mem_type: MemoryType,
     seed: u32,
@@ -96,7 +96,7 @@ fn test_coding_assistant_workflow() {
     let dir = tempdir().unwrap();
 
     // ── Session 1 ──────────────────────────────────────────────────────────
-    let agent_id = Uuid::new_v4();
+    let agent_id = AgentId::new();
     let mut memories: Vec<MemoryNode> = Vec::new();
 
     let m1 = make_memory(
@@ -407,7 +407,7 @@ fn test_multi_agent_collaboration() {
 fn test_knowledge_lifecycle() {
     let dir = tempdir().unwrap();
     let mut db = MenteDb::open(dir.path()).unwrap();
-    let agent_id = Uuid::new_v4();
+    let agent_id = AgentId::new();
     let now = now_us();
 
     // Create 10 memories at different "ages"
@@ -520,7 +520,7 @@ fn test_knowledge_lifecycle() {
 fn test_cognitive_safety_net() {
     let dir = tempdir().unwrap();
     let mut db = MenteDb::open(dir.path()).unwrap();
-    let agent_id = Uuid::new_v4();
+    let agent_id = AgentId::new();
 
     // ── Pain Registry ──────────────────────────────────────────────────────
     let pain_mem = make_memory(
@@ -533,7 +533,7 @@ fn test_cognitive_safety_net() {
 
     let mut pain_registry = PainRegistry::new(5);
     let signal = PainSignal {
-        id: Uuid::new_v4(),
+        id: MemoryId::new(),
         memory_id: pain_mem.id,
         intensity: 0.95,
         trigger_keywords: vec![
@@ -641,7 +641,7 @@ fn test_cognitive_safety_net() {
 fn test_stream_cognition() {
     let dir = tempdir().unwrap();
     let mut db = MenteDb::open(dir.path()).unwrap();
-    let agent_id = Uuid::new_v4();
+    let agent_id = AgentId::new();
 
     // Store known facts
     let fact_mysql = make_memory(
@@ -771,7 +771,7 @@ fn test_speculative_preassembly() {
 
     cache.pre_assemble(topics_to_cache.clone(), |topic| {
         let context = format!("Pre-assembled context for: {topic}");
-        let fake_id = Uuid::new_v4();
+        let fake_id = MemoryId::new();
         Some((context, vec![fake_id]))
     });
 
@@ -806,7 +806,7 @@ fn test_speculative_preassembly() {
 
 #[test]
 fn test_context_assembly_quality() {
-    let agent_id = Uuid::new_v4();
+    let agent_id = AgentId::new();
 
     // Build 20 scored memories with varying characteristics
     let mut scored: Vec<ScoredMemory> = Vec::new();
@@ -999,7 +999,7 @@ fn test_context_assembly_quality() {
 fn test_gdpr_forget() {
     let dir = tempdir().unwrap();
     let mut db = MenteDb::open(dir.path()).unwrap();
-    let agent_id = Uuid::new_v4();
+    let agent_id = AgentId::new();
 
     // Store 10 memories
     let mut memory_ids: Vec<MemoryId> = Vec::new();

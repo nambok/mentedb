@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use ahash::AHashSet;
-use mentedb_core::types::Timestamp;
+use mentedb_core::types::{MemoryId, Timestamp};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -15,7 +15,7 @@ pub enum PhantomPriority {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhantomMemory {
-    pub id: Uuid,
+    pub id: MemoryId,
     pub gap_description: String,
     pub source_reference: String,
     pub source_turn: u64,
@@ -198,7 +198,7 @@ impl PhantomTracker {
         let new_phantoms: Vec<PhantomMemory> = detected
             .into_iter()
             .map(|(entity, priority)| PhantomMemory {
-                id: Uuid::new_v4(),
+                id: MemoryId::new(),
                 gap_description: format!("No stored knowledge about '{}'", entity),
                 source_reference: entity,
                 source_turn: turn_id,
@@ -231,7 +231,7 @@ impl PhantomTracker {
             .iter()
             .filter(|e| !self.entity_registry.is_known(e))
             .map(|entity| PhantomMemory {
-                id: Uuid::new_v4(),
+                id: MemoryId::new(),
                 gap_description: format!("No stored knowledge about '{}'", entity),
                 source_reference: (*entity).to_string(),
                 source_turn: turn_id,
@@ -336,7 +336,7 @@ impl PhantomTracker {
     }
 
     pub fn resolve(&mut self, phantom_id: Uuid) {
-        if let Some(p) = self.phantoms.iter_mut().find(|p| p.id == phantom_id) {
+        if let Some(p) = self.phantoms.iter_mut().find(|p| p.id == MemoryId::from(phantom_id)) {
             p.resolved = true;
         }
     }

@@ -1,7 +1,6 @@
 //! Token-efficient serialization formats for context output.
 
 use crate::layout::{AttentionZone, ContextBlock};
-
 /// Trait for serializing context blocks into a string.
 pub trait ContextSerializer {
     fn serialize(&self, blocks: &[ContextBlock]) -> String;
@@ -123,7 +122,7 @@ mod tests {
     use mentedb_core::memory::MemoryType;
 
     fn make_block(zone: AttentionZone, content: &str, mem_type: MemoryType) -> ContextBlock {
-        let mut m = MemoryNode::new(uuid::Uuid::new_v4(), mem_type, content.to_string(), vec![]);
+        let mut m = MemoryNode::new(AgentId::new(), mem_type, content.to_string(), vec![]);
         m.salience = 0.9;
         m.tags = vec!["test".to_string()];
         ContextBlock {

@@ -2,7 +2,7 @@
 
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{MemoryId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -26,15 +26,15 @@ pub struct RecallStatement {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelateStatement {
-    pub source: Uuid,
-    pub target: Uuid,
+    pub source: MemoryId,
+    pub target: MemoryId,
     pub edge_type: EdgeType,
     pub weight: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ForgetStatement {
-    pub target: Uuid,
+    pub target: MemoryId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

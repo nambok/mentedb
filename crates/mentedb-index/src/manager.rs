@@ -206,7 +206,7 @@ mod tests {
         created_at: u64,
     ) -> MemoryNode {
         let mut node = MemoryNode::new(
-            uuid::Uuid::new_v4(),
+            AgentId::new(),
             MemoryType::Episodic,
             "test".into(),
             embedding,

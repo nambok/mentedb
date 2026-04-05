@@ -9,7 +9,6 @@ use tracing::info;
 use crate::buffer::BufferPool;
 use crate::page::{PAGE_DATA_SIZE, Page, PageId, PageManager, PageType};
 use crate::wal::{Wal, WalEntryType};
-
 /// Default number of page frames in the buffer pool.
 const DEFAULT_BUFFER_POOL_SIZE: usize = 1024;
 
@@ -225,8 +224,7 @@ impl StorageEngine {
 mod tests {
     use super::*;
     use mentedb_core::memory::MemoryType;
-    use uuid::Uuid;
-
+    
     fn setup() -> (tempfile::TempDir, StorageEngine) {
         let dir = tempfile::tempdir().unwrap();
         let engine = StorageEngine::open(dir.path()).unwrap();
@@ -250,7 +248,7 @@ mod tests {
         let (_dir, mut engine) = setup();
 
         let node = MemoryNode::new(
-            Uuid::new_v4(),
+            AgentId::new(),
             MemoryType::Episodic,
             "The user prefers Rust over Go".to_string(),
             vec![0.1, 0.2, 0.3, 0.4],
@@ -270,7 +268,7 @@ mod tests {
         let (_dir, mut engine) = setup();
 
         let node = MemoryNode::new(
-            Uuid::new_v4(),
+            AgentId::new(),
             MemoryType::Semantic,
             "checkpoint test".to_string(),
             vec![1.0, 2.0],
@@ -291,7 +289,7 @@ mod tests {
         {
             let mut engine = StorageEngine::open(dir.path()).unwrap();
             let node = MemoryNode::new(
-                Uuid::new_v4(),
+                AgentId::new(),
                 MemoryType::Procedural,
                 "persist across close".to_string(),
                 vec![0.5],
@@ -316,7 +314,7 @@ mod tests {
             for i in 0..3 {
                 let content = format!("crash-recovery-{i}");
                 let node = MemoryNode::new(
-                    Uuid::new_v4(),
+                    AgentId::new(),
                     MemoryType::Episodic,
                     content.clone(),
                     vec![i as f32],
@@ -347,7 +345,7 @@ mod tests {
         {
             let mut engine = StorageEngine::open(dir.path()).unwrap();
             let node = MemoryNode::new(
-                Uuid::new_v4(),
+                AgentId::new(),
                 MemoryType::Semantic,
                 content.clone(),
                 vec![1.0, 2.0],
@@ -376,7 +374,7 @@ mod tests {
             for i in 0..3 {
                 let content = format!("checkpointed-{i}");
                 let node = MemoryNode::new(
-                    Uuid::new_v4(),
+                    AgentId::new(),
                     MemoryType::Semantic,
                     content.clone(),
                     vec![i as f32],
@@ -391,7 +389,7 @@ mod tests {
             for i in 3..5 {
                 let content = format!("unckeckpointed-{i}");
                 let node = MemoryNode::new(
-                    Uuid::new_v4(),
+                    AgentId::new(),
                     MemoryType::Episodic,
                     content.clone(),
                     vec![i as f32],
