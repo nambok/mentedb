@@ -113,18 +113,18 @@ side by side.
 --- MenteDB ---
   SQLite in results: True
   PostgreSQL (stale) returned: False
-  Time: 3.9ms
+  Time: 4.7ms
   Verdict: PASS
 
 --- Mem0 ---
   SQLite in results: True
   PostgreSQL (stale) returned: True
-  Time: 27,158ms
+  Time: 21,164ms
   Verdict: FAIL
 
 --- Comparison ---
   MenteDB correctly suppressed stale belief. Mem0 did not.
-  Speedup: MenteDB is 6,975x faster
+  Speedup: MenteDB is 4,459x faster
 ```
 
 Mem0 returns both the current and stale belief because flat vector search has no
@@ -158,23 +158,23 @@ actual output from a real run (Apple M-series, no LLM tests):
   PostgreSQL rank: NOT FOUND (superseded)
   Belief propagation: Working
   Top results: 5
-  Result 1 (score=0.512): The user has switched to SQLite. They no longer use PostgreSQL...
+  Result 1 (score=0.516): The user has switched to SQLite. They no longer use PostgreSQL...
 
 ============================================================
   Delta Savings Test: PASS
 ============================================================
   Turns simulated: 20
-  Total tokens (full retrieval): 2,600
-  Total tokens (delta): 244
-  Token savings: 90.6%
+  Total tokens (full retrieval): 2,660
+  Total tokens (delta): 247
+  Token savings: 90.7%
 
 ============================================================
   Sustained Conversation Test (100 turns, 3 projects): PASS
 ============================================================
   Total memories ingested: 100
   Belief changes tracked: 6
-  Avg insert time: 0.23ms
-  Avg search time: 66us
+  Avg insert time: 0.29ms
+  Avg search time: 77us
   Stale beliefs returned: 0% (0/6)
   Delta token savings (20 checkpoints): 90.1%
 ```
@@ -231,6 +231,6 @@ failure.
    search, and correct supersession at every query.
 
 6. **Mem0 cannot do this.** In a direct comparison, Mem0 returned stale data and
-   took 27 seconds. MenteDB returned correct data in 3.9ms. Graph-based belief
+   took 21 seconds. MenteDB returned correct data in 4.7ms. Graph-based belief
    propagation is fundamentally better than flat vector search for memory that
    changes over time.
