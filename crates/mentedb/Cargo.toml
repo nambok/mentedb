@@ -33,5 +33,17 @@ mentedb-embedding = { workspace = true }
 name = "storage_bench"
 harness = false
 
+[[bench]]
+name = "insert_throughput"
+harness = false
+
+[[bench]]
+name = "similarity_search"
+harness = false
+
+[[bench]]
+name = "context_assembly"
+harness = false
+
 [package.metadata.docs.rs]
 all-features = true
