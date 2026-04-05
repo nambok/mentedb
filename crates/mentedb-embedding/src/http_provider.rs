@@ -195,12 +195,9 @@ mod http_impl {
                 }
             };
 
-            let parsed: OpenAIEmbeddingResponse = resp
-                .body_mut()
-                .read_json()
-                .map_err(|e| {
-                    MenteError::Storage(format!("Failed to parse embedding response: {}", e))
-                })?;
+            let parsed: OpenAIEmbeddingResponse = resp.body_mut().read_json().map_err(|e| {
+                MenteError::Storage(format!("Failed to parse embedding response: {}", e))
+            })?;
 
             parsed
                 .data
@@ -236,12 +233,9 @@ mod http_impl {
                 }
             };
 
-            let parsed: OpenAIEmbeddingResponse = resp
-                .body_mut()
-                .read_json()
-                .map_err(|e| {
-                    MenteError::Storage(format!("Failed to parse embedding response: {}", e))
-                })?;
+            let parsed: OpenAIEmbeddingResponse = resp.body_mut().read_json().map_err(|e| {
+                MenteError::Storage(format!("Failed to parse embedding response: {}", e))
+            })?;
 
             Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
         }
