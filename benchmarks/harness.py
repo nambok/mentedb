@@ -24,11 +24,16 @@ def ensure_binary():
 class MenteDBBenchmark:
     """Benchmark harness that uses MenteDB via its Rust library directly."""
     
-    def __init__(self):
+    def __init__(self, embedding_provider=None, embedding_api_key=None, embedding_model=None):
         self.tmp_dir = tempfile.mkdtemp(prefix="mentedb-bench-")
         try:
             import mentedb
-            self.db = mentedb.MenteDB(self.tmp_dir)
+            self.db = mentedb.MenteDB(
+                self.tmp_dir,
+                embedding_provider=embedding_provider,
+                embedding_api_key=embedding_api_key,
+                embedding_model=embedding_model,
+            )
         except ImportError:
             print("mentedb Python package not installed. Install with: pip install mentedb")
             print("Or build from source: cd sdks/python && maturin develop")
