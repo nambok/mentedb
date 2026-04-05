@@ -218,6 +218,11 @@ impl MenteDb {
         Ok(())
     }
 
+    /// Returns a reference to the underlying graph manager.
+    pub fn graph(&self) -> &GraphManager {
+        &self.graph
+    }
+
     /// Flushes all data and closes the database.
     pub fn close(&mut self) -> MenteResult<()> {
         info!("Closing MenteDB");
