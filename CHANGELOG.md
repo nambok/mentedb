@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.5](https://github.com/nambok/mentedb/compare/mentedb-v0.2.4...mentedb-v0.2.5) (2026-04-05)
+
+
+### Features
+
+* add candle embedding provider to Python SDK and quality benchmark ([17bd828](https://github.com/nambok/mentedb/commit/17bd8282fce855a528d3cb484797f76c5b5ad7a1))
+* add memory_ids() and memory_count() public APIs ([035e682](https://github.com/nambok/mentedb/commit/035e6829bbdfcd6cbf02c8ce970baa45e4bd684d))
+* add PainRegistry::all_signals() for full cognitive state ([c1288de](https://github.com/nambok/mentedb/commit/c1288de89dc31802f023b2c3f5ba0afae335ee65))
+
 ## [0.2.4](https://github.com/nambok/mentedb/compare/mentedb-v0.2.3...mentedb-v0.2.4) (2026-04-05)
 
 
