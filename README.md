@@ -83,7 +83,7 @@ The result: a clean, curated memory that actually helps the AI perform better.
 - **Write Time Intelligence** Quality filter, deduplication, and contradiction detection at ingest
 - **Attention Optimized Context Assembly** Respects the U curve (critical data at start/end of context)
 - **Belief Propagation** When facts change, downstream beliefs are flagged for re evaluation
-- **Delta Aware Serving** Only sends what changed since last turn (40 to 60% token savings)
+- **Delta Aware Serving** Only sends what changed since last turn (90% reduction in memory retrieval tokens over 20 turns)
 - **Cognitive Memory Tiers** Working, Episodic, Semantic, Procedural, Archival
 - **Knowledge Graph** CSR/CSC graph with BFS/DFS traversal and contradiction detection
 - **Memory Spaces** Multi agent isolation with per space ACLs
@@ -332,7 +332,7 @@ docker-compose up -d
 | Test | Result | Key Metric |
 |------|--------|------------|
 | Stale Belief | PASS | Superseded memories correctly excluded via graph edges |
-| Delta Savings | PASS | 90.7% token reduction over 20 turns |
+| Delta Savings | PASS | 90.7% reduction in memory retrieval tokens over 20 turns |
 | Sustained Conversation | PASS | 100 turns, 3 projects, 0% stale returns, 0.29ms insert |
 | Attention Budget | PASS | U-curve ordering maintains 100% LLM compliance |
 | Noise Ratio | PASS | 100% useful vs 80% naive, +20pp improvement |
