@@ -111,7 +111,7 @@ For Claude CLI, Copilot CLI, Cursor, Windsurf, and any MCP compatible client.
 
 ```bash
 # Requires Rust: https://rustup.rs
-cargo install --git https://github.com/nambok/mentedb-mcp
+cargo install mentedb-mcp
 ```
 
 See [mentedb-mcp](https://github.com/nambok/mentedb-mcp) for setup, configuration, and the full list of 32 tools.
