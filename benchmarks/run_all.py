@@ -9,7 +9,8 @@ Run without LLM (no API key needed):
     python benchmarks/run_all.py --no-llm
 
 Environment variables:
-    OPENAI_API_KEY  — Required for attention_budget and noise_ratio tests
+    OPENAI_API_KEY     — For attention_budget and noise_ratio tests
+    ANTHROPIC_API_KEY  — Alternative to OpenAI (either key works)
 """
 
 import sys
@@ -44,7 +45,7 @@ def main():
     
     # LLM tests (optional)
     if not args.no_llm:
-        print("\n--- LLM Quality Tests (requires OPENAI_API_KEY) ---\n")
+        print("\n--- LLM Quality Tests (requires OPENAI_API_KEY or ANTHROPIC_API_KEY) ---\n")
         results["Attention Budget"] = run_attention_budget_test()
         results["Noise Ratio"] = run_noise_ratio_test()
     else:

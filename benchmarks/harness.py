@@ -73,3 +73,57 @@ def print_result(test_name, passed, details):
 
 def has_openai_key():
     return bool(os.environ.get("OPENAI_API_KEY"))
+
+
+def has_anthropic_key():
+    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+
+def has_llm_key():
+    return has_openai_key() or has_anthropic_key()
+
+
+def get_llm_client():
+    """Return (client, provider_name) for whichever LLM key is available.
+    Prefers Anthropic if both are set."""
+    if has_anthropic_key():
+        try:
+            import anthropic
+            return anthropic.Anthropic(), "anthropic"
+        except ImportError:
+            print("  anthropic package not installed: pip install anthropic")
+    if has_openai_key():
+        try:
+            import openai
+            return openai.OpenAI(), "openai"
+        except ImportError:
+            print("  openai package not installed: pip install openai")
+    return None, None
+
+
+def llm_chat(client, provider, prompt, temperature=0.0, max_tokens=200, json_mode=False):
+    """Unified chat completion across providers. Returns the response text."""
+    if provider == "openai":
+        kwargs = {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        response = client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content
+    elif provider == "anthropic":
+        kwargs = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+        }
+        if json_mode:
+            kwargs["messages"][0]["content"] = prompt + "\n\nRespond with valid JSON only."
+        response = client.messages.create(**kwargs)
+        return response.content[0].text
+    else:
+        raise ValueError(f"Unknown provider: {provider}")

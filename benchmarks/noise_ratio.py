@@ -4,12 +4,12 @@ The Noise Ratio Test — Extraction quality comparison.
 Ingests 10 sample conversations. Counts stored memories.
 Uses LLM to evaluate what percentage are actually useful.
 
-Requires OPENAI_API_KEY.
+Requires OPENAI_API_KEY or ANTHROPIC_API_KEY.
 """
 
 import os
 import json
-from harness import MenteDBBenchmark, print_result, has_openai_key
+from harness import MenteDBBenchmark, print_result, has_llm_key, get_llm_client, llm_chat
 
 SAMPLE_CONVERSATIONS = [
     """User: Hey, I'm building a REST API for my startup.
@@ -49,15 +49,13 @@ Assistant: Use Redis pub/sub as a message broker between instances.""",
 ]
 
 def run_noise_ratio_test():
-    if not has_openai_key():
-        print("\n  [SKIP] Noise Ratio Test: Set OPENAI_API_KEY to run")
+    if not has_llm_key():
+        print("\n  [SKIP] Noise Ratio Test: Set OPENAI_API_KEY or ANTHROPIC_API_KEY to run")
         return None
     
-    try:
-        import openai
-        client = openai.OpenAI()
-    except ImportError:
-        print("\n  [SKIP] Noise Ratio Test: pip install openai")
+    client, provider = get_llm_client()
+    if client is None:
+        print("\n  [SKIP] Noise Ratio Test: install openai or anthropic package")
         return None
     
     bench = MenteDBBenchmark()
@@ -75,15 +73,13 @@ def run_noise_ratio_test():
         # Also store extracted facts (MenteDB approach) 
         extracted_memories = []
         for conv in SAMPLE_CONVERSATIONS:
-            # Use LLM to extract key facts
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": f"Extract the key technical decisions and user preferences from this conversation as a JSON array of strings. Only include actionable facts, not chit-chat:\n\n{conv}"}],
-                temperature=0.0,
-                response_format={"type": "json_object"},
+            response_text = llm_chat(
+                client, provider,
+                f"Extract the key technical decisions and user preferences from this conversation as a JSON array of strings. Only include actionable facts, not chit-chat:\n\n{conv}",
+                json_mode=True,
             )
             try:
-                facts = json.loads(response.choices[0].message.content)
+                facts = json.loads(response_text)
                 if isinstance(facts, dict):
                     facts = facts.get("facts", facts.get("decisions", list(facts.values())[0] if facts else []))
                 for fact in facts:
@@ -99,14 +95,13 @@ def run_noise_ratio_test():
                 return 0.0
             sample = memories[:30]  # Cap at 30
             items = "\n".join(f"{i+1}. {content[:100]}" for i, (_, content) in enumerate(sample))
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": f"Rate each memory below as USEFUL or NOISE for an AI assistant helping with this software project. A memory is USEFUL if it contains an actionable technical decision, user preference, or project requirement. Return a JSON object with 'useful_count' and 'total'.\n\nMemories:\n{items}"}],
-                temperature=0.0,
-                response_format={"type": "json_object"},
+            response_text = llm_chat(
+                client, provider,
+                f"Rate each memory below as USEFUL or NOISE for an AI assistant helping with this software project. A memory is USEFUL if it contains an actionable technical decision, user preference, or project requirement. Return a JSON object with 'useful_count' and 'total'.\n\nMemories:\n{items}",
+                json_mode=True,
             )
             try:
-                result = json.loads(response.choices[0].message.content)
+                result = json.loads(response_text)
                 useful = result.get("useful_count", 0)
                 total = result.get("total", len(sample))
                 return useful / total if total > 0 else 0.0

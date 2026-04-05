@@ -7,24 +7,22 @@ Compares LLM compliance rate with:
   B) Chronological order (competitors)  
   C) U-curve ordered (MenteDB)
 
-Requires OPENAI_API_KEY.
+Requires OPENAI_API_KEY or ANTHROPIC_API_KEY.
 """
 
 import os
 import json
 import random
-from harness import MenteDBBenchmark, print_result, has_openai_key
+from harness import MenteDBBenchmark, print_result, has_llm_key, get_llm_client, llm_chat
 
 def run_attention_budget_test():
-    if not has_openai_key():
-        print("\n  [SKIP] Attention Budget Test: Set OPENAI_API_KEY to run")
+    if not has_llm_key():
+        print("\n  [SKIP] Attention Budget Test: Set OPENAI_API_KEY or ANTHROPIC_API_KEY to run")
         return None
     
-    try:
-        import openai
-        client = openai.OpenAI()
-    except ImportError:
-        print("\n  [SKIP] Attention Budget Test: pip install openai")
+    client, provider = get_llm_client()
+    if client is None:
+        print("\n  [SKIP] Attention Budget Test: install openai or anthropic package")
         return None
     
     # The critical instruction we'll hide
@@ -61,14 +59,8 @@ def run_attention_budget_test():
         successes = 0
         trials = 5
         for _ in range(trials):
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-                max_tokens=100,
-            )
-            answer = response.choices[0].message.content.lower()
-            if "blue-green" in answer and "canary" in answer:
+            answer = llm_chat(client, provider, prompt, temperature=0.0, max_tokens=100)
+            if "blue-green" in answer.lower() and "canary" in answer.lower():
                 successes += 1
         return successes / trials
     
