@@ -103,7 +103,7 @@ impl MenteDb {
     /// Opens (or creates) a MenteDB instance at the given path.
     pub fn open(path: &Path) -> MenteResult<Self> {
         info!("Opening MenteDB at {}", path.display());
-        let storage = StorageEngine::open(path)?;
+        let mut storage = StorageEngine::open(path)?;
 
         let index_dir = path.join("indexes");
         let graph_dir = path.join("graph");
@@ -122,7 +122,15 @@ impl MenteDb {
             GraphManager::new()
         };
 
-        let page_map = HashMap::new();
+        // Rebuild page map by scanning all pages
+        let entries = storage.scan_all_memories();
+        let mut page_map = HashMap::new();
+        for (memory_id, page_id) in &entries {
+            page_map.insert(*memory_id, *page_id);
+        }
+        if !page_map.is_empty() {
+            info!(memories = page_map.len(), "rebuilt page map from storage");
+        }
 
         Ok(Self {
             storage,

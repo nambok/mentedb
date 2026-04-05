@@ -219,6 +219,22 @@ impl StorageEngine {
         info!(lsn, "checkpoint complete");
         Ok(())
     }
+
+    /// Scan all pages and return (MemoryId, PageId) pairs for every valid memory node.
+    ///
+    /// Used to rebuild the page map on startup.
+    pub fn scan_all_memories(&mut self) -> Vec<(mentedb_core::types::MemoryId, PageId)> {
+        let count = self.page_manager.page_count();
+        let mut results = Vec::new();
+        // Page 0 is the header page, start from 1
+        for i in 1..count {
+            let page_id = PageId(i);
+            if let Ok(node) = self.load_memory(page_id) {
+                results.push((node.id, page_id));
+            }
+        }
+        results
+    }
 }
 
 #[cfg(test)]
