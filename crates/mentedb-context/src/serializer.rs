@@ -120,6 +120,7 @@ mod tests {
     use crate::layout::{AttentionZone, ContextBlock, ScoredMemory};
     use mentedb_core::MemoryNode;
     use mentedb_core::memory::MemoryType;
+    use mentedb_core::types::AgentId;
 
     fn make_block(zone: AttentionZone, content: &str, mem_type: MemoryType) -> ContextBlock {
         let mut m = MemoryNode::new(AgentId::new(), mem_type, content.to_string(), vec![]);

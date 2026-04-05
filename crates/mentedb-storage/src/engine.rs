@@ -4,6 +4,7 @@ use std::path::Path;
 
 use mentedb_core::MemoryNode;
 use mentedb_core::error::{MenteError, MenteResult};
+use mentedb_core::types::AgentId;
 
 use tracing::info;
 

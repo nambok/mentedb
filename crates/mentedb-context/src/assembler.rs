@@ -233,6 +233,7 @@ mod tests {
     use crate::layout::ScoredMemory;
     use mentedb_core::MemoryNode;
     use mentedb_core::memory::MemoryType;
+    use mentedb_core::types::AgentId;
 
     fn make_scored(content: &str, score: f32, salience: f32, mem_type: MemoryType) -> ScoredMemory {
         let mut m = MemoryNode::new(AgentId::new(), mem_type, content.to_string(), vec![]);

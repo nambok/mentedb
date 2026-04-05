@@ -5,7 +5,7 @@ use std::path::Path;
 
 use mentedb_core::MemoryNode;
 use mentedb_core::error::MenteResult;
-use mentedb_core::types::{MemoryId, Timestamp};
+use mentedb_core::types::{AgentId, MemoryId, Timestamp};
 
 use crate::bitmap::BitmapIndex;
 use crate::hnsw::{HnswConfig, HnswIndex};

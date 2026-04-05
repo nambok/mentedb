@@ -409,7 +409,7 @@ mod tests {
         let phantoms = tracker.detect_gaps("Check the Redis cache", &[], 1);
         assert!(!phantoms.is_empty());
         let pid = phantoms[0].id;
-        tracker.resolve(pid);
+        tracker.resolve(pid.into());
         assert!(tracker.get_active_phantoms().iter().all(|p| p.id != pid));
     }
 
@@ -537,7 +537,7 @@ mod tests {
         assert!(!gaps[0].resolved);
 
         // Resolve the gap.
-        tracker.resolve(gaps[0].id);
+        tracker.resolve(gaps[0].id.into());
         assert!(tracker.get_active_phantoms().is_empty());
     }
 

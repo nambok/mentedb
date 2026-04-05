@@ -1,5 +1,5 @@
 use mentedb_core::MemoryNode;
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::{AgentId, MemoryId};
 
 #[derive(Debug, Clone)]
 pub struct InterferencePair {
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn test_arrange_separation() {
-        let ids: Vec<MemoryId> = (0..4).map(|_| AgentId::new()).collect();
+        let ids: Vec<MemoryId> = (0..4).map(|_| MemoryId::new()).collect();
         let pairs = vec![InterferencePair {
             memory_a: ids[0],
             memory_b: ids[1],

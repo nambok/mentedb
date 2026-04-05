@@ -1,7 +1,7 @@
 use mentedb_core::MemoryNode;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::{AgentId, MemoryId};
 
 #[derive(Debug, Clone)]
 pub enum InferredAction {

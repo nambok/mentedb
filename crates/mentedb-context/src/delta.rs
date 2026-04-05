@@ -2,7 +2,7 @@
 
 use ahash::AHashSet;
 use mentedb_core::MemoryNode;
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::{AgentId, MemoryId};
 
 /// Result of computing a delta between two context sets.
 #[derive(Debug, Clone)]
@@ -151,7 +151,7 @@ mod tests {
         use mentedb_core::memory::MemoryType;
 
         let mem = mentedb_core::MemoryNode::new(
-            MemoryId::new(),
+            AgentId::new(),
             MemoryType::Episodic,
             "user switched to MySQL on March 15".to_string(),
             vec![],

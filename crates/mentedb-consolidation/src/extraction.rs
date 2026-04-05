@@ -1,5 +1,5 @@
 use mentedb_core::MemoryNode;
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::{AgentId, MemoryId};
 use serde::{Deserialize, Serialize};
 
 /// A structured fact extracted from memory content.
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn test_deduplicate_facts() {
         let extractor = FactExtractor::new();
-        let id = AgentId::new();
+        let id = MemoryId::new();
         let facts = vec![
             ExtractedFact {
                 subject: "A".into(),
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn test_find_contradictions() {
         let extractor = FactExtractor::new();
-        let id = AgentId::new();
+        let id = MemoryId::new();
         let new_fact = ExtractedFact {
             subject: "Team".into(),
             predicate: "uses".into(),

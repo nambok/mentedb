@@ -191,6 +191,7 @@ mod tests {
     use super::*;
     use mentedb_core::MemoryNode;
     use mentedb_core::memory::MemoryType;
+    use mentedb_core::types::AgentId;
 
     fn make_memory(content: &str, memory_type: MemoryType, salience: f32) -> MemoryNode {
         let mut m = MemoryNode::new(
