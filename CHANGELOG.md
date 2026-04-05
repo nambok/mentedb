@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.4](https://github.com/nambok/mentedb/compare/mentedb-v0.2.3...mentedb-v0.2.4) (2026-04-05)
+
+
+### Features
+
+* add 10K scale benchmark with pluggable embedding support ([d2139d2](https://github.com/nambok/mentedb/commit/d2139d26806333eb06e9da7f8f7d2652cc25bbaf))
+* add Candle local embedding provider ([cb59031](https://github.com/nambok/mentedb/commit/cb5903130c7b5c7a58226134ef01e5189223efc0))
+* wire OpenAI embeddings into mem0 comparison and harness ([acfc417](https://github.com/nambok/mentedb/commit/acfc417641bbb172c15bbd2f8636a8eddad462fa))
+
+
+### Bug Fixes
+
+* increase page size to 32KB for large embedding vectors ([ead61d5](https://github.com/nambok/mentedb/commit/ead61d5370e346dc43d293231b7ca354ada243f8))
+* log progress every 500 inserts with ETA in scale_10k benchmark ([7b7550c](https://github.com/nambok/mentedb/commit/7b7550ced1cc2ad094a1a484a8d7e4418f60dab1))
+
 ## [0.2.3](https://github.com/nambok/mentedb/compare/mentedb-v0.2.2...mentedb-v0.2.3) (2026-04-05)
 
 
