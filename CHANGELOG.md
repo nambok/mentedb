@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.3](https://github.com/nambok/mentedb/compare/mentedb-v0.2.2...mentedb-v0.2.3) (2026-04-05)
+
+
+### Features
+
+* add Mem0 vs MenteDB head-to-head comparison benchmark ([a0a3728](https://github.com/nambok/mentedb/commit/a0a37288be9a26e0b4b44516fba4a2361676aad2))
+* add sustained conversation benchmark, fix harness and noise ratio ([8c9d92c](https://github.com/nambok/mentedb/commit/8c9d92c5903cf888af0269e95f79fe4ee009dee3))
+* engine-native supersession filtering in recall_similar ([0b60435](https://github.com/nambok/mentedb/commit/0b604350f8c0d647ac331148f6bc70e75c6b9c39))
+* pluggable embedding providers (openai, cohere, voyage, hash) ([27516e6](https://github.com/nambok/mentedb/commit/27516e6b372b9b7c37c96be2be0ca3e251d24e82))
+* remove harness supersession hack, engine handles it natively ([39c9f35](https://github.com/nambok/mentedb/commit/39c9f357d5690bbd32c7c0d7fbe3dd0df50a2ba8))
+* wire benchmarks to real HNSW engine search, drop keyword hack ([dde81c0](https://github.com/nambok/mentedb/commit/dde81c007801ce3b44f25a4718e9d0bfabd23078))
+
+
+### Bug Fixes
+
+* HNSW dimension safety check, add search_text and get_memory to Python SDK ([2cc0938](https://github.com/nambok/mentedb/commit/2cc093881de9704a7d98be62b6a098f1bdc2acc2))
+* remove .venv from repo, add to gitignore ([2ed14d4](https://github.com/nambok/mentedb/commit/2ed14d4e2caa6ea113b227b62e4da3a78534218c))
+
 ## [0.2.2](https://github.com/nambok/mentedb/compare/mentedb-v0.2.1...mentedb-v0.2.2) (2026-04-05)
 
 
