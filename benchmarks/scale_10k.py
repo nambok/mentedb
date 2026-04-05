@@ -103,9 +103,13 @@ def run_scale_test():
         bench.store(turn["content"], memory_type=turn["type"], tags=turn["tags"])
         insert_times.append(time.time() - t0)
 
-        if (i + 1) % 2500 == 0:
-            avg = sum(insert_times[-2500:]) / len(insert_times[-2500:]) * 1000
-            print(f"    {i+1}/10000 inserted (avg {avg:.2f}ms last 2500)")
+        if (i + 1) % 500 == 0:
+            batch = insert_times[-500:]
+            avg = sum(batch) / len(batch) * 1000
+            elapsed = time.time() - total_start
+            rate = (i + 1) / elapsed
+            remaining = (10000 - i - 1) / rate if rate > 0 else 0
+            print(f"    {i+1}/10000 inserted (avg {avg:.2f}ms last 500, {elapsed:.0f}s elapsed, ~{remaining:.0f}s remaining)")
 
     total_insert = time.time() - total_start
 
