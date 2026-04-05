@@ -1,6 +1,6 @@
 {
   "name": "mentedb",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "The mind database for AI agents",
   "main": "npm/index.js",
   "types": "npm/index.d.ts",
