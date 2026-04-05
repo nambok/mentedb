@@ -41,6 +41,7 @@
 use std::path::{Path, PathBuf};
 
 use mentedb_context::{AssemblyConfig, ContextAssembler, ContextWindow, ScoredMemory};
+use mentedb_core::edge::EdgeType;
 use mentedb_core::error::MenteResult;
 use mentedb_core::types::MemoryId;
 use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
@@ -175,14 +176,28 @@ impl MenteDb {
     /// Shortcut for vector similarity search.
     ///
     /// Returns the top-k most similar memory IDs with their scores.
+    /// Memories that have been superseded or contradicted via graph edges
+    /// are automatically excluded from results.
     pub fn recall_similar(
         &mut self,
         embedding: &[f32],
         k: usize,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
         debug!("Recall similar, k={}", k);
-        let results = self.index.hybrid_search(embedding, None, None, k);
-        Ok(results)
+        // Over-fetch to account for filtered-out superseded results
+        let results = self.index.hybrid_search(embedding, None, None, k * 3);
+        let graph = self.graph.graph();
+        let filtered: Vec<(MemoryId, f32)> = results
+            .into_iter()
+            .filter(|(id, _)| {
+                let incoming = graph.incoming(*id);
+                !incoming.iter().any(|(_, e)| {
+                    e.edge_type == EdgeType::Supersedes || e.edge_type == EdgeType::Contradicts
+                })
+            })
+            .take(k)
+            .collect();
+        Ok(filtered)
     }
 
     /// Adds a typed, weighted edge between two memories in the graph.
