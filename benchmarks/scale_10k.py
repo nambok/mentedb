@@ -56,10 +56,15 @@ def generate_memory(i):
     }
 
 
-def run_scale_test():
-    api_key = os.environ.get("OPENAI_API_KEY")
-    provider = "openai" if api_key else None
-    provider_label = "OpenAI text-embedding-3-small" if api_key else "hash (no API key)"
+def run_scale_test(force_provider=None):
+    if force_provider == "candle":
+        provider = "candle"
+        api_key = None
+        provider_label = "Candle all-MiniLM-L6-v2 (local)"
+    else:
+        api_key = os.environ.get("OPENAI_API_KEY")
+        provider = "openai" if api_key else None
+        provider_label = "OpenAI text-embedding-3-small" if api_key else "hash (no API key)"
 
     print(f"\n  Embedding provider: {provider_label}")
 
@@ -167,4 +172,6 @@ def run_scale_test():
 
 
 if __name__ == "__main__":
-    run_scale_test()
+    import sys
+    provider = sys.argv[1] if len(sys.argv) > 1 else None
+    run_scale_test(force_provider=provider)

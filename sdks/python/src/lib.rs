@@ -14,6 +14,7 @@ use mentedb_extraction::{
     ExtractionConfig, ExtractionPipeline, HttpExtractionProvider, LlmProvider,
     map_extraction_type_to_memory_type,
 };
+use mentedb_embedding::candle_provider::CandleEmbeddingProvider;
 use mentedb_embedding::hash_provider::HashEmbeddingProvider;
 use mentedb_embedding::http_provider::HttpEmbeddingConfig;
 use mentedb_embedding::http_provider::HttpEmbeddingProvider;
@@ -121,12 +122,19 @@ impl MenteDB {
                 let config = HttpEmbeddingConfig::voyage(key, model);
                 Some(Box::new(HttpEmbeddingProvider::new(config)))
             }
+            Some("candle") | Some("local") => {
+                let cache_dir = std::path::PathBuf::from(format!("{data_dir}/.candle-cache"));
+                match CandleEmbeddingProvider::with_cache_dir(cache_dir) {
+                    Ok(p) => Some(Box::new(p)),
+                    Err(e) => return Err(PyRuntimeError::new_err(format!("candle init failed: {e}"))),
+                }
+            }
             Some("hash") | None => {
                 Some(Box::new(HashEmbeddingProvider::new(384)))
             }
             Some(other) => {
                 return Err(PyRuntimeError::new_err(format!(
-                    "unknown embedding provider: {other}. Use 'openai', 'cohere', 'voyage', or 'hash'"
+                    "unknown embedding provider: {other}. Use 'openai', 'candle', 'cohere', 'voyage', or 'hash'"
                 )));
             }
         };

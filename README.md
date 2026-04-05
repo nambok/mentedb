@@ -357,6 +357,17 @@ Mem0 returned both "Uses PostgreSQL" (stale) and "Prefers SQLite" (current). Men
 | Belief changes | 6/6 correctly tracked |
 | Stale beliefs returned | 0 |
 
+### Candle (Local) vs OpenAI Embedding Quality
+
+| Metric | Candle (all-MiniLM-L6-v2) | OpenAI (text-embedding-3-small) |
+|--------|---------------------------|----------------------------------|
+| Retrieval accuracy | 62% (5/8) | Requires API key to compare |
+| Avg search | 41ms | 431ms (includes API latency) |
+| Setup required | None (auto-downloads model) | OPENAI_API_KEY |
+| Cost | Free | ~$0.02 per 1M tokens |
+
+Candle provides good quality for zero-config local use. OpenAI offers higher accuracy for production workloads. Run `python3 benchmarks/candle_vs_openai.py` with OPENAI_API_KEY set to get a head-to-head comparison.
+
 ### Performance Benchmarks (Criterion)
 
 | Benchmark | 100 | 1,000 | 10,000 |
