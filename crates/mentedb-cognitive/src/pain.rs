@@ -29,6 +29,11 @@ impl PainRegistry {
         self.signals.push(signal);
     }
 
+    /// Returns all recorded pain signals.
+    pub fn all_signals(&self) -> &[PainSignal] {
+        &self.signals
+    }
+
     pub fn get_pain_for_context(&self, context_keywords: &[String]) -> Vec<&PainSignal> {
         let ctx_lower: Vec<String> = context_keywords.iter().map(|k| k.to_lowercase()).collect();
 
