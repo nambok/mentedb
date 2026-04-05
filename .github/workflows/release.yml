@@ -17,7 +17,7 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          for crate in mentedb-core mentedb-storage mentedb-index mentedb-graph mentedb-embedding mentedb-cognitive mentedb-consolidation mentedb-context mentedb-query mentedb; do
+          for crate in mentedb-core mentedb-storage mentedb-index mentedb-graph mentedb-embedding mentedb-cognitive mentedb-consolidation mentedb-context mentedb-extraction mentedb-query mentedb; do
             echo "Publishing $crate..."
             cargo publish -p "$crate" --no-verify || echo "Skipping $crate (already published or error)"
             sleep 30
