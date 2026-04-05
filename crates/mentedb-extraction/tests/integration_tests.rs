@@ -4,7 +4,7 @@ use mentedb_core::types::AgentId;
 use mentedb_embedding::HashEmbeddingProvider;
 use mentedb_embedding::provider::EmbeddingProvider;
 use mentedb_extraction::{
-    ExtractedMemory, ExtractionConfig, ExtractionPipeline, ExtractionStats, MockExtractionProvider,
+    ExtractedMemory, ExtractionConfig, ExtractionPipeline, MockExtractionProvider,
 };
 
 fn make_embedding_provider() -> HashEmbeddingProvider {
@@ -127,7 +127,7 @@ async fn test_deduplication() {
 
     // The first extracted memory has nearly identical content to the existing one
     let first = &memories[0];
-    let is_dup = pipeline.check_duplicates(first, &existing, &emb);
+    let _is_dup = pipeline.check_duplicates(first, &existing, &emb);
 
     // With hash embeddings, identical text produces identical embeddings
     let exact_dup = ExtractedMemory {
