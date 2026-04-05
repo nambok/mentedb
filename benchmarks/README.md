@@ -114,19 +114,55 @@ Python SDK.
 
 ## Interpreting Results
 
-Each test prints a PASS/FAIL verdict along with detailed metrics. A passing run
-looks like:
+Each test prints a PASS/FAIL verdict along with detailed metrics. Here is the
+actual output from a real run (Apple M-series, no LLM tests):
 
 ```
 ============================================================
   Stale Belief Test: PASS
 ============================================================
   Total memories stored: 9
-  Query: What database does the user prefer?
+  Query: user prefers PostgreSQL SQLite database
   SQLite rank: 0
   PostgreSQL rank: NOT FOUND (superseded)
   Belief propagation: Working
+  Top results: 5
+  Result 1 (score=0.512): The user has switched to SQLite. They no longer use PostgreSQL...
+
+============================================================
+  Delta Savings Test: PASS
+============================================================
+  Turns simulated: 20
+  Total tokens (full retrieval): 2,600
+  Total tokens (delta): 244
+  Token savings: 90.6%
+
+============================================================
+  Sustained Conversation Test (100 turns, 3 projects): PASS
+============================================================
+  Total memories ingested: 100
+  Belief changes tracked: 6
+  Avg insert time: 0.23ms
+  Avg search time: 66us
+  Stale beliefs returned: 0% (0/6)
+  Delta token savings (20 checkpoints): 90.1%
 ```
+
+### Criterion Performance Benchmarks
+
+Run with `cargo bench`:
+
+```
+insert_throughput/memories/100      time: [13.08 ms  13.34 ms  13.41 ms]
+insert_throughput/memories/1000     time: [244.1 ms  244.4 ms  245.5 ms]
+insert_throughput/memories/10000    time: [2.644 s   2.655 s   2.701 s ]
+
+context_assembly/100                time: [216.0 µs  217.3 µs  222.6 µs]
+context_assembly/1000               time: [340.8 µs  342.1 µs  342.4 µs]
+context_assembly/10000              time: [690.1 µs  693.5 µs  694.4 µs]
+```
+
+Context assembly stays sub-millisecond even at 10,000 memories.
 
 The summary at the end shows all results:
 
