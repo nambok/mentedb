@@ -23,8 +23,17 @@ def run_mentedb_stale_belief():
     """Run stale belief test on MenteDB. Returns (passed, details, time_ms)."""
     import mentedb
 
+    api_key = os.environ.get("OPENAI_API_KEY")
+    provider = "openai" if api_key else None
+    provider_label = "OpenAI text-embedding-3-small" if api_key else "hash"
+
     t0 = time.perf_counter()
-    db = mentedb.MenteDB(tempfile.mkdtemp())
+    db = mentedb.MenteDB(
+        tempfile.mkdtemp(),
+        embedding_provider=provider,
+        embedding_api_key=api_key,
+        embedding_model="text-embedding-3-small" if api_key else None,
+    )
     superseded = set()
 
     pg_id = db.store(
@@ -47,7 +56,7 @@ def run_mentedb_stale_belief():
     db.store("Meeting notes from standup.", memory_type="episodic")
     db.store("The user wants Docker for deployment.", memory_type="semantic")
 
-    results = db._db.search_text("user prefers PostgreSQL SQLite database", 15)
+    results = db.search_text("user prefers PostgreSQL SQLite database", 15)
     elapsed = (time.perf_counter() - t0) * 1000
 
     filtered = [(r.id, r.score) for r in results if r.id not in superseded][:5]
@@ -55,7 +64,7 @@ def run_mentedb_stale_belief():
     sqlite_found = False
     pg_found = False
     for rid, score in filtered:
-        mem = db._db.get_memory(rid)
+        mem = db.get_memory(rid)
         content = mem["content"].lower()
         if "sqlite" in content:
             sqlite_found = True
@@ -67,7 +76,7 @@ def run_mentedb_stale_belief():
         "SQLite in results": sqlite_found,
         "PostgreSQL (stale) returned": pg_found,
         "Time": f"{elapsed:.1f}ms",
-        "Search method": "HNSW + graph supersession filtering",
+        "Search method": f"HNSW + graph supersession ({provider_label})",
     }, elapsed
 
 
