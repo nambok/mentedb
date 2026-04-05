@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.6](https://github.com/nambok/mentedb/compare/mentedb-v0.2.5...mentedb-v0.2.6) (2026-04-05)
+
+
+### Bug Fixes
+
+* trigger release workflow on tag push instead of release event ([cdeb96f](https://github.com/nambok/mentedb/commit/cdeb96f3f57d4105a42106210373997bdd70ca3e))
+
 ## [0.2.5](https://github.com/nambok/mentedb/compare/mentedb-v0.2.4...mentedb-v0.2.5) (2026-04-05)
 
 
