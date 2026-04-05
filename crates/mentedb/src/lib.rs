@@ -247,6 +247,16 @@ impl MenteDb {
         self.storage.load_memory(page_id)
     }
 
+    /// Returns all memory IDs currently stored in the database.
+    pub fn memory_ids(&self) -> Vec<MemoryId> {
+        self.page_map.keys().copied().collect()
+    }
+
+    /// Returns the number of memories currently stored.
+    pub fn memory_count(&self) -> usize {
+        self.page_map.len()
+    }
+
     /// Removes a memory from storage, indexes, and the graph.
     pub fn forget(&mut self, id: MemoryId) -> MenteResult<()> {
         debug!("Forgetting memory {}", id);
