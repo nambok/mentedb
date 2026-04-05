@@ -29,8 +29,6 @@ class MenteDBBenchmark:
         try:
             import mentedb
             self.db = mentedb.MenteDB(self.tmp_dir)
-            self._edges = []   # (from_id, to_id, edge_type) for graph awareness
-            self._superseded = set()  # memory IDs that have been superseded
         except ImportError:
             print("mentedb Python package not installed. Install with: pip install mentedb")
             print("Or build from source: cd sdks/python && maturin develop")
@@ -44,26 +42,17 @@ class MenteDBBenchmark:
         """Search memories using the real HNSW engine via search_text.
         
         Uses hash embedding similarity search through the Rust engine.
-        Superseded memories are filtered out via graph edge tracking,
-        demonstrating belief propagation.
+        Superseded and contradicted memories are filtered out natively
+        by the engine's graph-aware recall_similar.
         """
         try:
-            results = self.db._db.search_text(query, limit * 3)
-            filtered = []
-            for r in results:
-                if r.id not in self._superseded:
-                    filtered.append((r.id, r.score))
-                if len(filtered) >= limit:
-                    break
-            return filtered
+            results = self.db._db.search_text(query, limit)
+            return [(r.id, r.score) for r in results]
         except Exception:
             return []
     
     def relate(self, from_id, to_id, edge_type, weight=1.0):
         """Create a relationship between memories."""
-        self._edges.append((from_id, to_id, edge_type))
-        if edge_type in ("supersedes", "contradicts"):
-            self._superseded.add(to_id)
         return self.db.relate(from_id, to_id, edge_type, weight=weight)
     
     def get(self, memory_id):
@@ -75,7 +64,6 @@ class MenteDBBenchmark:
     
     def forget(self, memory_id):
         """Delete a memory."""
-        self._superseded.discard(memory_id)
         return self.db.forget(memory_id)
 
     def cleanup(self):
