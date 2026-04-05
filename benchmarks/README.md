@@ -102,6 +102,37 @@ should produce a higher useful-to-noise ratio with fewer total memories.
 
 **Requires `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.** Uses gpt-4o-mini or Claude for extraction and evaluation.
 
+### Mem0 vs MenteDB Comparison (`mem0_comparison.py`)
+
+Head-to-head on the stale belief scenario. Runs the same test on both engines
+side by side.
+
+**Actual results:**
+
+```
+--- MenteDB ---
+  SQLite in results: True
+  PostgreSQL (stale) returned: False
+  Time: 3.9ms
+  Verdict: PASS
+
+--- Mem0 ---
+  SQLite in results: True
+  PostgreSQL (stale) returned: True
+  Time: 27,158ms
+  Verdict: FAIL
+
+--- Comparison ---
+  MenteDB correctly suppressed stale belief. Mem0 did not.
+  Speedup: MenteDB is 6,975x faster
+```
+
+Mem0 returns both the current and stale belief because flat vector search has no
+concept of supersession. MenteDB's graph edges suppress the outdated memory
+before it reaches the LLM.
+
+**Requires `OPENAI_API_KEY`** (Mem0 uses OpenAI internally).
+
 ## Requirements
 
 ```bash
@@ -198,3 +229,8 @@ failure.
 
 5. **It scales.** 100 memories across 3 projects with 6 belief changes, sub-ms
    search, and correct supersession at every query.
+
+6. **Mem0 cannot do this.** In a direct comparison, Mem0 returned stale data and
+   took 27 seconds. MenteDB returned correct data in 3.9ms. Graph-based belief
+   propagation is fundamentally better than flat vector search for memory that
+   changes over time.
