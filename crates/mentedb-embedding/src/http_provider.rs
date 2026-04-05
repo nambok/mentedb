@@ -176,23 +176,34 @@ mod http_impl {
             });
 
             let mut req = ureq::post(&self.config.api_url)
-                .header("Authorization", &format!("Bearer {}", self.config.api_key))
-                .header("Content-Type", "application/json");
+                .header("Authorization", &format!("Bearer {}", self.config.api_key));
 
             for (k, v) in &self.config.headers {
-                req = req.header(k, v);
+                if k.to_lowercase() != "content-type" {
+                    req = req.header(k, v);
+                }
             }
 
-            let resp: OpenAIEmbeddingResponse = req
-                .send_json(&body)
-                .map_err(|e| MenteError::Storage(format!("HTTP embedding request failed: {}", e)))?
+            let result = req.send_json(&body);
+            let mut resp = match result {
+                Ok(r) => r,
+                Err(e) => {
+                    return Err(MenteError::Storage(format!(
+                        "HTTP embedding request failed: {}",
+                        e
+                    )));
+                }
+            };
+
+            let parsed: OpenAIEmbeddingResponse = resp
                 .body_mut()
                 .read_json()
                 .map_err(|e| {
                     MenteError::Storage(format!("Failed to parse embedding response: {}", e))
                 })?;
 
-            resp.data
+            parsed
+                .data
                 .into_iter()
                 .next()
                 .map(|d| d.embedding)
@@ -206,23 +217,33 @@ mod http_impl {
             });
 
             let mut req = ureq::post(&self.config.api_url)
-                .header("Authorization", &format!("Bearer {}", self.config.api_key))
-                .header("Content-Type", "application/json");
+                .header("Authorization", &format!("Bearer {}", self.config.api_key));
 
             for (k, v) in &self.config.headers {
-                req = req.header(k, v);
+                if k.to_lowercase() != "content-type" {
+                    req = req.header(k, v);
+                }
             }
 
-            let resp: OpenAIEmbeddingResponse = req
-                .send_json(&body)
-                .map_err(|e| MenteError::Storage(format!("HTTP embedding request failed: {}", e)))?
+            let result = req.send_json(&body);
+            let mut resp = match result {
+                Ok(r) => r,
+                Err(e) => {
+                    return Err(MenteError::Storage(format!(
+                        "HTTP embedding request failed: {}",
+                        e
+                    )));
+                }
+            };
+
+            let parsed: OpenAIEmbeddingResponse = resp
                 .body_mut()
                 .read_json()
                 .map_err(|e| {
                     MenteError::Storage(format!("Failed to parse embedding response: {}", e))
                 })?;
 
-            Ok(resp.data.into_iter().map(|d| d.embedding).collect())
+            Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
         }
 
         fn dimensions(&self) -> usize {

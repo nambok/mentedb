@@ -12,8 +12,8 @@ use std::path::Path;
 use mentedb_core::error::{MenteError, MenteResult};
 use tracing::{debug, info, trace};
 
-/// Page size: 16KB for B-tree pages (cache-friendly, good for NVMe alignment).
-pub const PAGE_SIZE: usize = 16 * 1024;
+/// Page size: 32KB to accommodate large embedding vectors (e.g. 1536-dim OpenAI = 6KB).
+pub const PAGE_SIZE: usize = 32 * 1024;
 
 /// Magic number identifying a MenteDB page file ("MENTEDB1").
 const MAGIC: u64 = 0x4D454E_5445444231;
