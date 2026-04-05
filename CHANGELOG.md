@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.9](https://github.com/nambok/mentedb/compare/mentedb-v0.2.8...mentedb-v0.2.9) (2026-04-05)
+
+
+### Features
+
+* add flush() method for cross-session persistence ([c39ac7f](https://github.com/nambok/mentedb/commit/c39ac7f0b944ad2c8264586ca454ed3a3cbac0ad))
+
+
+### Bug Fixes
+
+* clarify delta token reduction claims ([026b5f1](https://github.com/nambok/mentedb/commit/026b5f1e6ed50caf7d1df9b56c3a7ed84f3e51b5))
+
 ## [0.2.8](https://github.com/nambok/mentedb/compare/mentedb-v0.2.7...mentedb-v0.2.8) (2026-04-05)
 
 

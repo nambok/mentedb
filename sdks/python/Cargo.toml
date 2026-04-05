@@ -2,7 +2,7 @@
 
 [package]
 name = "mentedb-python"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2024"
 license = "Apache-2.0"
 description = "Python bindings for MenteDB"
