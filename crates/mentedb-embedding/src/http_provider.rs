@@ -6,7 +6,7 @@ use mentedb_core::MenteError;
 use mentedb_core::error::MenteResult;
 use serde::{Deserialize, Serialize};
 
-use crate::provider::AsyncEmbeddingProvider;
+use crate::provider::{AsyncEmbeddingProvider, EmbeddingProvider};
 
 /// Configuration for an HTTP-based embedding API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,13 +134,114 @@ impl HttpEmbeddingProvider {
 impl AsyncEmbeddingProvider for HttpEmbeddingProvider {
     async fn embed(&self, _text: &str) -> MenteResult<Vec<f32>> {
         Err(MenteError::Storage(
-            "HTTP embedding requires the 'reqwest' feature".to_string(),
+            "HTTP embedding requires the 'http' feature for async, use sync EmbeddingProvider instead".to_string(),
         ))
     }
 
     async fn embed_batch(&self, _texts: &[&str]) -> MenteResult<Vec<Vec<f32>>> {
         Err(MenteError::Storage(
-            "HTTP embedding requires the 'reqwest' feature".to_string(),
+            "HTTP embedding requires the 'http' feature for async, use sync EmbeddingProvider instead".to_string(),
+        ))
+    }
+
+    fn dimensions(&self) -> usize {
+        self.config.dimensions
+    }
+
+    fn model_name(&self) -> &str {
+        &self.config.model_name
+    }
+}
+
+#[cfg(feature = "http")]
+mod http_impl {
+    use super::*;
+    use serde_json::json;
+
+    #[derive(Deserialize)]
+    struct OpenAIEmbeddingResponse {
+        data: Vec<OpenAIEmbeddingData>,
+    }
+
+    #[derive(Deserialize)]
+    struct OpenAIEmbeddingData {
+        embedding: Vec<f32>,
+    }
+
+    impl EmbeddingProvider for HttpEmbeddingProvider {
+        fn embed(&self, text: &str) -> MenteResult<Vec<f32>> {
+            let body = json!({
+                "model": self.config.model_name,
+                "input": text,
+            });
+
+            let mut req = ureq::post(&self.config.api_url)
+                .header("Authorization", &format!("Bearer {}", self.config.api_key))
+                .header("Content-Type", "application/json");
+
+            for (k, v) in &self.config.headers {
+                req = req.header(k, v);
+            }
+
+            let resp: OpenAIEmbeddingResponse = req
+                .send_json(&body)
+                .map_err(|e| MenteError::Storage(format!("HTTP embedding request failed: {}", e)))?
+                .body_mut()
+                .read_json()
+                .map_err(|e| MenteError::Storage(format!("Failed to parse embedding response: {}", e)))?;
+
+            resp.data
+                .into_iter()
+                .next()
+                .map(|d| d.embedding)
+                .ok_or_else(|| MenteError::Storage("Empty embedding response".to_string()))
+        }
+
+        fn embed_batch(&self, texts: &[&str]) -> MenteResult<Vec<Vec<f32>>> {
+            let body = json!({
+                "model": self.config.model_name,
+                "input": texts,
+            });
+
+            let mut req = ureq::post(&self.config.api_url)
+                .header("Authorization", &format!("Bearer {}", self.config.api_key))
+                .header("Content-Type", "application/json");
+
+            for (k, v) in &self.config.headers {
+                req = req.header(k, v);
+            }
+
+            let resp: OpenAIEmbeddingResponse = req
+                .send_json(&body)
+                .map_err(|e| MenteError::Storage(format!("HTTP embedding request failed: {}", e)))?
+                .body_mut()
+                .read_json()
+                .map_err(|e| MenteError::Storage(format!("Failed to parse embedding response: {}", e)))?;
+
+            Ok(resp.data.into_iter().map(|d| d.embedding).collect())
+        }
+
+        fn dimensions(&self) -> usize {
+            self.config.dimensions
+        }
+
+        fn model_name(&self) -> &str {
+            &self.config.model_name
+        }
+    }
+}
+
+#[cfg(not(feature = "http"))]
+impl EmbeddingProvider for HttpEmbeddingProvider {
+    fn embed(&self, _text: &str) -> MenteResult<Vec<f32>> {
+        Err(MenteError::Storage(
+            "HTTP embedding requires the 'http' feature. Enable it in Cargo.toml.".to_string(),
+        ))
+    }
+
+    fn embed_batch(&self, _texts: &[&str]) -> MenteResult<Vec<Vec<f32>>> {
+        Err(MenteError::Storage(
+            "HTTP embedding requires the 'http' feature. Enable it in Cargo.toml.".to_string(),
         ))
     }
 

@@ -15,10 +15,27 @@ class MenteDB:
 
         with MenteDB("./data") as db:
             mid = db.store("the sky is blue")
+
+    For real semantic search, pass an embedding provider::
+
+        with MenteDB("./data", embedding_provider="openai", embedding_api_key="sk-...") as db:
+            mid = db.store("the sky is blue")
+            results = db.search_text("sky color", k=5)
     """
 
-    def __init__(self, data_dir: str = "./mentedb-data"):
-        self._db = _MenteDB(data_dir)
+    def __init__(
+        self,
+        data_dir: str = "./mentedb-data",
+        embedding_provider: str | None = None,
+        embedding_api_key: str | None = None,
+        embedding_model: str | None = None,
+    ):
+        self._db = _MenteDB(
+            data_dir,
+            embedding_provider=embedding_provider,
+            embedding_api_key=embedding_api_key,
+            embedding_model=embedding_model,
+        )
 
     def store(
         self,
@@ -31,8 +48,6 @@ class MenteDB:
         """Store a memory and return its UUID."""
         if isinstance(memory_type, MemoryType):
             memory_type = memory_type.value
-        if embedding is None:
-            embedding = []
         return self._db.store(content, memory_type, embedding, agent_id, tags)
 
     def recall(self, query: str):
@@ -42,6 +57,14 @@ class MenteDB:
     def search(self, embedding: list[float], k: int = 10):
         """Vector similarity search. Returns a list of SearchResult."""
         return self._db.search(embedding, k)
+
+    def search_text(self, query: str, k: int = 10):
+        """Text-based similarity search using the configured embedding provider."""
+        return self._db.search_text(query, k)
+
+    def get_memory(self, memory_id: str):
+        """Retrieve a single memory by its UUID."""
+        return self._db.get_memory(memory_id)
 
     def relate(
         self,

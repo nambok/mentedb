@@ -45,6 +45,7 @@ use mentedb_core::edge::EdgeType;
 use mentedb_core::error::MenteResult;
 use mentedb_core::types::MemoryId;
 use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
+use mentedb_embedding::provider::EmbeddingProvider;
 use mentedb_graph::GraphManager;
 use mentedb_index::IndexManager;
 use mentedb_query::{Mql, QueryPlan};
@@ -94,6 +95,8 @@ pub struct MenteDb {
     embedding_dim: usize,
     /// Database directory path for persistence.
     path: PathBuf,
+    /// Optional embedding provider for auto-embedding on store and search.
+    embedder: Option<Box<dyn EmbeddingProvider>>,
 }
 
 impl MenteDb {
@@ -128,7 +131,34 @@ impl MenteDb {
             page_map,
             embedding_dim: 0,
             path: path.to_path_buf(),
+            embedder: None,
         })
+    }
+
+    /// Opens a MenteDB instance with a configured embedding provider.
+    pub fn open_with_embedder(
+        path: &Path,
+        embedder: Box<dyn EmbeddingProvider>,
+    ) -> MenteResult<Self> {
+        let mut db = Self::open(path)?;
+        db.embedding_dim = embedder.dimensions();
+        db.embedder = Some(embedder);
+        Ok(db)
+    }
+
+    /// Set the embedding provider after construction.
+    pub fn set_embedder(&mut self, embedder: Box<dyn EmbeddingProvider>) {
+        self.embedding_dim = embedder.dimensions();
+        self.embedder = Some(embedder);
+    }
+
+    /// Generate an embedding for the given text using the configured provider.
+    /// Returns None if no provider is configured.
+    pub fn embed_text(&self, text: &str) -> MenteResult<Option<Vec<f32>>> {
+        match &self.embedder {
+            Some(e) => Ok(Some(e.embed(text)?)),
+            None => Ok(None),
+        }
     }
 
     /// Stores a memory node into the database.

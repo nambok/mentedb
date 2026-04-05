@@ -14,6 +14,10 @@ use mentedb_extraction::{
     ExtractionConfig, ExtractionPipeline, HttpExtractionProvider, LlmProvider,
     map_extraction_type_to_memory_type,
 };
+use mentedb_embedding::hash_provider::HashEmbeddingProvider;
+use mentedb_embedding::http_provider::HttpEmbeddingConfig;
+use mentedb_embedding::http_provider::HttpEmbeddingProvider;
+use mentedb_embedding::provider::EmbeddingProvider;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use uuid::Uuid;
@@ -82,23 +86,65 @@ fn now_us() -> Timestamp {
 #[pyclass]
 struct MenteDB {
     db: Option<MenteDb>,
+    embedder: Option<Box<dyn EmbeddingProvider>>,
 }
 
 #[pymethods]
 impl MenteDB {
     #[new]
-    fn new(data_dir: &str) -> PyResult<Self> {
-        let db = MenteDb::open(Path::new(data_dir)).map_err(to_pyerr)?;
-        Ok(Self { db: Some(db) })
+    #[pyo3(signature = (data_dir, embedding_provider=None, embedding_api_key=None, embedding_model=None))]
+    fn new(
+        data_dir: &str,
+        embedding_provider: Option<&str>,
+        embedding_api_key: Option<&str>,
+        embedding_model: Option<&str>,
+    ) -> PyResult<Self> {
+        let embedder: Option<Box<dyn EmbeddingProvider>> = match embedding_provider {
+            Some("openai") => {
+                let key = embedding_api_key
+                    .ok_or_else(|| PyRuntimeError::new_err("openai provider requires embedding_api_key"))?;
+                let model = embedding_model.unwrap_or("text-embedding-3-small");
+                let config = HttpEmbeddingConfig::openai(key, model);
+                Some(Box::new(HttpEmbeddingProvider::new(config)))
+            }
+            Some("cohere") => {
+                let key = embedding_api_key
+                    .ok_or_else(|| PyRuntimeError::new_err("cohere provider requires embedding_api_key"))?;
+                let model = embedding_model.unwrap_or("embed-english-v3.0");
+                let config = HttpEmbeddingConfig::cohere(key, model);
+                Some(Box::new(HttpEmbeddingProvider::new(config)))
+            }
+            Some("voyage") => {
+                let key = embedding_api_key
+                    .ok_or_else(|| PyRuntimeError::new_err("voyage provider requires embedding_api_key"))?;
+                let model = embedding_model.unwrap_or("voyage-2");
+                let config = HttpEmbeddingConfig::voyage(key, model);
+                Some(Box::new(HttpEmbeddingProvider::new(config)))
+            }
+            Some("hash") | None => {
+                Some(Box::new(HashEmbeddingProvider::new(384)))
+            }
+            Some(other) => {
+                return Err(PyRuntimeError::new_err(format!(
+                    "unknown embedding provider: {other}. Use 'openai', 'cohere', 'voyage', or 'hash'"
+                )));
+            }
+        };
+
+        let mut db = MenteDb::open(Path::new(data_dir)).map_err(to_pyerr)?;
+        if let Some(ref e) = embedder {
+            db.set_embedder(Box::new(HashEmbeddingProvider::new(e.dimensions())));
+        }
+        Ok(Self { db: Some(db), embedder })
     }
 
     /// Store a memory and return its UUID string.
-    #[pyo3(signature = (content, memory_type, embedding, agent_id=None, tags=None))]
+    #[pyo3(signature = (content, memory_type, embedding=None, agent_id=None, tags=None))]
     fn store(
         &mut self,
         content: &str,
         memory_type: &str,
-        embedding: Vec<f32>,
+        embedding: Option<Vec<f32>>,
         agent_id: Option<&str>,
         tags: Option<Vec<String>>,
     ) -> PyResult<String> {
@@ -113,10 +159,15 @@ impl MenteDB {
 
         let mt = parse_memory_type(memory_type)?;
 
-        let emb: Embedding = if embedding.is_empty() {
-            hash_embedding(content, 384)
-        } else {
-            embedding
+        let emb: Embedding = match embedding {
+            Some(e) if !e.is_empty() => e,
+            _ => {
+                if let Some(ref embedder) = self.embedder {
+                    embedder.embed(content).map_err(to_pyerr)?
+                } else {
+                    hash_embedding(content, 384)
+                }
+            }
         };
 
         let mut node = MemoryNode::new(aid, mt, content.to_string(), emb);
@@ -173,15 +224,18 @@ impl MenteDB {
             .collect())
     }
 
-    /// Text-based similarity search using the same hash embedding as store().
-    /// This auto-generates a 384-dim embedding from the query text,
-    /// matching what store() does when no embedding is provided.
+    /// Text-based similarity search using the configured embedding provider.
+    /// Uses OpenAI/Cohere/Voyage if configured, falls back to hash embedding.
     fn search_text(&mut self, query: &str, k: usize) -> PyResult<Vec<SearchResult>> {
         let db = self.db.as_mut().ok_or_else(|| {
             PyRuntimeError::new_err("database is closed")
         })?;
 
-        let embedding = hash_embedding(query, 384);
+        let embedding = if let Some(ref embedder) = self.embedder {
+            embedder.embed(query).map_err(to_pyerr)?
+        } else {
+            hash_embedding(query, 384)
+        };
         let hits = db.recall_similar(&embedding, k).map_err(to_pyerr)?;
         Ok(hits
             .into_iter()

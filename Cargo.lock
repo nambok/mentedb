@@ -487,6 +487,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "cookie"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ddef33a339a91ea89fb53151bd0a4689cfce27055c291dfa69945475d22c747"
+dependencies = [
+ "percent-encoding",
+ "time",
+ "version_check",
+]
+
+[[package]]
+name = "cookie_store"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15b2c103cf610ec6cae3da84a766285b42fd16aad564758459e6ecf128c75206"
+dependencies = [
+ "cookie",
+ "document-features",
+ "idna",
+ "indexmap",
+ "log",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "time",
+ "url",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -695,6 +724,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "document-features"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
+dependencies = [
+ "litrs",
 ]
 
 [[package]]
@@ -1361,6 +1399,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
+name = "litrs"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1419,7 +1463,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "mentedb"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "criterion",
  "mentedb-cognitive",
@@ -1439,7 +1483,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-cognitive"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ahash 0.8.12",
  "crossbeam",
@@ -1453,7 +1497,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-consolidation"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ahash 0.8.12",
  "mentedb-core",
@@ -1465,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-context"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ahash 0.8.12",
  "mentedb-core",
@@ -1477,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ahash 0.8.12",
  "bytemuck",
@@ -1492,7 +1536,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-embedding"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -1501,12 +1545,13 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "ureq",
  "uuid",
 ]
 
 [[package]]
 name = "mentedb-extraction"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "mentedb-cognitive",
  "mentedb-core",
@@ -1522,7 +1567,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-graph"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ahash 0.8.12",
  "bytemuck",
@@ -1538,7 +1583,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-index"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ahash 0.8.12",
  "bytemuck",
@@ -1555,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-query"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -1567,7 +1612,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-replication"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1588,7 +1633,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-server"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -1617,7 +1662,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-storage"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ahash 0.8.12",
  "bytes",
@@ -2465,6 +2510,7 @@ version = "0.23.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "758025cb5fccfd3bc2fd74708fd4682be41d99e5dff73c377c0646c6012c73a4"
 dependencies = [
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -3263,6 +3309,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
+name = "ureq"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dea7109cdcd5864d4eeb1b58a1648dc9bf520360d7af16ec26d0a9354bafcfc0"
+dependencies = [
+ "base64",
+ "cookie_store",
+ "flate2",
+ "log",
+ "percent-encoding",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "ureq-proto",
+ "utf8-zero",
+ "webpki-roots",
+]
+
+[[package]]
+name = "ureq-proto"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e994ba84b0bd1b1b0cf92878b7ef898a5c1760108fe7b6010327e274917a808c"
+dependencies = [
+ "base64",
+ "http",
+ "httparse",
+ "log",
+]
+
+[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3285,6 +3363,12 @@ name = "utf8-width"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1292c0d970b54115d14f2492fe0170adf21d68a1de108eebc51c1df4f346a091"
+
+[[package]]
+name = "utf8-zero"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8c0a043c9540bae7c578c88f91dda8bd82e59ae27c21baca69c8b191aaf5a6e"
 
 [[package]]
 name = "utf8_iter"

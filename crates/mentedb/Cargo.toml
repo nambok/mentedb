@@ -17,6 +17,7 @@ mentedb-index = { workspace = true }
 mentedb-graph = { workspace = true }
 mentedb-query = { workspace = true }
 mentedb-context = { workspace = true }
+mentedb-embedding = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
@@ -27,7 +28,6 @@ criterion = { workspace = true }
 uuid = { workspace = true }
 mentedb-cognitive = { workspace = true }
 mentedb-consolidation = { workspace = true }
-mentedb-embedding = { workspace = true }
 
 [[bench]]
 name = "storage_bench"

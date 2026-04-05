@@ -21,7 +21,7 @@ mentedb-graph = { path = "../../crates/mentedb-graph" }
 mentedb-context = { path = "../../crates/mentedb-context" }
 mentedb-cognitive = { path = "../../crates/mentedb-cognitive" }
 mentedb-consolidation = { path = "../../crates/mentedb-consolidation" }
-mentedb-embedding = { path = "../../crates/mentedb-embedding" }
+mentedb-embedding = { path = "../../crates/mentedb-embedding", features = ["http"] }
 mentedb-extraction = { path = "../../crates/mentedb-extraction" }
 uuid = { version = "1", features = ["v4"] }
 serde_json = "1"
