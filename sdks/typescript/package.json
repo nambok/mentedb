@@ -22,6 +22,10 @@
     "vector",
     "knowledge-graph"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "napi": {
     "name": "mentedb",
     "triples": {}
