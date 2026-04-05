@@ -188,7 +188,9 @@ mod http_impl {
                 .map_err(|e| MenteError::Storage(format!("HTTP embedding request failed: {}", e)))?
                 .body_mut()
                 .read_json()
-                .map_err(|e| MenteError::Storage(format!("Failed to parse embedding response: {}", e)))?;
+                .map_err(|e| {
+                    MenteError::Storage(format!("Failed to parse embedding response: {}", e))
+                })?;
 
             resp.data
                 .into_iter()
@@ -216,7 +218,9 @@ mod http_impl {
                 .map_err(|e| MenteError::Storage(format!("HTTP embedding request failed: {}", e)))?
                 .body_mut()
                 .read_json()
-                .map_err(|e| MenteError::Storage(format!("Failed to parse embedding response: {}", e)))?;
+                .map_err(|e| {
+                    MenteError::Storage(format!("Failed to parse embedding response: {}", e))
+                })?;
 
             Ok(resp.data.into_iter().map(|d| d.embedding).collect())
         }
