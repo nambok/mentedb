@@ -341,11 +341,21 @@ docker-compose up -d
 | | MenteDB | Mem0 |
 |---|---------|------|
 | Stale belief test | PASS | FAIL (returns stale data) |
-| Latency | 4.7ms | 21,164ms |
-| Speedup | **4,459x faster** | baseline |
+| Latency | 4,363ms | 21,015ms |
+| Speedup | **4.8x faster** | baseline |
 | Belief propagation | Graph edges suppress stale | Flat vector, no supersession |
 
-Mem0 returned both "Uses PostgreSQL" (stale) and "Prefers SQLite" (current). MenteDB returned only the current belief. The speed difference includes Mem0's OpenAI API latency, so the correctness gap (PASS vs FAIL) is the more meaningful comparison.
+Mem0 returned both "Uses PostgreSQL" (stale) and "Prefers SQLite" (current). MenteDB returned only the current belief. Both used OpenAI text-embedding-3-small for a fair comparison. The correctness gap (PASS vs FAIL) is the more meaningful result.
+
+### 10K Scale Test (OpenAI text-embedding-3-small)
+
+| Metric | Value |
+|--------|-------|
+| Total memories | 10,000 |
+| Avg insert | 457ms (includes OpenAI API round trip) |
+| Avg search at 10K | 431ms |
+| Belief changes | 6/6 correctly tracked |
+| Stale beliefs returned | 0 |
 
 ### Performance Benchmarks (Criterion)
 
