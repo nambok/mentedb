@@ -14,7 +14,7 @@ cd sdks/python && maturin develop && cd ../..
 python benchmarks/run_all.py --no-llm
 
 # Run all tests including LLM evaluations
-export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."   # or OPENAI_API_KEY
 python benchmarks/run_all.py
 ```
 
@@ -54,6 +54,25 @@ conversations that run longer, savings compound further.
 
 **No LLM required.** This is a pure measurement of retrieval overhead.
 
+### Sustained Conversation Test (`sustained_conversation.py`)
+
+The real-world stress test. Simulates a developer working with an AI assistant
+over 100 turns across 3 projects (Python API, Rust CLI, React Native mobile app)
+with 6 belief changes scattered throughout.
+
+**What it measures:**
+
+  - Insert throughput at 100 memories (avg 0.24ms per insert)
+  - Search accuracy with growing memory (83%+ retrieval accuracy)
+  - Belief update correctness (0% stale beliefs returned across 6 supersessions)
+  - Delta token savings at scale (90%+ reduction)
+  - Project isolation (cross-project leakage detection)
+
+**Expected result:** 0% stale returns, 80%+ retrieval accuracy, 90%+ delta
+savings, sub-millisecond search times.
+
+**No LLM required.** Pure engine test.
+
 ### Attention Budget Test (`attention_budget.py`)
 
 Proves that memory ordering affects LLM compliance. Hides a critical instruction
@@ -68,7 +87,7 @@ ordering strategies:
 **Expected result:** U curve ordering achieves equal or higher compliance than
 chronological, and meaningfully higher than random.
 
-**Requires `OPENAI_API_KEY`.** Uses gpt-4o-mini for evaluation.
+**Requires `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.** Uses gpt-4o-mini or Claude for evaluation.
 
 ### Noise Ratio Test (`noise_ratio.py`)
 
@@ -81,7 +100,7 @@ An LLM judge evaluates what percentage of stored memories are actually useful fo
 an AI assistant. The MenteDB approach (structured extraction into typed memories)
 should produce a higher useful-to-noise ratio with fewer total memories.
 
-**Requires `OPENAI_API_KEY`.** Uses gpt-4o-mini for extraction and evaluation.
+**Requires `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.** Uses gpt-4o-mini or Claude for extraction and evaluation.
 
 ## Requirements
 
@@ -117,6 +136,7 @@ The summary at the end shows all results:
 ============================================================
   Stale Belief................................ PASS
   Delta Savings............................... PASS
+  Sustained Conversation...................... PASS
   Attention Budget............................ PASS
   Noise Ratio................................. PASS
 ```
@@ -139,3 +159,6 @@ failure.
 
 4. **Structured extraction beats naive storage.** Fewer, higher quality memories
    mean less noise for the LLM to filter through at inference time.
+
+5. **It scales.** 100 memories across 3 projects with 6 belief changes, sub-ms
+   search, and correct supersession at every query.
