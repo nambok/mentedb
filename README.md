@@ -90,6 +90,7 @@ The result: a clean, curated memory that actually helps the AI perform better.
 - **MQL** Mente Query Language with full boolean logic (AND, OR, NOT) and ordering (ASC/DESC)
 - **Type Safe IDs** MemoryId, AgentId, SpaceId newtypes prevent accidental mixing
 - **Binary Embeddings** Base64 encoded storage, 65% smaller than JSON arrays
+- **Local Candle Embeddings** Zero config semantic search using all-MiniLM-L6-v2 (384 dims), no API key required
 - **gRPC + REST + MCP** Three integration paths for any use case
 
 ### Performance Targets (10M memories)
@@ -112,9 +113,9 @@ For Claude CLI, Copilot CLI, Cursor, Windsurf, and any MCP compatible client.
 cargo install mentedb-mcp
 ```
 
-See [mentedb-mcp](https://github.com/nambok/mentedb-mcp) for setup, configuration, and the full list of tools.
+See [mentedb-mcp](https://github.com/nambok/mentedb-mcp) for setup, configuration, and the full list of 31 tools.
 
-**10 tools available:** `store_memory`, `recall_memory`, `search_memories`, `relate_memories`, `forget_memory`, `assemble_context`, `get_stats`, `register_entity`, `get_cognitive_state`, `ingest_conversation`
+**Key tools:** `store_memory`, `search_memories`, `forget_all`, `ingest_conversation`, `assemble_context`, `relate_memories`, `write_inference`, `get_cognitive_state`, and 23 more covering knowledge graph, consolidation, and cognitive systems.
 
 ### 2. REST API
 
