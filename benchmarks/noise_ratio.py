@@ -77,16 +77,18 @@ def run_noise_ratio_test():
                 client, provider,
                 f"Extract the key technical decisions and user preferences from this conversation as a JSON array of strings. Only include actionable facts, not chit-chat:\n\n{conv}",
                 json_mode=True,
+                max_tokens=1024,
             )
             try:
                 facts = json.loads(response_text)
                 if isinstance(facts, dict):
-                    facts = facts.get("facts", facts.get("decisions", list(facts.values())[0] if facts else []))
-                for fact in facts:
-                    if isinstance(fact, str) and len(fact) > 10:
-                        mid = bench.store(fact, memory_type="semantic", tags=["extracted"])
-                        extracted_memories.append((mid, fact))
-            except:
+                    facts = facts.get("facts", facts.get("decisions", facts.get("extracted", list(facts.values())[0] if facts else [])))
+                if isinstance(facts, list):
+                    for fact in facts:
+                        if isinstance(fact, str) and len(fact) > 10:
+                            mid = bench.store(fact, memory_type="semantic", tags=["extracted"])
+                            extracted_memories.append((mid, fact))
+            except json.JSONDecodeError:
                 pass
         
         # Evaluate usefulness with LLM
@@ -99,6 +101,7 @@ def run_noise_ratio_test():
                 client, provider,
                 f"Rate each memory below as USEFUL or NOISE for an AI assistant helping with this software project. A memory is USEFUL if it contains an actionable technical decision, user preference, or project requirement. Return a JSON object with 'useful_count' and 'total'.\n\nMemories:\n{items}",
                 json_mode=True,
+                max_tokens=512,
             )
             try:
                 result = json.loads(response_text)

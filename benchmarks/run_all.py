@@ -25,6 +25,7 @@ from stale_belief import run_stale_belief_test
 from delta_savings import run_delta_savings_test
 from attention_budget import run_attention_budget_test
 from noise_ratio import run_noise_ratio_test
+from sustained_conversation import run_sustained_conversation_test
 
 def main():
     parser = argparse.ArgumentParser(description="MenteDB Quality Benchmarks")
@@ -42,6 +43,7 @@ def main():
     print("\n--- Engine Tests (no LLM required) ---\n")
     results["Stale Belief"] = run_stale_belief_test()
     results["Delta Savings"] = run_delta_savings_test()
+    results["Sustained Conversation"] = run_sustained_conversation_test()
     
     # LLM tests (optional)
     if not args.no_llm:
