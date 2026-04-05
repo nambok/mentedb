@@ -281,10 +281,20 @@ impl MenteDb {
     /// Flushes all data and closes the database.
     pub fn close(&mut self) -> MenteResult<()> {
         info!("Closing MenteDB");
+        self.flush()?;
+        self.storage.close()?;
+        Ok(())
+    }
+
+    /// Flush indexes, graph, and storage to disk without closing.
+    ///
+    /// Call this periodically to ensure cross-session persistence.
+    /// Unlike `close()`, the database remains usable after flushing.
+    pub fn flush(&mut self) -> MenteResult<()> {
+        debug!("Flushing MenteDB to disk");
         self.index.save(&self.path.join("indexes"))?;
         self.graph.save(&self.path.join("graph"))?;
         self.storage.checkpoint()?;
-        self.storage.close()?;
         Ok(())
     }
 
