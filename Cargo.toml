@@ -73,3 +73,23 @@ mentedb-cognitive = { path = "crates/mentedb-cognitive", version = "0.2.1" }
 mentedb-consolidation = { path = "crates/mentedb-consolidation", version = "0.2.1" }
 mentedb-embedding = { path = "crates/mentedb-embedding", version = "0.2.1" }
 mentedb-extraction = { path = "crates/mentedb-extraction", version = "0.2.1" }
+
+[dev-dependencies]
+criterion = { workspace = true }
+mentedb = { workspace = true }
+mentedb-core = { workspace = true }
+mentedb-context = { workspace = true }
+mentedb-embedding = { workspace = true }
+tempfile = { workspace = true }
+
+[[bench]]
+name = "insert_throughput"
+harness = false
+
+[[bench]]
+name = "similarity_search"
+harness = false
+
+[[bench]]
+name = "context_assembly"
+harness = false
