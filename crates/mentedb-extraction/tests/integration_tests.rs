@@ -2,8 +2,8 @@ use mentedb_core::MemoryNode;
 use mentedb_core::memory::MemoryType;
 use mentedb_embedding::HashEmbeddingProvider;
 use mentedb_embedding::provider::EmbeddingProvider;
+use mentedb_core::types::AgentId;
 use mentedb_extraction::{
-use mentedb_core::types::{AgentId};
     ExtractedMemory, ExtractionConfig, ExtractionPipeline, ExtractionStats, MockExtractionProvider,
 };
 

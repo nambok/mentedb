@@ -428,6 +428,7 @@ mod tests {
         let db = MenteDb::open(tmp.path()).unwrap();
         let state = Arc::new(AppState {
             db: Arc::new(RwLock::new(db)),
+            spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
             jwt_secret: None,
             admin_key: None,
             start_time: Instant::now(),
@@ -718,7 +719,7 @@ mod tests {
     fn make_auth_test_state(secret: &str) -> (Arc<AppState>, TempDir) {
         let tmp = TempDir::new().unwrap();
         let db = MenteDb::open(tmp.path()).unwrap();
-        (Arc::new(AppState { db: Arc::new(RwLock::new(db)), jwt_secret: Some(secret.into()), admin_key: Some("ak".into()), start_time: Instant::now() }), tmp)
+        (Arc::new(AppState { db: Arc::new(RwLock::new(db)), spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())), jwt_secret: Some(secret.into()), admin_key: Some("ak".into()), start_time: Instant::now() }), tmp)
     }
     #[tokio::test]
     async fn test_grpc_auth_required_when_secret_set() {
@@ -731,7 +732,7 @@ mod tests {
     async fn test_grpc_auth_succeeds_with_valid_token() {
         let (s, _t) = make_auth_test_state("s");
         let svc = MemoryServiceImpl { state: s };
-        let a = AgentId::new(); let tok = crate::auth::create_token("s", &a.to_string(), 1);
+        let a = AgentId::new(); let tok = crate::auth::create_token("s", &a.to_string(), false, 1);
         let mut r = Request::new(pb::StoreRequest { agent_id: a.to_string(), memory_type: "episodic".into(), content: "t".into(), embedding: vec![], tags: vec![], attributes: HashMap::new(), space_id: String::new(), salience: 0.5, confidence: 1.0 });
         r.metadata_mut().insert("authorization", format!("Bearer {tok}").parse().unwrap());
         assert_eq!(svc.store(r).await.unwrap().into_inner().status, "stored");
@@ -741,7 +742,7 @@ mod tests {
         let (s, _t) = make_auth_test_state("s");
         let svc = MemoryServiceImpl { state: s };
         let ta = AgentId::new(); let ra = AgentId::new();
-        let tok = crate::auth::create_token("s", &ta.to_string(), 1);
+        let tok = crate::auth::create_token("s", &ta.to_string(), false, 1);
         let mut r = Request::new(pb::StoreRequest { agent_id: ra.to_string(), memory_type: "episodic".into(), content: "t".into(), embedding: vec![], tags: vec![], attributes: HashMap::new(), space_id: String::new(), salience: 0.5, confidence: 1.0 });
         r.metadata_mut().insert("authorization", format!("Bearer {tok}").parse().unwrap());
         assert_eq!(svc.store(r).await.unwrap_err().code(), tonic::Code::PermissionDenied);

@@ -4,7 +4,7 @@ use mentedb::core::memory::{MemoryNode, MemoryType};
 use mentedb::index::hnsw::{HnswConfig, HnswIndex};
 use mentedb::query::mql::Mql;
 use mentedb::storage::StorageEngine;
-use mentedb_core::types::{AgentId};
+use mentedb_core::types::{AgentId, MemoryId};
 
 fn random_embedding(dim: usize) -> Vec<f32> {
     // Simple pseudo-random via system time mixed with counter.
@@ -65,7 +65,7 @@ fn bench_hnsw_search(c: &mut Criterion) {
     let index = HnswIndex::new(HnswConfig::default());
     for _ in 0..10_000 {
         index
-            .insert(AgentId::new(), &random_embedding(128))
+            .insert(MemoryId::new(), &random_embedding(128))
             .unwrap();
     }
 

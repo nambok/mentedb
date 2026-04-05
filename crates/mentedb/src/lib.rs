@@ -89,6 +89,8 @@ pub struct MenteDb {
     graph: GraphManager,
     /// Maps memory IDs to their storage page IDs for retrieval.
     page_map: HashMap<MemoryId, PageId>,
+    /// Expected embedding dimension (0 = no validation).
+    embedding_dim: usize,
     /// Database directory path for persistence.
     path: PathBuf,
 }
@@ -123,6 +125,7 @@ impl MenteDb {
             index,
             graph,
             page_map,
+            embedding_dim: 0,
             path: path.to_path_buf(),
         })
     }
@@ -134,6 +137,16 @@ impl MenteDb {
     pub fn store(&mut self, node: MemoryNode) -> MenteResult<()> {
         let id = node.id;
         debug!("Storing memory {}", id);
+
+        // Validate embedding dimension when configured.
+        if self.embedding_dim > 0 && !node.embedding.is_empty()
+            && node.embedding.len() != self.embedding_dim
+        {
+            return Err(MenteError::EmbeddingDimensionMismatch {
+                got: node.embedding.len(),
+                expected: self.embedding_dim,
+            });
+        }
 
         let page_id = self.storage.store_memory(&node)?;
         self.page_map.insert(id, page_id);
@@ -176,6 +189,13 @@ impl MenteDb {
         debug!("Relating {} -> {}", edge.source, edge.target);
         self.graph.add_relationship(&edge)?;
         Ok(())
+    }
+
+    /// Retrieves a single memory by its ID.
+    pub fn get_memory(&mut self, id: MemoryId) -> MenteResult<MemoryNode> {
+        let page_id = self.page_map.get(&id).copied()
+            .ok_or(MenteError::MemoryNotFound(id))?;
+        self.storage.load_memory(page_id)
     }
 
     /// Removes a memory from storage, indexes, and the graph.

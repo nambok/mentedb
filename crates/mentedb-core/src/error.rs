@@ -31,6 +31,15 @@ pub enum MenteError {
     #[error("capacity exceeded: {0}")]
     CapacityExceeded(String),
 
+    /// The embedding dimension does not match the expected dimension.
+    #[error("embedding dimension mismatch: got {got}, expected {expected}")]
+    EmbeddingDimensionMismatch {
+        /// Actual dimension provided.
+        got: usize,
+        /// Expected dimension.
+        expected: usize,
+    },
+
     /// The agent does not have permission to access the memory space.
     #[error("permission denied: agent {agent_id} cannot access space {space_id}")]
     PermissionDenied {

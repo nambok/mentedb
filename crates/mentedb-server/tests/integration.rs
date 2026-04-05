@@ -35,6 +35,7 @@ fn build_test_app_with_auth() -> (axum::Router, TempDir) {
     let db = MenteDb::open(tmp.path()).unwrap();
     let state = Arc::new(AppState {
         db: Arc::new(RwLock::new(db)),
+        spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: Some(JWT_SECRET.to_string()),
         admin_key: Some(ADMIN_KEY.to_string()),
         start_time: Instant::now(),
@@ -52,6 +53,7 @@ fn build_test_app_no_auth() -> (axum::Router, TempDir) {
     let db = MenteDb::open(tmp.path()).unwrap();
     let state = Arc::new(AppState {
         db: Arc::new(RwLock::new(db)),
+        spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: None,
         admin_key: None,
         start_time: Instant::now(),
@@ -69,6 +71,7 @@ fn build_test_app_rate_limited(max_tokens: u32) -> (axum::Router, TempDir) {
     let db = MenteDb::open(tmp.path()).unwrap();
     let state = Arc::new(AppState {
         db: Arc::new(RwLock::new(db)),
+        spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: None,
         admin_key: None,
         start_time: Instant::now(),
@@ -82,16 +85,16 @@ fn build_test_app_rate_limited(max_tokens: u32) -> (axum::Router, TempDir) {
     (app, tmp)
 }
 
-fn bearer_header_for(aid: &str) -> String { let t = auth::create_token(JWT_SECRET, aid, 1); format!("Bearer {t}") }
+fn bearer_header_for(aid: &str) -> String { let t = auth::create_token(JWT_SECRET, aid, false, 1); format!("Bearer {t}") }
 fn build_test_app_with_auth_no_admin_key() -> (axum::Router, TempDir) {
     let tmp = TempDir::new().unwrap();
     let db = MenteDb::open(tmp.path()).unwrap();
-    let state = Arc::new(AppState { db: Arc::new(RwLock::new(db)), jwt_secret: Some(JWT_SECRET.to_string()), admin_key: None, start_time: Instant::now() });
+    let state = Arc::new(AppState { db: Arc::new(RwLock::new(db)), spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())), jwt_secret: Some(JWT_SECRET.to_string()), admin_key: None, start_time: Instant::now() });
     let app = routes::build_router(state.clone()).layer(middleware::from_fn_with_state(state.clone(), auth::auth_middleware));
     (app, tmp)
 }
 fn valid_bearer_header() -> String {
-    let token = auth::create_token(JWT_SECRET, TEST_AGENT_UUID, 1);
+    let token = auth::create_token(JWT_SECRET, TEST_AGENT_UUID, false, 1);
     format!("Bearer {token}")
 }
 
@@ -500,7 +503,7 @@ mod auth_tests {
     #[tokio::test]
     async fn request_with_wrong_secret_returns_unauthorized() {
         let (app, _tmp) = build_test_app_with_auth();
-        let bad_token = auth::create_token("wrong-secret-entirely", "some-agent", 1);
+        let bad_token = auth::create_token("wrong-secret-entirely", "some-agent", false, 1);
         let req = Request::get("/v1/stats")
             .header("authorization", format!("Bearer {bad_token}"))
             .body(Body::empty())
@@ -569,7 +572,7 @@ mod auth_tests {
     async fn malformed_authorization_header_returns_unauthorized() {
         let (app, _tmp) = build_test_app_with_auth();
         // Missing "Bearer " prefix.
-        let token = auth::create_token(JWT_SECRET, "agent-x", 1);
+        let token = auth::create_token(JWT_SECRET, "agent-x", false, 1);
         let req = Request::get("/v1/stats")
             .header("authorization", token)
             .body(Body::empty())

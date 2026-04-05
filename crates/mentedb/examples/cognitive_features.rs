@@ -167,7 +167,7 @@ fn demonstrate_phantom_detection() {
 
     // Resolve a phantom once the knowledge is acquired.
     if let Some(first) = phantoms.first() {
-        tracker.resolve(first.id);
+        tracker.resolve(first.id.into());
         println!("Resolved phantom: {}", first.id);
     }
 

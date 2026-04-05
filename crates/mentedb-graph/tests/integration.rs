@@ -2,10 +2,7 @@
 
 use mentedb_core::edge::{EdgeType, MemoryEdge};
 use mentedb_graph::*;
-use uuid::Uuid;
-use mentedb_core::types::{MemoryId};
-
-type MemoryId = uuid::Uuid;
+use mentedb_core::types::MemoryId;
 
 fn edge(src: MemoryId, tgt: MemoryId, etype: EdgeType, weight: f32) -> MemoryEdge {
     MemoryEdge {
