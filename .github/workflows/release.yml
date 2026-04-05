@@ -73,6 +73,6 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-      - run: cd sdks/typescript && npm publish --access public
+      - run: cd sdks/typescript && npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
