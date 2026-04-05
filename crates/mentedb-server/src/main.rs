@@ -198,9 +198,7 @@ fn parse_args() -> ServerConfig {
     {
         llm_base_url = Some(v);
     }
-    if !auto_extract
-        && let Ok(v) = env::var("MENTEDB_AUTO_EXTRACT")
-    {
+    if !auto_extract && let Ok(v) = env::var("MENTEDB_AUTO_EXTRACT") {
         auto_extract = v == "true" || v == "1";
     }
     if extraction_quality_threshold.is_none()

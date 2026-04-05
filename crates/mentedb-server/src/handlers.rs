@@ -150,7 +150,8 @@ pub async fn store_memory(
     })?;
 
     // Auto-extract: if enabled and content looks like a conversation, run extraction
-    if state.auto_extract && state.extraction_config.is_some() && looks_like_conversation(&content) {
+    if state.auto_extract && state.extraction_config.is_some() && looks_like_conversation(&content)
+    {
         let extraction_config = state.extraction_config.clone().unwrap();
         match run_extraction(&extraction_config, &content, agent_id, space_id, &mut db).await {
             Ok(extract_stats) => {

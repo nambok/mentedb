@@ -15,7 +15,10 @@ use tempfile::TempDir;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
 
-fn test_state(extraction_config: Option<ExtractionConfig>, auto_extract: bool) -> (Arc<AppState>, TempDir) {
+fn test_state(
+    extraction_config: Option<ExtractionConfig>,
+    auto_extract: bool,
+) -> (Arc<AppState>, TempDir) {
     let tmp = TempDir::new().unwrap();
     let db = MenteDb::open(tmp.path()).unwrap();
     let state = Arc::new(AppState {
@@ -72,7 +75,12 @@ async fn ingest_returns_503_without_provider() {
 
     let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let json: Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert!(json["error"].as_str().unwrap().contains("LLM provider not configured"));
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("LLM provider not configured")
+    );
 }
 
 // -----------------------------------------------------------------------
