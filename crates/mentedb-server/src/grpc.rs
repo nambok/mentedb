@@ -24,9 +24,9 @@ pub mod pb {
     tonic::include_proto!("mentedb");
 }
 
+use mentedb_core::types::{AgentId, MemoryId, SpaceId};
 use pb::cognition_service_server::CognitionService;
 use pb::memory_service_server::MemoryService;
-use mentedb_core::types::{AgentId, MemoryId, SpaceId};
 
 // ---------------------------------------------------------------------------
 // CognitionService
@@ -91,7 +91,10 @@ impl CognitionService for CognitionServiceImpl {
                         }
                     }
                     pb::cognition_request::Payload::KnownFact(kf) => {
-                        let mid = kf.memory_id.parse::<MemoryId>().unwrap_or_else(|_| MemoryId::nil());
+                        let mid = kf
+                            .memory_id
+                            .parse::<MemoryId>()
+                            .unwrap_or_else(|_| MemoryId::nil());
                         facts.lock().unwrap().push((mid, kf.content));
                     }
                     pb::cognition_request::Payload::EndOfTurn(_) => {
@@ -183,8 +186,12 @@ impl MemoryService for MemoryServiceImpl {
 
         let agent_id = AgentId(parse_uuid_field(&req.agent_id, "agent_id")?);
         if let Some(ref ta) = caller {
-            let tu: AgentId = ta.parse().map_err(|_| Status::internal("bad token agent_id"))?;
-            if tu != agent_id { return Err(Status::permission_denied("agent_id mismatch")); }
+            let tu: AgentId = ta
+                .parse()
+                .map_err(|_| Status::internal("bad token agent_id"))?;
+            if tu != agent_id {
+                return Err(Status::permission_denied("agent_id mismatch"));
+            }
         }
         let memory_type = parse_memory_type_str(&req.memory_type)?;
         let space_id = if req.space_id.is_empty() {
@@ -351,23 +358,41 @@ impl MemoryService for MemoryServiceImpl {
     }
 }
 
-
 #[allow(clippy::result_large_err)]
-fn authenticate_grpc_request<T>(state: &AppState, request: &Request<T>) -> Result<Option<String>, Status> {
-    let secret = match &state.jwt_secret { Some(s) => s, None => return Ok(None) };
-    let token = request.metadata().get("authorization").and_then(|v| v.to_str().ok())
+fn authenticate_grpc_request<T>(
+    state: &AppState,
+    request: &Request<T>,
+) -> Result<Option<String>, Status> {
+    let secret = match &state.jwt_secret {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+    let token = request
+        .metadata()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or_else(|| Status::unauthenticated("missing or invalid authorization metadata"))?;
-    auth::validate_token(secret, token).map(|c| Some(c.agent_id))
+    auth::validate_token(secret, token)
+        .map(|c| Some(c.agent_id))
         .map_err(|e| Status::unauthenticated(format!("invalid token: {e}")))
 }
 #[allow(clippy::result_large_err)]
-fn authenticate_grpc_streaming(state: &AppState, metadata: &tonic::metadata::MetadataMap) -> Result<Option<String>, Status> {
-    let secret = match &state.jwt_secret { Some(s) => s, None => return Ok(None) };
-    let token = metadata.get("authorization").and_then(|v| v.to_str().ok())
+fn authenticate_grpc_streaming(
+    state: &AppState,
+    metadata: &tonic::metadata::MetadataMap,
+) -> Result<Option<String>, Status> {
+    let secret = match &state.jwt_secret {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+    let token = metadata
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or_else(|| Status::unauthenticated("missing or invalid authorization metadata"))?;
-    auth::validate_token(secret, token).map(|c| Some(c.agent_id))
+    auth::validate_token(secret, token)
+        .map(|c| Some(c.agent_id))
         .map_err(|e| Status::unauthenticated(format!("invalid token: {e}")))
 }
 
@@ -719,40 +744,87 @@ mod tests {
     fn make_auth_test_state(secret: &str) -> (Arc<AppState>, TempDir) {
         let tmp = TempDir::new().unwrap();
         let db = MenteDb::open(tmp.path()).unwrap();
-        (Arc::new(AppState { db: Arc::new(RwLock::new(db)), spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())), jwt_secret: Some(secret.into()), admin_key: Some("ak".into()), start_time: Instant::now() }), tmp)
+        (
+            Arc::new(AppState {
+                db: Arc::new(RwLock::new(db)),
+                spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
+                jwt_secret: Some(secret.into()),
+                admin_key: Some("ak".into()),
+                start_time: Instant::now(),
+            }),
+            tmp,
+        )
     }
     #[tokio::test]
     async fn test_grpc_auth_required_when_secret_set() {
         let (s, _t) = make_auth_test_state("s");
         let svc = MemoryServiceImpl { state: s };
-        let r = svc.recall(Request::new(pb::RecallRequest { query: "RECALL memories LIMIT 10".into() })).await;
-        assert!(r.is_err()); assert_eq!(r.unwrap_err().code(), tonic::Code::Unauthenticated);
+        let r = svc
+            .recall(Request::new(pb::RecallRequest {
+                query: "RECALL memories LIMIT 10".into(),
+            }))
+            .await;
+        assert!(r.is_err());
+        assert_eq!(r.unwrap_err().code(), tonic::Code::Unauthenticated);
     }
     #[tokio::test]
     async fn test_grpc_auth_succeeds_with_valid_token() {
         let (s, _t) = make_auth_test_state("s");
         let svc = MemoryServiceImpl { state: s };
-        let a = AgentId::new(); let tok = crate::auth::create_token("s", &a.to_string(), false, 1);
-        let mut r = Request::new(pb::StoreRequest { agent_id: a.to_string(), memory_type: "episodic".into(), content: "t".into(), embedding: vec![], tags: vec![], attributes: HashMap::new(), space_id: String::new(), salience: 0.5, confidence: 1.0 });
-        r.metadata_mut().insert("authorization", format!("Bearer {tok}").parse().unwrap());
+        let a = AgentId::new();
+        let tok = crate::auth::create_token("s", &a.to_string(), false, 1);
+        let mut r = Request::new(pb::StoreRequest {
+            agent_id: a.to_string(),
+            memory_type: "episodic".into(),
+            content: "t".into(),
+            embedding: vec![],
+            tags: vec![],
+            attributes: HashMap::new(),
+            space_id: String::new(),
+            salience: 0.5,
+            confidence: 1.0,
+        });
+        r.metadata_mut()
+            .insert("authorization", format!("Bearer {tok}").parse().unwrap());
         assert_eq!(svc.store(r).await.unwrap().into_inner().status, "stored");
     }
     #[tokio::test]
     async fn test_grpc_auth_rejects_wrong_agent_id() {
         let (s, _t) = make_auth_test_state("s");
         let svc = MemoryServiceImpl { state: s };
-        let ta = AgentId::new(); let ra = AgentId::new();
+        let ta = AgentId::new();
+        let ra = AgentId::new();
         let tok = crate::auth::create_token("s", &ta.to_string(), false, 1);
-        let mut r = Request::new(pb::StoreRequest { agent_id: ra.to_string(), memory_type: "episodic".into(), content: "t".into(), embedding: vec![], tags: vec![], attributes: HashMap::new(), space_id: String::new(), salience: 0.5, confidence: 1.0 });
-        r.metadata_mut().insert("authorization", format!("Bearer {tok}").parse().unwrap());
-        assert_eq!(svc.store(r).await.unwrap_err().code(), tonic::Code::PermissionDenied);
+        let mut r = Request::new(pb::StoreRequest {
+            agent_id: ra.to_string(),
+            memory_type: "episodic".into(),
+            content: "t".into(),
+            embedding: vec![],
+            tags: vec![],
+            attributes: HashMap::new(),
+            space_id: String::new(),
+            salience: 0.5,
+            confidence: 1.0,
+        });
+        r.metadata_mut()
+            .insert("authorization", format!("Bearer {tok}").parse().unwrap());
+        assert_eq!(
+            svc.store(r).await.unwrap_err().code(),
+            tonic::Code::PermissionDenied
+        );
     }
     #[tokio::test]
     async fn test_grpc_auth_invalid_token() {
         let (s, _t) = make_auth_test_state("s");
         let svc = MemoryServiceImpl { state: s };
-        let mut r = Request::new(pb::RecallRequest { query: "RECALL memories LIMIT 10".into() });
-        r.metadata_mut().insert("authorization", "Bearer bad.tok".parse().unwrap());
-        assert_eq!(svc.recall(r).await.unwrap_err().code(), tonic::Code::Unauthenticated);
+        let mut r = Request::new(pb::RecallRequest {
+            query: "RECALL memories LIMIT 10".into(),
+        });
+        r.metadata_mut()
+            .insert("authorization", "Bearer bad.tok".parse().unwrap());
+        assert_eq!(
+            svc.recall(r).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
     }
 }

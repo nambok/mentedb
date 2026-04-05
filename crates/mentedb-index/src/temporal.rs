@@ -148,7 +148,7 @@ impl Default for TemporalIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_insert_and_range() {
         let idx = TemporalIndex::new();

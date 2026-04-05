@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::RwLock;
 
 use crate::error::{MenteError, MenteResult};
-use crate::types::{AgentId};
+use crate::types::AgentId;
 
 /// Configurable resource limits.
 #[derive(Debug, Clone)]
@@ -155,7 +155,7 @@ impl ResourceTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn within_limits_succeeds() {
         let tracker = ResourceTracker::new(ResourceLimits {

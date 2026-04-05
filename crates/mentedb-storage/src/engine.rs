@@ -4,7 +4,6 @@ use std::path::Path;
 
 use mentedb_core::MemoryNode;
 use mentedb_core::error::{MenteError, MenteResult};
-use mentedb_core::types::AgentId;
 
 use tracing::info;
 
@@ -226,7 +225,8 @@ impl StorageEngine {
 mod tests {
     use super::*;
     use mentedb_core::memory::MemoryType;
-    
+    use mentedb_core::types::AgentId;
+
     fn setup() -> (tempfile::TempDir, StorageEngine) {
         let dir = tempfile::tempdir().unwrap();
         let engine = StorageEngine::open(dir.path()).unwrap();

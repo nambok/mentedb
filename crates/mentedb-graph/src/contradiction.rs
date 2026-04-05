@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use ahash::HashSet;
 use mentedb_core::edge::EdgeType;
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::MemoryId;
 
 use crate::csr::CsrGraph;
 
@@ -143,7 +143,7 @@ pub fn detect_cycles(graph: &CsrGraph, edge_types: &[EdgeType]) -> Vec<Vec<Memor
 mod tests {
     use super::*;
     use mentedb_core::edge::MemoryEdge;
-    
+
     fn make_edge(src: MemoryId, tgt: MemoryId, etype: EdgeType, weight: f32) -> MemoryEdge {
         MemoryEdge {
             source: src,

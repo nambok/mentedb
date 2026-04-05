@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::MemoryId;
 use parking_lot::Mutex;
 
 #[derive(Debug, Clone)]
@@ -166,7 +166,7 @@ impl CognitionStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_feed_and_drain() {
         let stream = CognitionStream::new(100);

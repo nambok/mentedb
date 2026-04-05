@@ -2,8 +2,8 @@
 
 use mentedb_core::MemoryNode;
 use mentedb_core::memory::MemoryType;
+use mentedb_core::types::AgentId;
 use mentedb_storage::StorageEngine;
-use mentedb_core::types::{AgentId};
 
 #[test]
 fn test_store_and_load_memory() {

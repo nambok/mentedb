@@ -336,7 +336,11 @@ impl PhantomTracker {
     }
 
     pub fn resolve(&mut self, phantom_id: Uuid) {
-        if let Some(p) = self.phantoms.iter_mut().find(|p| p.id == MemoryId::from(phantom_id)) {
+        if let Some(p) = self
+            .phantoms
+            .iter_mut()
+            .find(|p| p.id == MemoryId::from(phantom_id))
+        {
             p.resolved = true;
         }
     }

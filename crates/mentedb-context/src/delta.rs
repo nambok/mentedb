@@ -2,7 +2,7 @@
 
 use ahash::AHashSet;
 use mentedb_core::MemoryNode;
-use mentedb_core::types::{AgentId, MemoryId};
+use mentedb_core::types::MemoryId;
 
 /// Result of computing a delta between two context sets.
 #[derive(Debug, Clone)]
@@ -107,7 +107,8 @@ impl Default for DeltaTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use mentedb_core::types::AgentId;
+
     #[test]
     fn test_compute_delta_all_new() {
         let tracker = DeltaTracker::new();

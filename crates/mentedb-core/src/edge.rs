@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::types::MemoryId;
 use crate::types::*;
-use crate::types::{MemoryId};
 
 /// The type of relationship between two memories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

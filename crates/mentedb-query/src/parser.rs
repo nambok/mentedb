@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::ast::*;
 use crate::lexer::{Token, TokenKind};
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::MemoryId;
 
 pub struct Parser<'a> {
     tokens: &'a [Token],

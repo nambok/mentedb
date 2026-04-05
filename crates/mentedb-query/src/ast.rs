@@ -2,7 +2,7 @@
 
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::MemoryId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

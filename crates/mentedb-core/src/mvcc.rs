@@ -90,7 +90,7 @@ impl VersionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn record_and_get_latest() {
         let mut store = VersionStore::new();

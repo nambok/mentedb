@@ -149,7 +149,7 @@ impl ConflictResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn make_version(
         agent: AgentId,
         content: &str,

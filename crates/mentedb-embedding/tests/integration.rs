@@ -1,8 +1,8 @@
 use mentedb_core::memory::{MemoryNode, MemoryType};
+use mentedb_core::types::AgentId;
 use mentedb_embedding::{
     EmbeddingCache, EmbeddingManager, EmbeddingProvider, HashEmbeddingProvider,
 };
-use mentedb_core::types::{AgentId};
 
 #[test]
 fn test_hash_provider_consistency() {

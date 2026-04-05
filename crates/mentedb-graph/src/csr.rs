@@ -371,7 +371,7 @@ impl Default for CsrGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn make_edge(src: MemoryId, tgt: MemoryId, etype: EdgeType) -> MemoryEdge {
         MemoryEdge {
             source: src,

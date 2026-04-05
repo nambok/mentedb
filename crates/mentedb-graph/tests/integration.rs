@@ -1,8 +1,8 @@
 //! End-to-end integration tests for mentedb-graph.
 
 use mentedb_core::edge::{EdgeType, MemoryEdge};
-use mentedb_graph::*;
 use mentedb_core::types::MemoryId;
+use mentedb_graph::*;
 
 fn edge(src: MemoryId, tgt: MemoryId, etype: EdgeType, weight: f32) -> MemoryEdge {
     MemoryEdge {

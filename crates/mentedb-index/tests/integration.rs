@@ -2,12 +2,12 @@
 
 use mentedb_core::MemoryNode;
 use mentedb_core::memory::MemoryType;
+use mentedb_core::types::{AgentId, MemoryId};
 use mentedb_index::hnsw::HnswConfig;
 use mentedb_index::manager::IndexManagerConfig;
 use mentedb_index::{
     BitmapIndex, DistanceMetric, HnswIndex, IndexManager, SalienceIndex, TemporalIndex,
 };
-use mentedb_core::types::{AgentId, MemoryId};
 
 fn make_node(embedding: Vec<f32>, tags: Vec<&str>, salience: f32, created_at: u64) -> MemoryNode {
     let mut node = MemoryNode::new(

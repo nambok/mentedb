@@ -194,12 +194,7 @@ mod tests {
     use mentedb_core::types::AgentId;
 
     fn make_memory(content: &str, memory_type: MemoryType, salience: f32) -> MemoryNode {
-        let mut m = MemoryNode::new(
-            AgentId::new(),
-            memory_type,
-            content.to_string(),
-            vec![],
-        );
+        let mut m = MemoryNode::new(AgentId::new(), memory_type, content.to_string(), vec![]);
         m.salience = salience;
         m
     }

@@ -1,6 +1,6 @@
 use mentedb::MenteDb;
 use mentedb::prelude::*;
-use mentedb_core::types::{AgentId};
+use mentedb_core::types::AgentId;
 
 fn make_memory(content: &str, embedding: Vec<f32>) -> MemoryNode {
     MemoryNode::new(

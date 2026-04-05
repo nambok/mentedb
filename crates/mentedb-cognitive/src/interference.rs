@@ -1,5 +1,5 @@
 use mentedb_core::MemoryNode;
-use mentedb_core::types::{AgentId, MemoryId};
+use mentedb_core::types::MemoryId;
 
 #[derive(Debug, Clone)]
 pub struct InterferencePair {
@@ -138,6 +138,7 @@ impl Default for InterferenceDetector {
 mod tests {
     use super::*;
     use mentedb_core::memory::MemoryType;
+    use mentedb_core::types::AgentId;
 
     fn make_memory(content: &str, embedding: Vec<f32>) -> MemoryNode {
         MemoryNode::new(

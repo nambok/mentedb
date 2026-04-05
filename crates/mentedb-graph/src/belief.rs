@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use ahash::{HashMap, HashSet};
 use mentedb_core::edge::EdgeType;
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::MemoryId;
 
 use crate::csr::CsrGraph;
 
@@ -120,7 +120,7 @@ pub fn propagate_update_with_config(
 mod tests {
     use super::*;
     use mentedb_core::edge::MemoryEdge;
-    
+
     fn make_edge(src: MemoryId, tgt: MemoryId, etype: EdgeType, weight: f32) -> MemoryEdge {
         MemoryEdge {
             source: src,

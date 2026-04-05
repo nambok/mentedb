@@ -1,7 +1,7 @@
 use mentedb_core::MemoryNode;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
-use mentedb_core::types::{AgentId, MemoryId};
+use mentedb_core::types::MemoryId;
 
 #[derive(Debug, Clone)]
 pub enum InferredAction {
@@ -185,14 +185,10 @@ impl Default for WriteInferenceEngine {
 mod tests {
     use super::*;
     use mentedb_core::memory::MemoryType;
+    use mentedb_core::types::AgentId;
 
     fn make_memory(content: &str, embedding: Vec<f32>, mem_type: MemoryType) -> MemoryNode {
-        let mut m = MemoryNode::new(
-            AgentId::new(),
-            mem_type,
-            content.to_string(),
-            embedding,
-        );
+        let mut m = MemoryNode::new(AgentId::new(), mem_type, content.to_string(), embedding);
         m.created_at = 1000;
         m
     }

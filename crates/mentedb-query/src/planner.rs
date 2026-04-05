@@ -199,7 +199,7 @@ mod tests {
     use super::*;
     use crate::lexer::tokenize;
     use crate::parser::Parser;
-    
+
     fn plan_mql(input: &str) -> QueryPlan {
         let tokens = tokenize(input).unwrap();
         let stmt = Parser::parse(&tokens).unwrap();

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use mentedb_core::edge::MemoryEdge;
 use mentedb_core::error::{MenteError, MenteResult};
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::MemoryId;
 
 use crate::belief::propagate_update;
 use crate::contradiction::find_contradictions;
@@ -102,7 +102,7 @@ impl Default for GraphManager {
 mod tests {
     use super::*;
     use mentedb_core::edge::EdgeType;
-    
+
     fn make_edge(src: MemoryId, tgt: MemoryId, etype: EdgeType) -> MemoryEdge {
         MemoryEdge {
             source: src,

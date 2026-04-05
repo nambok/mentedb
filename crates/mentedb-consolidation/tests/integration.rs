@@ -4,8 +4,8 @@ use mentedb_consolidation::{
 };
 use mentedb_core::MemoryNode;
 use mentedb_core::memory::MemoryType;
-use std::collections::HashMap;
 use mentedb_core::types::{AgentId, MemoryId, SpaceId};
+use std::collections::HashMap;
 
 const DAY_US: u64 = 24 * 3600 * 1_000_000;
 

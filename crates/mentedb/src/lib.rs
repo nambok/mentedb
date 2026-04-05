@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 
 use mentedb_context::{AssemblyConfig, ContextAssembler, ContextWindow, ScoredMemory};
 use mentedb_core::error::MenteResult;
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::MemoryId;
 use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
 use mentedb_graph::GraphManager;
 use mentedb_index::IndexManager;
@@ -139,7 +139,8 @@ impl MenteDb {
         debug!("Storing memory {}", id);
 
         // Validate embedding dimension when configured.
-        if self.embedding_dim > 0 && !node.embedding.is_empty()
+        if self.embedding_dim > 0
+            && !node.embedding.is_empty()
             && node.embedding.len() != self.embedding_dim
         {
             return Err(MenteError::EmbeddingDimensionMismatch {
@@ -193,7 +194,10 @@ impl MenteDb {
 
     /// Retrieves a single memory by its ID.
     pub fn get_memory(&mut self, id: MemoryId) -> MenteResult<MemoryNode> {
-        let page_id = self.page_map.get(&id).copied()
+        let page_id = self
+            .page_map
+            .get(&id)
+            .copied()
             .ok_or(MenteError::MemoryNotFound(id))?;
         self.storage.load_memory(page_id)
     }

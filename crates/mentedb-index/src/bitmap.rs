@@ -8,7 +8,7 @@ use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
 use mentedb_core::error::{MenteError, MenteResult};
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::MemoryId;
 
 /// Roaring-bitmap-backed tag index.
 ///
@@ -211,7 +211,7 @@ impl Default for BitmapIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_add_and_query_tag() {
         let idx = BitmapIndex::new();

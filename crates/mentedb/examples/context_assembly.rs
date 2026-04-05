@@ -8,7 +8,7 @@ use mentedb::context::{
     budget::{BudgetAllocation, TokenBudget, estimate_tokens},
 };
 use mentedb::prelude::*;
-use mentedb_core::types::{AgentId};
+use mentedb_core::types::AgentId;
 
 fn main() {
     println!("=== Token Budget ===\n");

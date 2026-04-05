@@ -8,7 +8,7 @@ use mentedb_core::MemoryEdge;
 use mentedb_core::MemoryNode;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
-use mentedb_core::types::{AgentId};
+use mentedb_core::types::AgentId;
 
 fn make_memory(content: &str, mem_type: MemoryType, salience: f32) -> MemoryNode {
     let mut m = MemoryNode::new(AgentId::new(), mem_type, content.to_string(), vec![]);

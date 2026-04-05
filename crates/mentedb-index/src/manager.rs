@@ -5,7 +5,7 @@ use std::path::Path;
 
 use mentedb_core::MemoryNode;
 use mentedb_core::error::MenteResult;
-use mentedb_core::types::{AgentId, MemoryId, Timestamp};
+use mentedb_core::types::{MemoryId, Timestamp};
 
 use crate::bitmap::BitmapIndex;
 use crate::hnsw::{HnswConfig, HnswIndex};
@@ -198,6 +198,7 @@ impl Default for IndexManager {
 mod tests {
     use super::*;
     use mentedb_core::memory::MemoryType;
+    use mentedb_core::types::AgentId;
 
     fn make_node(
         embedding: Vec<f32>,

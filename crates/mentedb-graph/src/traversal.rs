@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use ahash::{HashMap, HashSet};
 use mentedb_core::edge::{EdgeType, MemoryEdge};
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::MemoryId;
 
 use crate::csr::CsrGraph;
 
@@ -172,7 +172,7 @@ pub fn shortest_path(graph: &CsrGraph, from: MemoryId, to: MemoryId) -> Option<V
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn make_edge(src: MemoryId, tgt: MemoryId, etype: EdgeType) -> MemoryEdge {
         MemoryEdge {
             source: src,

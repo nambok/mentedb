@@ -112,7 +112,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    
+
     #[test]
     fn subscribe_and_publish() {
         let bus = EventBus::new();
@@ -148,7 +148,9 @@ mod tests {
                 c.fetch_add(1, Ordering::Relaxed);
             });
         }
-        bus.publish(MenteEvent::MemoryDeleted { id: MemoryId::new() });
+        bus.publish(MenteEvent::MemoryDeleted {
+            id: MemoryId::new(),
+        });
         assert_eq!(count.load(Ordering::Relaxed), 3);
     }
 }

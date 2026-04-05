@@ -11,6 +11,7 @@ use axum::http::{Request, StatusCode};
 use axum::middleware;
 use http_body_util::BodyExt;
 use mentedb::MenteDb;
+use mentedb_core::types::MemoryId;
 use mentedb_server::auth;
 use mentedb_server::rate_limit::RateLimiter;
 use mentedb_server::routes;
@@ -19,7 +20,6 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
-use mentedb_core::types::{MemoryId};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -85,12 +85,24 @@ fn build_test_app_rate_limited(max_tokens: u32) -> (axum::Router, TempDir) {
     (app, tmp)
 }
 
-fn bearer_header_for(aid: &str) -> String { let t = auth::create_token(JWT_SECRET, aid, false, 1); format!("Bearer {t}") }
+fn bearer_header_for(aid: &str) -> String {
+    let t = auth::create_token(JWT_SECRET, aid, false, 1);
+    format!("Bearer {t}")
+}
 fn build_test_app_with_auth_no_admin_key() -> (axum::Router, TempDir) {
     let tmp = TempDir::new().unwrap();
     let db = MenteDb::open(tmp.path()).unwrap();
-    let state = Arc::new(AppState { db: Arc::new(RwLock::new(db)), spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())), jwt_secret: Some(JWT_SECRET.to_string()), admin_key: None, start_time: Instant::now() });
-    let app = routes::build_router(state.clone()).layer(middleware::from_fn_with_state(state.clone(), auth::auth_middleware));
+    let state = Arc::new(AppState {
+        db: Arc::new(RwLock::new(db)),
+        spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
+        jwt_secret: Some(JWT_SECRET.to_string()),
+        admin_key: None,
+        start_time: Instant::now(),
+    });
+    let app = routes::build_router(state.clone()).layer(middleware::from_fn_with_state(
+        state.clone(),
+        auth::auth_middleware,
+    ));
     (app, tmp)
 }
 fn valid_bearer_header() -> String {
@@ -582,55 +594,116 @@ mod auth_tests {
     }
 }
 
-
-    #[tokio::test]
-    async fn token_endpoint_rejects_wrong_admin_key() {
-        let (app, _tmp) = build_test_app_with_auth();
-        let p = json!({"agent_id":"a"}); let req = Request::post("/v1/auth/token").header("content-type","application/json").header("x-api-key","wrong").body(Body::from(serde_json::to_vec(&p).unwrap())).unwrap();
-        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::FORBIDDEN);
-    }
-    #[tokio::test]
-    async fn token_endpoint_works_with_bearer_admin_key() {
-        let (app, _tmp) = build_test_app_with_auth();
-        let p = json!({"agent_id":"a"}); let req = Request::post("/v1/auth/token").header("content-type","application/json").header("authorization",format!("Bearer {}",ADMIN_KEY)).body(Body::from(serde_json::to_vec(&p).unwrap())).unwrap();
-        let resp = app.oneshot(req).await.unwrap(); assert_eq!(resp.status(), StatusCode::OK);
-        assert!(response_json(resp).await["token"].is_string());
-    }
-    #[tokio::test]
-    async fn token_endpoint_disabled_when_no_admin_key() {
-        let (app, _tmp) = build_test_app_with_auth_no_admin_key();
-        let p = json!({"agent_id":"a"}); let req = Request::post("/v1/auth/token").header("content-type","application/json").body(Body::from(serde_json::to_vec(&p).unwrap())).unwrap();
-        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::FORBIDDEN);
-    }
-    #[tokio::test]
-    async fn store_memory_rejects_mismatched_agent_id() {
-        let (app, _t) = build_test_app_with_auth();
-        let p = json!({"agent_id":"00000000-0000-0000-0000-000000000002","memory_type":"episodic","content":"x"});
-        let req = Request::post("/v1/memories").header("content-type","application/json").header("authorization",valid_bearer_header()).body(Body::from(serde_json::to_vec(&p).unwrap())).unwrap();
-        assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::FORBIDDEN);
-    }
-    #[tokio::test]
-    async fn get_memory_rejects_wrong_agent() {
-        let (app, _t) = build_test_app_with_auth();
-        let p = store_memory_body();
-        let sr = Request::post("/v1/memories").header("content-type","application/json").header("authorization",valid_bearer_header()).body(Body::from(serde_json::to_vec(&p).unwrap())).unwrap();
-        let sresp = app.clone().oneshot(sr).await.unwrap(); assert_eq!(sresp.status(), StatusCode::CREATED);
-        let mid = response_json(sresp).await["id"].as_str().unwrap().to_string();
-        let gr = Request::get(format!("/v1/memories/{mid}")).header("authorization",bearer_header_for("00000000-0000-0000-0000-000000000002")).body(Body::empty()).unwrap();
-        let st = app.oneshot(gr).await.unwrap().status();
-        assert!(st == StatusCode::FORBIDDEN || st == StatusCode::NOT_FOUND, "expected 403/404 got {st}");
-    }
-    #[tokio::test]
-    async fn delete_memory_rejects_wrong_agent() {
-        let (app, _t) = build_test_app_with_auth();
-        let p = store_memory_body();
-        let sr = Request::post("/v1/memories").header("content-type","application/json").header("authorization",valid_bearer_header()).body(Body::from(serde_json::to_vec(&p).unwrap())).unwrap();
-        let sresp = app.clone().oneshot(sr).await.unwrap(); assert_eq!(sresp.status(), StatusCode::CREATED);
-        let mid = response_json(sresp).await["id"].as_str().unwrap().to_string();
-        let dr = Request::delete(format!("/v1/memories/{mid}")).header("authorization",bearer_header_for("00000000-0000-0000-0000-000000000002")).body(Body::empty()).unwrap();
-        let st = app.oneshot(dr).await.unwrap().status();
-        assert!(st == StatusCode::FORBIDDEN || st == StatusCode::NOT_FOUND, "expected 403/404 got {st}");
-    }
+#[tokio::test]
+async fn token_endpoint_rejects_wrong_admin_key() {
+    let (app, _tmp) = build_test_app_with_auth();
+    let p = json!({"agent_id":"a"});
+    let req = Request::post("/v1/auth/token")
+        .header("content-type", "application/json")
+        .header("x-api-key", "wrong")
+        .body(Body::from(serde_json::to_vec(&p).unwrap()))
+        .unwrap();
+    assert_eq!(
+        app.oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+}
+#[tokio::test]
+async fn token_endpoint_works_with_bearer_admin_key() {
+    let (app, _tmp) = build_test_app_with_auth();
+    let p = json!({"agent_id":"a"});
+    let req = Request::post("/v1/auth/token")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", ADMIN_KEY))
+        .body(Body::from(serde_json::to_vec(&p).unwrap()))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(response_json(resp).await["token"].is_string());
+}
+#[tokio::test]
+async fn token_endpoint_disabled_when_no_admin_key() {
+    let (app, _tmp) = build_test_app_with_auth_no_admin_key();
+    let p = json!({"agent_id":"a"});
+    let req = Request::post("/v1/auth/token")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&p).unwrap()))
+        .unwrap();
+    assert_eq!(
+        app.oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+}
+#[tokio::test]
+async fn store_memory_rejects_mismatched_agent_id() {
+    let (app, _t) = build_test_app_with_auth();
+    let p = json!({"agent_id":"00000000-0000-0000-0000-000000000002","memory_type":"episodic","content":"x"});
+    let req = Request::post("/v1/memories")
+        .header("content-type", "application/json")
+        .header("authorization", valid_bearer_header())
+        .body(Body::from(serde_json::to_vec(&p).unwrap()))
+        .unwrap();
+    assert_eq!(
+        app.oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+}
+#[tokio::test]
+async fn get_memory_rejects_wrong_agent() {
+    let (app, _t) = build_test_app_with_auth();
+    let p = store_memory_body();
+    let sr = Request::post("/v1/memories")
+        .header("content-type", "application/json")
+        .header("authorization", valid_bearer_header())
+        .body(Body::from(serde_json::to_vec(&p).unwrap()))
+        .unwrap();
+    let sresp = app.clone().oneshot(sr).await.unwrap();
+    assert_eq!(sresp.status(), StatusCode::CREATED);
+    let mid = response_json(sresp).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let gr = Request::get(format!("/v1/memories/{mid}"))
+        .header(
+            "authorization",
+            bearer_header_for("00000000-0000-0000-0000-000000000002"),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let st = app.oneshot(gr).await.unwrap().status();
+    assert!(
+        st == StatusCode::FORBIDDEN || st == StatusCode::NOT_FOUND,
+        "expected 403/404 got {st}"
+    );
+}
+#[tokio::test]
+async fn delete_memory_rejects_wrong_agent() {
+    let (app, _t) = build_test_app_with_auth();
+    let p = store_memory_body();
+    let sr = Request::post("/v1/memories")
+        .header("content-type", "application/json")
+        .header("authorization", valid_bearer_header())
+        .body(Body::from(serde_json::to_vec(&p).unwrap()))
+        .unwrap();
+    let sresp = app.clone().oneshot(sr).await.unwrap();
+    assert_eq!(sresp.status(), StatusCode::CREATED);
+    let mid = response_json(sresp).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let dr = Request::delete(format!("/v1/memories/{mid}"))
+        .header(
+            "authorization",
+            bearer_header_for("00000000-0000-0000-0000-000000000002"),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let st = app.oneshot(dr).await.unwrap().status();
+    assert!(
+        st == StatusCode::FORBIDDEN || st == StatusCode::NOT_FOUND,
+        "expected 403/404 got {st}"
+    );
+}
 
 // ===========================================================================
 // Rate limiting tests

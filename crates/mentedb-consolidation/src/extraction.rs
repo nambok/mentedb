@@ -1,5 +1,5 @@
 use mentedb_core::MemoryNode;
-use mentedb_core::types::{AgentId, MemoryId};
+use mentedb_core::types::MemoryId;
 use serde::{Deserialize, Serialize};
 
 /// A structured fact extracted from memory content.

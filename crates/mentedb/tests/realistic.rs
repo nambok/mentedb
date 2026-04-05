@@ -17,8 +17,8 @@ use mentedb_consolidation::{DecayConfig, DecayEngine};
 use mentedb_context::{AssemblyConfig, ContextAssembler, ScoredMemory};
 use mentedb_embedding::{EmbeddingProvider, HashEmbeddingProvider};
 
-use tempfile::tempdir;
 use mentedb_core::types::{AgentId, MemoryId};
+use tempfile::tempdir;
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use mentedb::prelude::*;
-use mentedb_core::types::{AgentId};
+use mentedb_core::types::AgentId;
 
 fn main() -> MenteResult<()> {
     // Open (or create) a database at a local directory.

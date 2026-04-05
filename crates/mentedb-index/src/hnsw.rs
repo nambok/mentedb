@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use mentedb_core::MenteError;
 use mentedb_core::error::MenteResult;
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::MemoryId;
 
 // ---------------------------------------------------------------------------
 // Distance metrics
@@ -561,7 +561,7 @@ fn select_neighbours(candidates: &[Candidate], max_count: usize) -> Vec<Candidat
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn make_vec(dim: usize, val: f32) -> Vec<f32> {
         vec![val; dim]
     }

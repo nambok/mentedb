@@ -77,11 +77,19 @@ pub fn validate_token(secret: &str, token: &str) -> Result<Claims, ApiError> {
 
 /// Handler: POST /v1/auth/token: generate a new JWT.
 fn extract_admin_key(request: &Request<Body>) -> Option<String> {
-    if let Some(v) = request.headers().get("x-api-key").and_then(|v| v.to_str().ok()) {
+    if let Some(v) = request
+        .headers()
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+    {
         return Some(v.to_string());
     }
-    request.headers().get("authorization").and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer ")).map(String::from)
+    request
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(String::from)
 }
 
 pub async fn generate_token(
@@ -92,7 +100,11 @@ pub async fn generate_token(
         ApiError::BadRequest("auth is disabled (no jwt-secret configured)".into())
     })?;
     match &state.admin_key {
-        None => return Err(ApiError::Forbidden("token endpoint disabled: no admin key configured".into())),
+        None => {
+            return Err(ApiError::Forbidden(
+                "token endpoint disabled: no admin key configured".into(),
+            ));
+        }
         Some(expected) => {
             let provided = extract_admin_key(&request)
                 .ok_or_else(|| ApiError::Unauthorized("admin key required".into()))?;
@@ -101,8 +113,12 @@ pub async fn generate_token(
             }
         }
     }
-    let body_bytes = request.into_body().collect().await
-        .map_err(|e| ApiError::BadRequest(format!("failed to read body: {e}")))?.to_bytes();
+    let body_bytes = request
+        .into_body()
+        .collect()
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("failed to read body: {e}")))?
+        .to_bytes();
     let req: TokenRequest = serde_json::from_slice(&body_bytes)
         .map_err(|e| ApiError::BadRequest(format!("invalid JSON: {e}")))?;
     let token = create_token(secret, &req.agent_id, false, req.expiry_hours);
@@ -127,8 +143,11 @@ pub async fn auth_middleware(
         return next.run(request).await;
     }
 
-    let auth_header = request.headers().get("authorization")
-        .and_then(|v| v.to_str().ok()).map(String::from);
+    let auth_header = request
+        .headers()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
 
     let token = match auth_header.as_deref() {
         Some(h) if h.starts_with("Bearer ") => &h[7..],
@@ -143,7 +162,10 @@ pub async fn auth_middleware(
 
     match validate_token(&secret, token) {
         Ok(claims) => {
-            request.extensions_mut().insert(AuthenticatedAgent { agent_id: claims.agent_id, admin: claims.admin });
+            request.extensions_mut().insert(AuthenticatedAgent {
+                agent_id: claims.agent_id,
+                admin: claims.admin,
+            });
             next.run(request).await
         }
         Err(e) => e.into_response(),

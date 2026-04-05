@@ -1,5 +1,5 @@
 use mentedb_core::MemoryNode;
-use mentedb_core::types::{MemoryId};
+use mentedb_core::types::MemoryId;
 use serde::{Deserialize, Serialize};
 
 /// A compressed representation of a memory.
