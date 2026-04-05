@@ -53,7 +53,9 @@ fn bench_context_assembly(c: &mut Criterion) {
                     let scored: Vec<ScoredMemory> = results
                         .iter()
                         .filter_map(|&(id, score)| {
-                            db.get_memory(id).ok().map(|memory| ScoredMemory { memory, score })
+                            db.get_memory(id)
+                                .ok()
+                                .map(|memory| ScoredMemory { memory, score })
                         })
                         .collect();
 
