@@ -30,6 +30,14 @@ fn parse_uuid(s: &str) -> PyResult<Uuid> {
     Uuid::parse_str(s).map_err(|e| PyRuntimeError::new_err(format!("invalid UUID: {e}")))
 }
 
+fn parse_agent_id(s: &str) -> PyResult<AgentId> {
+    Ok(AgentId(parse_uuid(s)?))
+}
+
+fn parse_memory_id(s: &str) -> PyResult<MemoryId> {
+    Ok(MemoryId(parse_uuid(s)?))
+}
+
 fn parse_memory_type(s: &str) -> PyResult<MemoryType> {
     match s {
         "episodic" => Ok(MemoryType::Episodic),
@@ -99,14 +107,13 @@ impl MenteDB {
         })?;
 
         let aid = match agent_id {
-            Some(s) => parse_uuid(s)?,
-            None => AgentId::new().into(),
+            Some(s) => parse_agent_id(s)?,
+            None => AgentId::new(),
         };
 
         let mt = parse_memory_type(memory_type)?;
 
         let emb: Embedding = if embedding.is_empty() {
-            // Generate a deterministic hash embedding so the index has something.
             hash_embedding(content, 384)
         } else {
             embedding
@@ -179,8 +186,8 @@ impl MenteDB {
         })?;
 
         let edge = MemoryEdge {
-            source: parse_uuid(source)?,
-            target: parse_uuid(target)?,
+            source: parse_memory_id(source)?,
+            target: parse_memory_id(target)?,
             edge_type: parse_edge_type(edge_type)?,
             weight,
             created_at: now_us(),
@@ -195,7 +202,7 @@ impl MenteDB {
             PyRuntimeError::new_err("database is closed")
         })?;
 
-        let id = parse_uuid(memory_id)?;
+        let id = parse_memory_id(memory_id)?;
         db.forget(id).map_err(to_pyerr)
     }
 
@@ -231,8 +238,8 @@ impl MenteDB {
         let rejected_low_quality = total - quality_passed.len();
 
         let aid = match agent_id {
-            Some(s) => parse_uuid(s)?,
-            None => AgentId::new().into(),
+            Some(s) => parse_agent_id(s)?,
+            None => AgentId::new(),
         };
 
         let mut stored_ids = Vec::new();
@@ -335,7 +342,7 @@ impl CognitionStream {
         let facts: Vec<(MemoryId, String)> = known_facts
             .into_iter()
             .map(|(id_str, text)| {
-                let id = parse_uuid(&id_str)?;
+                let id = parse_memory_id(&id_str)?;
                 Ok((id, text))
             })
             .collect::<PyResult<Vec<_>>>()?;
@@ -515,7 +522,7 @@ impl PainRegistry {
         triggers: Vec<String>,
         description: &str,
     ) -> PyResult<()> {
-        let mid = parse_uuid(memory_id)?;
+        let mid = parse_memory_id(memory_id)?;
         let signal = PainSignal {
             id: MemoryId::new(),
             memory_id: mid,
