@@ -18,7 +18,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 authors = ["Nam Rodriguez <nambok@gmail.com>"]
 license = "Apache-2.0"
@@ -61,15 +61,15 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 
 # Internal crates
-mentedb = { path = "crates/mentedb", version = "0.2.0" }
-mentedb-core = { path = "crates/mentedb-core", version = "0.2.0" }
-mentedb-storage = { path = "crates/mentedb-storage", version = "0.2.0" }
-mentedb-index = { path = "crates/mentedb-index", version = "0.2.0" }
-mentedb-graph = { path = "crates/mentedb-graph", version = "0.2.0" }
-mentedb-query = { path = "crates/mentedb-query", version = "0.2.0" }
-mentedb-context = { path = "crates/mentedb-context", version = "0.2.0" }
-mentedb-server = { path = "crates/mentedb-server", version = "0.2.0" }
-mentedb-cognitive = { path = "crates/mentedb-cognitive", version = "0.2.0" }
-mentedb-consolidation = { path = "crates/mentedb-consolidation", version = "0.2.0" }
-mentedb-embedding = { path = "crates/mentedb-embedding", version = "0.2.0" }
-mentedb-extraction = { path = "crates/mentedb-extraction", version = "0.2.0" }
+mentedb = { path = "crates/mentedb", version = "0.2.1" }
+mentedb-core = { path = "crates/mentedb-core", version = "0.2.1" }
+mentedb-storage = { path = "crates/mentedb-storage", version = "0.2.1" }
+mentedb-index = { path = "crates/mentedb-index", version = "0.2.1" }
+mentedb-graph = { path = "crates/mentedb-graph", version = "0.2.1" }
+mentedb-query = { path = "crates/mentedb-query", version = "0.2.1" }
+mentedb-context = { path = "crates/mentedb-context", version = "0.2.1" }
+mentedb-server = { path = "crates/mentedb-server", version = "0.2.1" }
+mentedb-cognitive = { path = "crates/mentedb-cognitive", version = "0.2.1" }
+mentedb-consolidation = { path = "crates/mentedb-consolidation", version = "0.2.1" }
+mentedb-embedding = { path = "crates/mentedb-embedding", version = "0.2.1" }
+mentedb-extraction = { path = "crates/mentedb-extraction", version = "0.2.1" }
