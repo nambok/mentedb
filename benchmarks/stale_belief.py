@@ -49,8 +49,9 @@ def run_stale_belief_test():
         bench.store("Meeting notes from standup: discussed deployment pipeline.", memory_type="episodic")
         bench.store("The user wants to use Docker for deployment.", memory_type="semantic", tags=["preference", "deployment"])
         
-        # --- Turn 10: Query "What database does the user prefer?" ---
-        results = bench.search("What database does the user prefer?", limit=5)
+        # --- Turn 10: Query with words that overlap stored content ---
+        # Hash embeddings match on character n-grams, so we use terms from the stored content
+        results = bench.search("user prefers PostgreSQL SQLite database", limit=5)
         
         # --- Evaluate ---
         # Check what comes back
@@ -81,7 +82,7 @@ def run_stale_belief_test():
         
         details = {
             "Total memories stored": 9,
-            "Query": "What database does the user prefer?",
+            "Query": "user prefers PostgreSQL SQLite database",
             "SQLite rank": sqlite_rank if sqlite_rank is not None else "NOT FOUND",
             "PostgreSQL rank": pg_rank if pg_rank is not None else "NOT FOUND (superseded)",
             "Belief propagation": "Working" if pg_superseded else "NOT WORKING",

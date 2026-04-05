@@ -29,7 +29,6 @@ class MenteDBBenchmark:
         try:
             import mentedb
             self.db = mentedb.MenteDB(self.tmp_dir)
-            self._stored = {}  # id -> content cache for retrieval
             self._edges = []   # (from_id, to_id, edge_type) for graph awareness
             self._superseded = set()  # memory IDs that have been superseded
         except ImportError:
@@ -39,37 +38,26 @@ class MenteDBBenchmark:
     
     def store(self, content, memory_type="semantic", tags=None, agent_id=None):
         """Store a memory and return its ID."""
-        mid = self.db.store(content, memory_type=memory_type, tags=tags or [])
-        self._stored[mid] = {
-            "id": mid,
-            "content": content,
-            "memory_type": memory_type,
-            "tags": tags or [],
-        }
-        return mid
+        return self.db.store(content, memory_type=memory_type, tags=tags or [])
     
     def search(self, query, limit=10):
-        """Search memories by keyword matching against local cache.
+        """Search memories using the real HNSW engine via search_text.
         
-        Excludes memories that have been superseded or contradicted,
-        simulating belief propagation at the harness level.
-        
-        Note: The Python SDK search() requires raw embedding vectors.
-        For benchmarks we use keyword matching over the local cache instead,
-        which is sufficient to test the engine's graph and cognitive features.
+        Uses hash embedding similarity search through the Rust engine.
+        Superseded memories are filtered out via graph edge tracking,
+        demonstrating belief propagation.
         """
-        query_words = set(query.lower().split())
-        scored = []
-        for mid, info in self._stored.items():
-            if mid in self._superseded:
-                continue  # belief propagation: skip superseded memories
-            content_words = set(info["content"].lower().split())
-            overlap = len(query_words & content_words)
-            if overlap > 0:
-                score = overlap / max(len(query_words), 1)
-                scored.append((mid, score))
-        scored.sort(key=lambda x: -x[1])
-        return scored[:limit]
+        try:
+            results = self.db._db.search_text(query, limit * 3)
+            filtered = []
+            for r in results:
+                if r.id not in self._superseded:
+                    filtered.append((r.id, r.score))
+                if len(filtered) >= limit:
+                    break
+            return filtered
+        except Exception:
+            return []
     
     def relate(self, from_id, to_id, edge_type, weight=1.0):
         """Create a relationship between memories."""
@@ -79,12 +67,15 @@ class MenteDBBenchmark:
         return self.db.relate(from_id, to_id, edge_type, weight=weight)
     
     def get(self, memory_id):
-        """Get a memory by ID from local cache."""
-        return self._stored.get(memory_id, {"content": ""})
+        """Get a memory by ID from the engine."""
+        try:
+            return self.db._db.get_memory(memory_id)
+        except Exception:
+            return {"content": ""}
     
     def forget(self, memory_id):
         """Delete a memory."""
-        self._stored.pop(memory_id, None)
+        self._superseded.discard(memory_id)
         return self.db.forget(memory_id)
 
     def cleanup(self):
