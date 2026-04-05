@@ -5,6 +5,9 @@
 
 /// LRU embedding cache with hit/miss tracking.
 pub mod cache;
+/// Local embedding provider using Candle (pure Rust ML framework).
+#[cfg(feature = "local")]
+pub mod candle_provider;
 /// Deterministic hash based embedding provider for testing.
 pub mod hash_provider;
 /// HTTP based embedding provider for remote model APIs.
@@ -15,6 +18,8 @@ pub mod manager;
 pub mod provider;
 
 pub use cache::{CacheStats, CachedEmbedding, EmbeddingCache};
+#[cfg(feature = "local")]
+pub use candle_provider::CandleEmbeddingProvider;
 pub use hash_provider::HashEmbeddingProvider;
 pub use http_provider::{HttpEmbeddingConfig, HttpEmbeddingProvider};
 pub use manager::{EmbeddingManager, EmbeddingStats};
