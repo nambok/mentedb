@@ -329,11 +329,22 @@ docker-compose up -d
 
 | Test | Result | Key Metric |
 |------|--------|------------|
-| Stale Belief | PASS | Superseded memories correctly excluded |
-| Delta Savings | PASS | 90.6% token reduction over 20 turns |
-| Sustained Conversation | PASS | 100 turns, 3 projects, 0% stale returns |
-| Attention Budget | PASS | U-curve ordering maintains LLM compliance |
+| Stale Belief | PASS | Superseded memories correctly excluded via graph edges |
+| Delta Savings | PASS | 90.7% token reduction over 20 turns |
+| Sustained Conversation | PASS | 100 turns, 3 projects, 0% stale returns, 0.29ms insert |
+| Attention Budget | PASS | U-curve ordering maintains 100% LLM compliance |
 | Noise Ratio | PASS | 100% useful vs 80% naive, +20pp improvement |
+
+### Mem0 vs MenteDB (head-to-head)
+
+| | MenteDB | Mem0 |
+|---|---------|------|
+| Stale belief test | PASS | FAIL (returns stale data) |
+| Latency | 4.7ms | 21,164ms |
+| Speedup | **4,459x faster** | baseline |
+| Belief propagation | Graph edges suppress stale | Flat vector, no supersession |
+
+Mem0 returned both "Uses PostgreSQL" (stale) and "Prefers SQLite" (current). MenteDB returned only the current belief.
 
 ### Performance Benchmarks (Criterion)
 
@@ -341,6 +352,8 @@ docker-compose up -d
 |-----------|-----|-------|--------|
 | Insert throughput | 13ms | 243ms | 2.65s |
 | Context assembly | 218us | 342us | 696us |
+
+Context assembly stays sub-millisecond even at 10,000 memories.
 
 ### Running Benchmarks
 
@@ -350,6 +363,9 @@ python3 benchmarks/run_all.py --no-llm
 
 # Full suite (requires ANTHROPIC_API_KEY or OPENAI_API_KEY)
 python3 benchmarks/run_all.py
+
+# Mem0 comparison (requires OPENAI_API_KEY)
+python3 benchmarks/mem0_comparison.py
 
 # Criterion performance benchmarks
 cargo bench
