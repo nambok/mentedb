@@ -325,11 +325,35 @@ docker-compose up -d
 
 ## Benchmarks
 
+### Quality Benchmarks (5/5 passing)
+
+| Test | Result | Key Metric |
+|------|--------|------------|
+| Stale Belief | PASS | Superseded memories correctly excluded |
+| Delta Savings | PASS | 90.6% token reduction over 20 turns |
+| Sustained Conversation | PASS | 100 turns, 3 projects, 0% stale returns |
+| Attention Budget | PASS | U-curve ordering maintains LLM compliance |
+| Noise Ratio | PASS | 100% useful vs 80% naive, +20pp improvement |
+
+### Performance Benchmarks (Criterion)
+
+| Benchmark | 100 | 1,000 | 10,000 |
+|-----------|-----|-------|--------|
+| Insert throughput | 13ms | 243ms | 2.65s |
+| Context assembly | 218us | 342us | 696us |
+
+### Running Benchmarks
+
 ```bash
+# Engine tests (no LLM required)
+python3 benchmarks/run_all.py --no-llm
+
+# Full suite (requires ANTHROPIC_API_KEY or OPENAI_API_KEY)
+python3 benchmarks/run_all.py
+
+# Criterion performance benchmarks
 cargo bench
 ```
-
-Benchmarks: storage writes (1K ops), HNSW search (10K vectors, top 10), context assembly (100 memories), MQL parsing (100 queries).
 
 ## Building
 
