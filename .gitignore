@@ -12,3 +12,10 @@ sdks/typescript/target/
 dashboard/node_modules/
 dashboard/dist/
 cargo_errors.txt
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+*.secret
