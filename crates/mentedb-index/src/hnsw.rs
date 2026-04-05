@@ -343,6 +343,11 @@ impl HnswIndex {
             None => return Vec::new(),
         };
 
+        // Dimension safety: query must match stored vector dimensions
+        if query.len() != inner.nodes[ep].vector.len() {
+            return Vec::new();
+        }
+
         let metric = inner.metric;
         let ef = self.ef_search.max(k);
 

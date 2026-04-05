@@ -173,6 +173,25 @@ impl MenteDB {
             .collect())
     }
 
+    /// Text-based similarity search using the same hash embedding as store().
+    /// This auto-generates a 384-dim embedding from the query text,
+    /// matching what store() does when no embedding is provided.
+    fn search_text(&mut self, query: &str, k: usize) -> PyResult<Vec<SearchResult>> {
+        let db = self.db.as_mut().ok_or_else(|| {
+            PyRuntimeError::new_err("database is closed")
+        })?;
+
+        let embedding = hash_embedding(query, 384);
+        let hits = db.recall_similar(&embedding, k).map_err(to_pyerr)?;
+        Ok(hits
+            .into_iter()
+            .map(|(id, score)| SearchResult {
+                id: id.to_string(),
+                score,
+            })
+            .collect())
+    }
+
     /// Add a typed, weighted edge between two memories.
     fn relate(
         &mut self,
@@ -204,6 +223,27 @@ impl MenteDB {
 
         let id = parse_memory_id(memory_id)?;
         db.forget(id).map_err(to_pyerr)
+    }
+
+    /// Retrieve a memory by its UUID string.
+    /// Returns a dict with id, content, memory_type, tags, created_at.
+    fn get_memory(&mut self, memory_id: &str) -> PyResult<PyObject> {
+        let db = self.db.as_mut().ok_or_else(|| {
+            PyRuntimeError::new_err("database is closed")
+        })?;
+
+        let id = parse_memory_id(memory_id)?;
+        let node = db.get_memory(id).map_err(to_pyerr)?;
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("id", node.id.to_string())?;
+            dict.set_item("content", &node.content)?;
+            dict.set_item("memory_type", format!("{:?}", node.memory_type))?;
+            let tags: Vec<&str> = node.tags.iter().map(|s| s.as_str()).collect();
+            dict.set_item("tags", tags)?;
+            dict.set_item("created_at", node.created_at)?;
+            Ok(dict.into())
+        })
     }
 
     /// Extract memories from a conversation and store them.
