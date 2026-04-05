@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.8](https://github.com/nambok/mentedb/compare/mentedb-v0.2.7...mentedb-v0.2.8) (2026-04-05)
+
+
+### Bug Fixes
+
+* bump to 0.2.8 to publish mentedb-extraction ([8793448](https://github.com/nambok/mentedb/commit/87934480cf58bccc4430c6e86750935ebe140adc))
+* clarify delta token reduction claims ([026b5f1](https://github.com/nambok/mentedb/commit/026b5f1e6ed50caf7d1df9b56c3a7ed84f3e51b5))
+
 ## [0.2.7](https://github.com/nambok/mentedb/compare/mentedb-v0.2.6...mentedb-v0.2.7) (2026-04-05)
 
 
