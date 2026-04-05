@@ -19,3 +19,4 @@ cargo_errors.txt
 *.pem
 *.key
 *.secret
+.venv/
