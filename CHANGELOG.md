@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.7](https://github.com/nambok/mentedb/compare/mentedb-v0.2.6...mentedb-v0.2.7) (2026-04-05)
+
+
+### Bug Fixes
+
+* add mentedb-extraction to crates.io publish list ([0339104](https://github.com/nambok/mentedb/commit/03391048bcefef69cabdfdb1239e5de8d6a48c0c))
+
 ## [0.2.6](https://github.com/nambok/mentedb/compare/mentedb-v0.2.5...mentedb-v0.2.6) (2026-04-05)
 
 
