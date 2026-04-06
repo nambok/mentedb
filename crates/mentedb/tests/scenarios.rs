@@ -756,7 +756,7 @@ fn test_speculative_preassembly() {
     // let's verify the system works)
 
     // Speculative cache
-    let mut cache = SpeculativeCache::new(10, 0.3);
+    let mut cache = SpeculativeCache::new(10, 0.3, 0.4);
 
     // Pre-assemble with a builder that returns fake context
     let topics_to_cache = if predictions.is_empty() {
@@ -772,12 +772,12 @@ fn test_speculative_preassembly() {
     cache.pre_assemble(topics_to_cache.clone(), |topic| {
         let context = format!("Pre-assembled context for: {topic}");
         let fake_id = MemoryId::new();
-        Some((context, vec![fake_id]))
+        Some((context, vec![fake_id], None))
     });
 
     // Hit: query about a cached topic
     if let Some(first_topic) = topics_to_cache.first() {
-        let hit = cache.try_hit(first_topic);
+        let hit = cache.try_hit(first_topic, None);
         assert!(
             hit.is_some(),
             "Cache should hit for pre-assembled topic '{first_topic}'"
@@ -790,7 +790,7 @@ fn test_speculative_preassembly() {
     }
 
     // Miss: completely unrelated query
-    let miss = cache.try_hit("quantum computing with qubits");
+    let miss = cache.try_hit("quantum computing with qubits", None);
     assert!(miss.is_none(), "Cache should miss for unrelated query");
 
     // Stats
