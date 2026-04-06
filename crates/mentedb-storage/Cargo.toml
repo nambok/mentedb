@@ -23,6 +23,7 @@ ahash = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
+fs2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

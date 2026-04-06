@@ -1126,6 +1126,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2011,7 +2021,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "criterion",
  "mentedb-cognitive",
@@ -2031,7 +2041,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-cognitive"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "ahash 0.8.12",
  "crossbeam",
@@ -2045,7 +2055,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-consolidation"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "ahash 0.8.12",
  "mentedb-core",
@@ -2057,7 +2067,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-context"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "ahash 0.8.12",
  "mentedb-core",
@@ -2069,7 +2079,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-core"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "ahash 0.8.12",
  "bytemuck",
@@ -2084,7 +2094,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-embedding"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -2104,7 +2114,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-extraction"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "mentedb-cognitive",
  "mentedb-core",
@@ -2120,7 +2130,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-graph"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "ahash 0.8.12",
  "bytemuck",
@@ -2136,7 +2146,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-index"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "ahash 0.8.12",
  "bytemuck",
@@ -2153,7 +2163,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-query"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -2165,7 +2175,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-replication"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -2186,7 +2196,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-server"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "anyhow",
  "axum",
@@ -2215,12 +2225,13 @@ dependencies = [
 
 [[package]]
 name = "mentedb-storage"
-version = "0.2.9"
+version = "0.2.10"
 dependencies = [
  "ahash 0.8.12",
  "bytes",
  "crc32fast",
  "crossbeam",
+ "fs2",
  "lz4_flex",
  "mentedb-core",
  "parking_lot",
@@ -2737,7 +2748,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "once_cell",
@@ -2757,7 +2768,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -2867,7 +2878,7 @@ dependencies = [
  "once_cell",
  "socket2 0.6.3",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

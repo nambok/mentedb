@@ -1,10 +1,12 @@
 //! Storage Engine: facade that ties the page manager, WAL, and buffer pool together.
 
+use std::fs::File;
 use std::path::Path;
 
 use mentedb_core::MemoryNode;
 use mentedb_core::error::{MenteError, MenteResult};
 
+use fs2::FileExt;
 use tracing::info;
 
 use crate::buffer::BufferPool;
@@ -21,6 +23,8 @@ pub struct StorageEngine {
     page_manager: PageManager,
     buffer_pool: BufferPool,
     wal: Wal,
+    /// Exclusive lock file — held for the lifetime of the engine to prevent concurrent access.
+    _lock_file: File,
 }
 
 impl StorageEngine {
@@ -31,6 +35,16 @@ impl StorageEngine {
     pub fn open(path: &Path) -> MenteResult<Self> {
         std::fs::create_dir_all(path)?;
 
+        // Acquire exclusive lock to prevent concurrent access corruption
+        let lock_path = path.join("mentedb.lock");
+        let lock_file = File::create(&lock_path)
+            .map_err(|e| MenteError::Storage(format!("failed to create lock file: {e}")))?;
+        lock_file.try_lock_exclusive().map_err(|_| {
+            MenteError::Storage(
+                "Database is locked by another process. Only one instance can access the database at a time.".to_string()
+            )
+        })?;
+
         let page_manager = PageManager::open(path)?;
         let buffer_pool = BufferPool::new(DEFAULT_BUFFER_POOL_SIZE);
         let wal = Wal::open(path)?;
@@ -39,6 +53,7 @@ impl StorageEngine {
             page_manager,
             buffer_pool,
             wal,
+            _lock_file: lock_file,
         };
 
         let recovered = engine.recover()?;
