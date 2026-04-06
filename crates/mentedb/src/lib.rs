@@ -53,6 +53,8 @@ use mentedb_storage::StorageEngine;
 use tracing::{debug, info};
 
 // Re-export sub-crates for direct access.
+/// Cognitive pipeline: speculative caching, trajectory tracking, inference.
+pub use mentedb_cognitive as cognitive;
 /// Context assembly engine.
 pub use mentedb_context as context;
 /// Core types: MemoryNode, MemoryEdge, errors, config.
