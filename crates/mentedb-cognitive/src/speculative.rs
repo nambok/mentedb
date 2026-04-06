@@ -112,7 +112,8 @@ impl SpeculativeCache {
     }
 
     /// Try to find a cached context for this query. Uses cosine similarity on
-    /// embeddings when available, falls back to keyword overlap.
+    /// embeddings when available, falls back to keyword overlap only when
+    /// no embeddings exist.
     pub fn try_hit(&mut self, query: &str, query_embedding: Option<&[f32]>) -> Option<CacheEntry> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -121,15 +122,13 @@ impl SpeculativeCache {
 
         let mut best_idx = None;
         let mut best_score = 0.0f32;
+        let mut used_embeddings = false;
 
         for (i, entry) in self.entries.iter().enumerate() {
-            // Try embedding similarity first, fall back to keywords
             let score = match (query_embedding, &entry.topic_embedding) {
                 (Some(qe), Some(te)) => {
-                    let cosine = cosine_similarity(qe, te);
-                    let keyword = keyword_overlap_score(query, &entry.topic);
-                    // Weighted blend: embeddings matter more
-                    cosine * 0.7 + keyword * 0.3
+                    used_embeddings = true;
+                    cosine_similarity(qe, te)
                 }
                 _ => keyword_overlap_score(query, &entry.topic),
             };
@@ -140,7 +139,7 @@ impl SpeculativeCache {
             }
         }
 
-        let threshold = if query_embedding.is_some() {
+        let threshold = if used_embeddings {
             self.embedding_threshold
         } else {
             self.keyword_threshold
