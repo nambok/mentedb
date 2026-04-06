@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.11](https://github.com/nambok/mentedb/compare/mentedb-v0.2.10...mentedb-v0.2.11) (2026-04-06)
+
+
+### Features
+
+* add exclusive file lock to prevent concurrent DB corruption ([861d19a](https://github.com/nambok/mentedb/commit/861d19ad31028c5be52a75cfa0c36489c002760d))
+
 ## [0.2.10](https://github.com/nambok/mentedb/compare/mentedb-v0.2.9...mentedb-v0.2.10) (2026-04-05)
 
 
