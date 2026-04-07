@@ -22,6 +22,11 @@ crossbeam = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "speculative_bench"
+harness = false
 
 [package.metadata.docs.rs]
 all-features = true

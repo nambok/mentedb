@@ -2044,6 +2044,7 @@ name = "mentedb-cognitive"
 version = "0.2.11"
 dependencies = [
  "ahash 0.8.12",
+ "criterion",
  "crossbeam",
  "mentedb-core",
  "parking_lot",
