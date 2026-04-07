@@ -104,11 +104,26 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
         } else if let Some(start) = trimmed.find('{') {
             // Handle preamble text before JSON (e.g. "Here are the memories:\n{...}")
             let candidate = &trimmed[start..];
-            // Find matching closing brace by counting depth
+            // Find matching closing brace by counting depth, respecting strings
             let mut depth = 0i32;
+            let mut in_string = false;
+            let mut escape_next = false;
             let mut end = candidate.len();
             for (i, ch) in candidate.char_indices() {
+                if escape_next {
+                    escape_next = false;
+                    continue;
+                }
+                if in_string {
+                    match ch {
+                        '\\' => escape_next = true,
+                        '"' => in_string = false,
+                        _ => {}
+                    }
+                    continue;
+                }
                 match ch {
+                    '"' => in_string = true,
                     '{' => depth += 1,
                     '}' => {
                         depth -= 1;
