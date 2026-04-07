@@ -238,8 +238,8 @@ impl MemoryService for MemoryServiceImpl {
             space_id,
             attributes,
             tags: req.tags,
-            valid_from: None,
-            valid_until: None,
+            valid_from: req.valid_from,
+            valid_until: req.valid_until,
         };
 
         let mut db = self.state.db.write().await;
@@ -346,8 +346,8 @@ impl MemoryService for MemoryServiceImpl {
             edge_type,
             weight,
             created_at: now,
-            valid_from: None,
-            valid_until: None,
+            valid_from: req.valid_from,
+            valid_until: req.valid_until,
         };
 
         let mut db = self.state.db.write().await;
@@ -485,6 +485,8 @@ mod tests {
             space_id: String::new(),
             salience: 0.8,
             confidence: 1.0,
+            valid_from: None,
+            valid_until: None,
         });
 
         let resp = svc.store(store_req).await.unwrap();
@@ -521,6 +523,8 @@ mod tests {
                 space_id: String::new(),
                 salience: 0.5,
                 confidence: 1.0,
+                valid_from: None,
+                valid_until: None,
             }))
             .await
             .unwrap();
@@ -554,6 +558,8 @@ mod tests {
                 space_id: String::new(),
                 salience: 0.5,
                 confidence: 1.0,
+                valid_from: None,
+                valid_until: None,
             }))
             .await
             .unwrap()
@@ -571,6 +577,8 @@ mod tests {
                 space_id: String::new(),
                 salience: 0.5,
                 confidence: 1.0,
+                valid_from: None,
+                valid_until: None,
             }))
             .await
             .unwrap()
@@ -583,6 +591,8 @@ mod tests {
                 target: id2,
                 edge_type: "caused".into(),
                 weight: 0.9,
+                valid_from: None,
+                valid_until: None,
             }))
             .await
             .unwrap();
@@ -699,6 +709,8 @@ mod tests {
                 space_id: String::new(),
                 salience: 0.5,
                 confidence: 1.0,
+                valid_from: None,
+                valid_until: None,
             }))
             .await;
 
@@ -723,6 +735,8 @@ mod tests {
                 space_id: String::new(),
                 salience: 0.5,
                 confidence: 1.0,
+                valid_from: None,
+                valid_until: None,
             }))
             .await;
 
@@ -791,6 +805,8 @@ mod tests {
             space_id: String::new(),
             salience: 0.5,
             confidence: 1.0,
+            valid_from: None,
+            valid_until: None,
         });
         r.metadata_mut()
             .insert("authorization", format!("Bearer {tok}").parse().unwrap());
@@ -813,6 +829,8 @@ mod tests {
             space_id: String::new(),
             salience: 0.5,
             confidence: 1.0,
+            valid_from: None,
+            valid_until: None,
         });
         r.metadata_mut()
             .insert("authorization", format!("Bearer {tok}").parse().unwrap());

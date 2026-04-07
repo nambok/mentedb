@@ -188,6 +188,8 @@ impl MenteDB {
         target: String,
         edge_type: String,
         weight: f64,
+        valid_from: Option<i64>,
+        valid_until: Option<i64>,
     ) -> Result<()> {
         let src = parse_uuid(&source)?;
         let tgt = parse_uuid(&target)?;
@@ -203,8 +205,8 @@ impl MenteDB {
             edge_type: et,
             weight: weight as f32,
             created_at: now,
-            valid_from: None,
-            valid_until: None,
+            valid_from: valid_from.map(|v| v as u64),
+            valid_until: valid_until.map(|v| v as u64),
         };
         self.inner.relate(edge).map_err(mente_err)
     }

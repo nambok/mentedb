@@ -192,6 +192,14 @@ impl CsrGraph {
         self.outgoing_by_idx(idx)
     }
 
+    /// Get outgoing edges that are temporally valid at the given timestamp.
+    pub fn outgoing_valid_at(&self, id: MemoryId, at: Timestamp) -> Vec<(MemoryId, StoredEdge)> {
+        self.outgoing(id)
+            .into_iter()
+            .filter(|(_, e)| e.is_valid_at(at))
+            .collect()
+    }
+
     pub(crate) fn outgoing_by_idx(&self, idx: u32) -> Vec<(MemoryId, StoredEdge)> {
         let mut results = Vec::new();
 
@@ -224,6 +232,14 @@ impl CsrGraph {
             return Vec::new();
         };
         self.incoming_by_idx(idx)
+    }
+
+    /// Get incoming edges that are temporally valid at the given timestamp.
+    pub fn incoming_valid_at(&self, id: MemoryId, at: Timestamp) -> Vec<(MemoryId, StoredEdge)> {
+        self.incoming(id)
+            .into_iter()
+            .filter(|(_, e)| e.is_valid_at(at))
+            .collect()
     }
 
     pub(crate) fn incoming_by_idx(&self, idx: u32) -> Vec<(MemoryId, StoredEdge)> {
