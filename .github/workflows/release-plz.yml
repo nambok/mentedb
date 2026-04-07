@@ -64,21 +64,26 @@ jobs:
             echo "📦 Publishing $crate $version..."
             # Retry up to 3 times (crates.io indexing can be slow)
             for attempt in 1 2 3; do
-              if cargo publish -p "$crate" --no-verify 2>&1; then
+              output=$(cargo publish -p "$crate" --no-verify 2>&1) && {
                 echo "✅ $crate $version published"
                 # Wait for crates.io to index before publishing dependents
                 echo "⏳ Waiting 30s for crates.io indexing..."
                 sleep 30
                 break
-              else
+              } || {
+                if echo "$output" | grep -q "already exists"; then
+                  echo "✅ $crate $version already on crates.io, skipping"
+                  break
+                fi
                 if [ "$attempt" -lt 3 ]; then
                   echo "⚠️  Attempt $attempt failed, retrying in 30s..."
                   sleep 30
                 else
                   echo "❌ Failed to publish $crate after 3 attempts"
+                  echo "$output"
                   exit 1
                 fi
-              fi
+              }
             done
           done
           echo "🎉 All crates published successfully"
