@@ -1,0 +1,13 @@
+[workspace]
+custom_minor_increment_regex = "^minor"
+git_release_enable = true
+semver_check = true
+
+# SDKs are versioned via workspace but not published to crates.io
+[[package]]
+name = "mentedb-replication"
+release = false
+
+[[package]]
+name = "mentedb-server"
+release = false
