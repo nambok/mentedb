@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.3.2...mentedb-cognitive-v0.4.0) - 2026-04-07
+
+### Other
+
+- Add bi-temporal validity to memories and edges ([#35](https://github.com/nambok/mentedb/pull/35))
+
 ## [0.3.2](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.3.1...mentedb-cognitive-v0.3.2) - 2026-04-07
 
 ### Added
