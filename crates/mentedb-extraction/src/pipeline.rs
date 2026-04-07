@@ -95,6 +95,11 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
     fn parse_extraction_response(&self, raw: &str) -> Result<ExtractionResult, ExtractionError> {
         let trimmed = raw.trim();
 
+        // Empty response = no memories to extract
+        if trimmed.is_empty() {
+            return Ok(ExtractionResult { memories: vec![] });
+        }
+
         // Strip markdown code fences if present
         let stripped = if trimmed.starts_with("```") {
             let without_prefix = trimmed
@@ -141,7 +146,8 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
             }
             &candidate[..end]
         } else {
-            stripped
+            // No JSON object found — LLM returned plain text (e.g. "No memories to extract")
+            return Ok(ExtractionResult { memories: vec![] });
         };
 
         serde_json::from_str::<ExtractionResult>(json_str).map_err(|e| {
