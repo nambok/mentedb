@@ -12,6 +12,8 @@ WHAT TO EXTRACT:
 - Facts: confirmed information that was stated as true, not speculation
 - Entities: projects, tools, people, systems, with their relationships and roles
 - Anti-patterns: things that failed, caused bugs, or should be avoided in the future
+- Events: activities, appointments, outings, meetings — what happened, when, where, with whom
+- Specifics: names, locations, dates, prices, quantities — these are often the most valuable for future recall
 
 HOW TO SCORE CONFIDENCE (0.0 to 1.0):
 - 0.9 to 1.0: explicitly stated multiple times, or confirmed by both parties
@@ -32,6 +34,7 @@ RULES:
 - Do NOT extract intermediate reasoning steps, only final conclusions
 - Do NOT extract things that were discussed but never decided
 - Do NOT duplicate information, say it once in the most complete form
+- When multiple similar items exist (e.g., multiple meetings, multiple purchases), extract enough detail to distinguish them from each other
 - Do NOT extract low-confidence inferences the user did not explicitly state
 - Each memory should be self-contained and understandable without the original conversation
 - Keep content concise but complete, one to two sentences maximum
@@ -48,6 +51,14 @@ OUTPUT FORMAT (strict JSON, no markdown fences):
       "entities": ["PostgreSQL"],
       "tags": ["database", "infrastructure"],
       "reasoning": "Explicitly confirmed tech stack choice"
+    },
+    {
+      "content": "User redeemed a $5 coupon on coffee creamer at Target last Sunday",
+      "memory_type": "fact",
+      "confidence": 0.85,
+      "entities": ["Target"],
+      "tags": ["shopping", "coupon"],
+      "reasoning": "Specific purchase event with location, item, and amount"
     }
   ]
 }

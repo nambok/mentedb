@@ -20,10 +20,20 @@ impl LlmProvider {
         }
     }
 
-    /// Default model name for this provider.
+    /// Default extraction model for this provider (cheap, high-volume).
     pub fn default_model(&self) -> &str {
         match self {
             LlmProvider::OpenAI => "gpt-4o-mini",
+            LlmProvider::Anthropic => "claude-haiku-4-5",
+            LlmProvider::Ollama => "llama3",
+            LlmProvider::Custom => "default",
+        }
+    }
+
+    /// Default reader model for this provider (smart, low-volume).
+    pub fn default_reader_model(&self) -> &str {
+        match self {
+            LlmProvider::OpenAI => "gpt-4o",
             LlmProvider::Anthropic => "claude-sonnet-4-20250514",
             LlmProvider::Ollama => "llama3",
             LlmProvider::Custom => "default",
