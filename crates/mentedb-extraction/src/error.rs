@@ -7,6 +7,14 @@ pub enum ExtractionError {
     #[error("provider error: {0}")]
     ProviderError(String),
 
+    /// Authentication failed — wrong or missing API key.
+    #[error("authentication failed: {0}")]
+    AuthError(String),
+
+    /// The requested model was not found.
+    #[error("model not found: {0}")]
+    ModelNotFound(String),
+
     /// The LLM response could not be parsed as valid extraction output.
     #[error("parse error: {0}")]
     ParseError(String),

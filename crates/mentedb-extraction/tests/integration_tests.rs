@@ -213,12 +213,12 @@ async fn test_prompt_output_parsing() {
     assert!(result[0].entities.is_empty()); // default
     assert!(result[0].tags.is_empty()); // default
 
-    // Malformed JSON should return a parse error
+    // Plain text without JSON should return empty memories (graceful fallback)
     let provider = MockExtractionProvider::new("not json at all");
     let config = ExtractionConfig::default();
     let pipeline = ExtractionPipeline::new(provider, config);
-    let result = pipeline.extract_from_conversation("test").await;
-    assert!(result.is_err());
+    let result = pipeline.extract_from_conversation("test").await.unwrap();
+    assert!(result.is_empty());
 }
 
 #[tokio::test]

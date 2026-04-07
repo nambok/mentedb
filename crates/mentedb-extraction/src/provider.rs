@@ -1,6 +1,26 @@
 use crate::config::{ExtractionConfig, LlmProvider};
 use crate::error::ExtractionError;
 
+/// Classify an HTTP error response into a specific ExtractionError variant.
+fn classify_api_error(status: reqwest::StatusCode, body: &str, provider: &str, model: &str) -> ExtractionError {
+    let code = status.as_u16();
+    match code {
+        401 => ExtractionError::AuthError(format!(
+            "{provider} returned 401 Unauthorized. Check your API key (MENTEDB_LLM_API_KEY). \
+             Current provider: {provider}, model: {model}"
+        )),
+        403 => ExtractionError::AuthError(format!(
+            "{provider} returned 403 Forbidden. Your API key may lack permissions for model '{model}'."
+        )),
+        404 => ExtractionError::ModelNotFound(format!(
+            "{provider} returned 404. Model '{model}' may not exist or is not available on your account."
+        )),
+        _ => ExtractionError::ProviderError(format!(
+            "{provider} API returned {status}: {body}"
+        )),
+    }
+}
+
 /// Trait for LLM providers that can extract memories from conversation text.
 pub trait ExtractionProvider: Send + Sync {
     /// Send a conversation to the LLM with the given system prompt and return
@@ -77,9 +97,7 @@ impl HttpExtractionProvider {
         let text = resp.text().await?;
 
         if !status.is_success() {
-            return Err(ExtractionError::ProviderError(format!(
-                "OpenAI API returned {status}: {text}"
-            )));
+            return Err(classify_api_error(status, &text, "OpenAI", &self.config.model));
         }
 
         let parsed: serde_json::Value = serde_json::from_str(&text)?;
@@ -121,9 +139,7 @@ impl HttpExtractionProvider {
         let text = resp.text().await?;
 
         if !status.is_success() {
-            return Err(ExtractionError::ProviderError(format!(
-                "Anthropic API returned {status}: {text}"
-            )));
+            return Err(classify_api_error(status, &text, "Anthropic", &self.config.model));
         }
 
         let parsed: serde_json::Value = serde_json::from_str(&text)?;
@@ -194,9 +210,7 @@ impl HttpExtractionProvider {
         let text = resp.text().await?;
 
         if !status.is_success() {
-            return Err(ExtractionError::ProviderError(format!(
-                "Ollama API returned {status}: {text}"
-            )));
+            return Err(classify_api_error(status, &text, "Ollama", &self.config.model));
         }
 
         let parsed: serde_json::Value = serde_json::from_str(&text)?;
