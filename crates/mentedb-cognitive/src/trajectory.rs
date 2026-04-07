@@ -43,6 +43,14 @@ pub struct TransitionMap {
     transitions: HashMap<String, HashMap<String, u32>>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct TransitionSnapshot {
+    version: u32,
+    transitions: HashMap<String, HashMap<String, u32>>,
+}
+
+const TRANSITION_SNAPSHOT_VERSION: u32 = 1;
+
 impl TransitionMap {
     pub fn record(&mut self, from: &str, to: &str) {
         let from = normalize_topic(from);
@@ -103,20 +111,55 @@ impl TransitionMap {
         self.transitions.values().map(|t| t.len()).sum()
     }
 
-    /// Save the transition map to a JSON file.
-    pub fn save(&self, path: &Path) -> io::Result<()> {
-        let json = serde_json::to_string(self)
+    /// Save the transition map to a JSON file. Prunes transitions with
+    /// count below `min_count` to keep the file from growing unbounded.
+    /// Uses atomic write (temp file + rename) to avoid corruption.
+    pub fn save(&self, path: &Path, min_count: u32) -> io::Result<()> {
+        let pruned: HashMap<String, HashMap<String, u32>> = self
+            .transitions
+            .iter()
+            .filter_map(|(from, targets)| {
+                let kept: HashMap<String, u32> = targets
+                    .iter()
+                    .filter(|(_, c)| **c >= min_count)
+                    .map(|(t, &c)| (t.clone(), c))
+                    .collect();
+                if kept.is_empty() {
+                    None
+                } else {
+                    Some((from.clone(), kept))
+                }
+            })
+            .collect();
+        let snapshot = TransitionSnapshot {
+            version: TRANSITION_SNAPSHOT_VERSION,
+            transitions: pruned,
+        };
+        let json = serde_json::to_string(&snapshot)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        std::fs::write(path, json)
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, path)
     }
 
     /// Load a transition map from a JSON file, merging counts into the
     /// current map so that patterns accumulate across sessions.
     pub fn load(&mut self, path: &Path) -> io::Result<()> {
         let json = std::fs::read_to_string(path)?;
-        let loaded: TransitionMap = serde_json::from_str(&json)
+        let snapshot: TransitionSnapshot = serde_json::from_str(&json)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        for (from, targets) in loaded.transitions {
+
+        if snapshot.version != TRANSITION_SNAPSHOT_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "unsupported transition snapshot version: {} (expected {})",
+                    snapshot.version, TRANSITION_SNAPSHOT_VERSION
+                ),
+            ));
+        }
+
+        for (from, targets) in snapshot.transitions {
             let entry = self.transitions.entry(from).or_default();
             for (to, count) in targets {
                 *entry.entry(to).or_insert(0) += count;
@@ -514,7 +557,7 @@ mod tests {
         map.record("auth", "database");
         map.record("auth", "database");
         map.record("auth", "deploy");
-        map.save(&path).unwrap();
+        map.save(&path, 1).unwrap();
 
         // Load into a fresh map — counts should carry over
         let mut loaded = TransitionMap::default();
@@ -522,8 +565,28 @@ mod tests {
         let preds = loaded.predict_from("auth", 5);
         assert_eq!(preds[0].0, "database");
         assert_eq!(preds[0].1, 2);
+        // deploy has count 1, should be saved with min_count=1
         assert_eq!(preds[1].0, "deploy");
         assert_eq!(preds[1].1, 1);
+    }
+
+    #[test]
+    fn test_transition_map_save_prunes_low_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transitions.json");
+
+        let mut map = TransitionMap::default();
+        map.record("auth", "database");
+        map.record("auth", "database");
+        map.record("auth", "deploy"); // count 1
+        map.save(&path, 2).unwrap(); // only keep count >= 2
+
+        let mut loaded = TransitionMap::default();
+        loaded.load(&path).unwrap();
+        let preds = loaded.predict_from("auth", 5);
+        assert_eq!(preds.len(), 1);
+        assert_eq!(preds[0].0, "database");
+        assert_eq!(preds[0].1, 2);
     }
 
     #[test]
@@ -533,7 +596,7 @@ mod tests {
 
         let mut map = TransitionMap::default();
         map.record("auth", "database");
-        map.save(&path).unwrap();
+        map.save(&path, 1).unwrap();
 
         // Load into a map that already has data — counts should add
         let mut existing = TransitionMap::default();

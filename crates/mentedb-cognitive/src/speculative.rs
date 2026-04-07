@@ -201,13 +201,17 @@ impl Default for SpeculativeCache {
 /// hit at least once are worth persisting.
 #[derive(Serialize, Deserialize)]
 struct CacheSnapshot {
+    version: u32,
     entries: Vec<CacheEntry>,
     stats: CacheStats,
 }
 
+const CACHE_SNAPSHOT_VERSION: u32 = 1;
+
 impl SpeculativeCache {
     /// Save cache entries with at least `min_hits` to a JSON file.
     /// Entries below the threshold are considered stale and dropped.
+    /// Uses atomic write (temp file + rename) to avoid corruption.
     pub fn save(&self, path: &Path, min_hits: u32) -> io::Result<()> {
         let entries: Vec<CacheEntry> = self
             .entries
@@ -216,30 +220,52 @@ impl SpeculativeCache {
             .cloned()
             .collect();
         let snapshot = CacheSnapshot {
+            version: CACHE_SNAPSHOT_VERSION,
             entries,
             stats: self.stats.clone(),
         };
         let json = serde_json::to_string(&snapshot)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        std::fs::write(path, json)
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, path)
     }
 
     /// Load cache entries from a JSON file, merging into the current cache.
-    /// Preserves the configured max_size and thresholds.
+    /// Preserves the configured max_size and thresholds. Resets last_accessed
+    /// timestamps so LRU eviction works correctly after reload.
     pub fn load(&mut self, path: &Path) -> io::Result<()> {
         let json = std::fs::read_to_string(path)?;
         let snapshot: CacheSnapshot = serde_json::from_str(&json)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-        for entry in snapshot.entries {
+        if snapshot.version != CACHE_SNAPSHOT_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "unsupported cache snapshot version: {} (expected {})",
+                    snapshot.version, CACHE_SNAPSHOT_VERSION
+                ),
+            ));
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+
+        for mut entry in snapshot.entries {
             if self.entries.len() >= self.max_size {
                 self.evict_lru();
             }
             if !self.entries.iter().any(|e| e.topic == entry.topic) {
+                entry.last_accessed = now;
                 self.entries.push(entry);
             }
         }
-        self.stats = snapshot.stats;
+        self.stats.hits += snapshot.stats.hits;
+        self.stats.misses += snapshot.stats.misses;
+        self.stats.evictions += snapshot.stats.evictions;
         Ok(())
     }
 }
