@@ -107,14 +107,24 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
         ts = date_to_microseconds(date)
 
         if use_cognitive and llm_provider:
-            # Full cognitive pipeline: LLM extracts structured memories
-            try:
-                result = db.ingest(text, provider=llm_provider)
-                memory_ids.extend(result.get("stored_ids", []))
-                if (i + 1) % 10 == 0 or i == total - 1:
-                    print(f"    [{thread}] session {i+1}/{total} ingested", flush=True)
-            except Exception as e:
-                print(f"    [{thread}] session {i+1}/{total} FAILED: {e}", flush=True)
+            # Full cognitive pipeline with retry on transient errors
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    result = db.ingest(text, provider=llm_provider)
+                    memory_ids.extend(result.get("stored_ids", []))
+                    if (i + 1) % 10 == 0 or i == total - 1:
+                        print(f"    [{thread}] session {i+1}/{total} ingested", flush=True)
+                    break
+                except Exception as e:
+                    err = str(e).lower()
+                    if attempt < max_retries - 1 and ("connection" in err or "rate" in err or "timeout" in err or "overloaded" in err or "529" in err or "503" in err):
+                        wait = (attempt + 1) * 5
+                        print(f"    [{thread}] session {i+1}/{total} retry {attempt+1} in {wait}s: {e}", flush=True)
+                        time.sleep(wait)
+                    else:
+                        print(f"    [{thread}] session {i+1}/{total} FAILED: {e}", flush=True)
+                        break
 
             # Also store the raw session for retrieval coverage
             mid = db.store(text, memory_type="episodic",
