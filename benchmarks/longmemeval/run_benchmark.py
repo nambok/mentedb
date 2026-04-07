@@ -168,7 +168,43 @@ def retrieve_and_answer(db, question_data, llm_client, llm_provider, top_k=20):
     return answer.strip()
 
 
-def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None, use_cognitive=True):
+def process_single_question(question_data, embedding_provider, embedding_api_key,
+                            embedding_model, use_cognitive, cognitive_provider,
+                            llm_provider, top_k):
+    """Process a single question end-to-end. Designed to run in a thread pool."""
+    import mentedb as mentedb_pkg
+    import shutil
+
+    qid = question_data["question_id"]
+    tmp_dir = tempfile.mkdtemp(prefix=f"longmemeval-{qid}-")
+
+    try:
+        db = mentedb_pkg.MenteDB(
+            tmp_dir,
+            embedding_provider=embedding_provider,
+            embedding_api_key=embedding_api_key,
+            embedding_model=embedding_model,
+        )
+
+        # Each thread needs its own LLM client (not thread-safe)
+        llm_client, _ = get_llm_client()
+
+        ingest_sessions(db, question_data, use_cognitive=use_cognitive,
+                       llm_provider=cognitive_provider)
+        hypothesis = retrieve_and_answer(
+            db, question_data, llm_client, llm_provider, top_k=top_k
+        )
+        db.close()
+    except Exception as e:
+        hypothesis = f"Error: {e}"
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return {"question_id": qid, "hypothesis": hypothesis}
+
+
+def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None,
+                  use_cognitive=True, workers=3):
     """Run the full LongMemEval benchmark."""
     if not has_llm_key():
         print("Need OPENAI_API_KEY or ANTHROPIC_API_KEY for answer generation.")
@@ -209,6 +245,7 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None, use_cogni
     print(f"  Cognitive: {'ON (' + cognitive_provider + ')' if cognitive_provider else 'OFF (raw storage)'}")
     print(f"  Reader: {llm_provider}")
     print(f"  Top-K: {top_k}")
+    print(f"  Workers: {workers}")
     print()
 
     dataset = load_dataset(variant)
@@ -229,9 +266,6 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None, use_cogni
                 existing_results.append(entry)
         print(f"  Resuming: {len(existing_ids)} questions already completed\n")
 
-    results = existing_results[:]
-    total_time = 0
-
     try:
         import mentedb as mentedb_pkg
     except ImportError:
@@ -239,54 +273,67 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None, use_cogni
         print("Build from source: cd sdks/python && maturin develop")
         sys.exit(1)
 
-    for qi, question_data in enumerate(tqdm(dataset, desc="Questions")):
-        qid = question_data["question_id"]
+    # Filter out already-completed questions
+    pending = [q for q in dataset if q["question_id"] not in existing_ids]
 
-        if qid in existing_ids:
-            continue
+    results = existing_results[:]
+    total_start = time.time()
 
-        q_start = time.time()
-
-        # Each question gets a fresh MenteDB instance (isolated memory)
-        tmp_dir = tempfile.mkdtemp(prefix=f"longmemeval-{qid}-")
-        try:
-            db = mentedb_pkg.MenteDB(
-                tmp_dir,
-                embedding_provider=embedding_provider,
-                embedding_api_key=embedding_api_key,
-                embedding_model=embedding_model,
+    if workers <= 1:
+        # Sequential mode (original behavior)
+        for question_data in tqdm(pending, desc="Questions"):
+            entry = process_single_question(
+                question_data, embedding_provider, embedding_api_key,
+                embedding_model, use_cognitive, cognitive_provider,
+                llm_provider, top_k,
             )
+            results.append(entry)
+            with open(output_file, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+    else:
+        # Parallel mode
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-            ingest_sessions(db, question_data, use_cognitive=use_cognitive, llm_provider=cognitive_provider)
-            hypothesis = retrieve_and_answer(
-                db, question_data, llm_client, llm_provider, top_k=top_k
-            )
-            db.close()
-        except Exception as e:
-            hypothesis = f"Error: {e}"
-            print(f"\n  Error on {qid}: {e}")
-        finally:
-            import shutil
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+        futures = {}
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for question_data in pending:
+                future = executor.submit(
+                    process_single_question,
+                    question_data, embedding_provider, embedding_api_key,
+                    embedding_model, use_cognitive, cognitive_provider,
+                    llm_provider, top_k,
+                )
+                futures[future] = question_data["question_id"]
 
-        q_elapsed = time.time() - q_start
-        total_time += q_elapsed
+            completed = 0
+            total = len(futures)
+            for future in as_completed(futures):
+                completed += 1
+                qid = futures[future]
+                try:
+                    entry = future.result()
+                except Exception as e:
+                    entry = {"question_id": qid, "hypothesis": f"Error: {e}"}
+                    print(f"\n  Error on {qid}: {e}")
 
-        entry = {
-            "question_id": qid,
-            "hypothesis": hypothesis,
-        }
-        results.append(entry)
+                results.append(entry)
+                with open(output_file, "a") as f:
+                    f.write(json.dumps(entry) + "\n")
 
-        # Write incrementally so we can resume
-        with open(output_file, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+                elapsed = time.time() - total_start
+                avg = elapsed / completed
+                remaining = avg * (total - completed)
+                print(f"\r  [{completed}/{total}] {qid} done | "
+                      f"{elapsed:.0f}s elapsed | ~{remaining:.0f}s remaining",
+                      end="", flush=True)
+            print()
 
     # Write final clean file (no duplicates from resume)
     with open(output_file, "w") as f:
         for entry in results:
             f.write(json.dumps(entry) + "\n")
 
+    total_time = time.time() - total_start
     n = len(results)
     print(f"\nDone. {n} questions answered in {total_time:.1f}s ({total_time/max(n,1):.1f}s/question)")
     print(f"Results saved to: {output_file}")
@@ -309,6 +356,8 @@ def main():
                         help="Resume from a previous partial run")
     parser.add_argument("--no-cognitive", action="store_true",
                         help="Disable cognitive pipeline (raw storage baseline)")
+    parser.add_argument("--workers", type=int, default=3,
+                        help="Number of parallel workers (default: 3)")
     args = parser.parse_args()
 
     run_benchmark(
@@ -317,6 +366,7 @@ def main():
         limit=args.limit,
         resume_from=args.resume if args.resume else None,
         use_cognitive=not args.no_cognitive,
+        workers=args.workers,
     )
 
 
