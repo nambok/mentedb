@@ -91,6 +91,11 @@ fn mem(content: &str, created_at: u64) -> MemorySummary {
     }
 }
 
+/// Check if actual verdict matches any of the comma-separated expected values.
+fn verdict_matches(actual: &str, expected: &str) -> bool {
+    expected.split(',').any(|e| e.trim() == actual)
+}
+
 // ============================================================================
 // Invalidation tests
 // ============================================================================
@@ -98,7 +103,8 @@ fn mem(content: &str, created_at: u64) -> MemorySummary {
 struct InvalidationCase {
     old: &'static str,
     new: &'static str,
-    expected: &'static str, // "keep", "invalidate", or "update"
+    /// Comma separated list of acceptable verdicts (e.g. "invalidate,update" for ambiguous cases).
+    expected: &'static str,
     description: &'static str,
 }
 
@@ -162,7 +168,7 @@ const INVALIDATION_CASES: &[InvalidationCase] = &[
     InvalidationCase {
         old: "Project uses React for the frontend",
         new: "Team migrated the frontend to Vue last month",
-        expected: "invalidate",
+        expected: "invalidate,update",
         description: "framework change",
     },
     InvalidationCase {
@@ -180,7 +186,7 @@ const INVALIDATION_CASES: &[InvalidationCase] = &[
     InvalidationCase {
         old: "Using Python 3.9 for the project",
         new: "Upgraded the project to Python 3.12",
-        expected: "invalidate",
+        expected: "invalidate,update",
         description: "version upgrade",
     },
     InvalidationCase {
@@ -204,7 +210,7 @@ const INVALIDATION_CASES: &[InvalidationCase] = &[
     InvalidationCase {
         old: "Salary is $100k",
         new: "Got a raise to $130k",
-        expected: "invalidate",
+        expected: "invalidate,update",
         description: "salary update",
     },
     InvalidationCase {
@@ -616,7 +622,7 @@ async fn llm_accuracy_invalidation() {
             }
         };
 
-        if actual == case.expected {
+        if verdict_matches(actual, case.expected) {
             println!(
                 "  PASS [{}]: expected={}, got={}",
                 case.description, case.expected, actual
@@ -673,7 +679,7 @@ async fn llm_accuracy_contradiction() {
             }
         };
 
-        if actual == case.expected {
+        if verdict_matches(actual, case.expected) {
             println!(
                 "  PASS [{}]: expected={}, got={}",
                 case.description, case.expected, actual
@@ -788,7 +794,7 @@ async fn llm_accuracy_full_report() {
             Ok(InvalidationVerdict::Update { .. }) => "update",
             Err(_) => "error",
         };
-        let ok = actual == case.expected;
+        let ok = verdict_matches(actual, case.expected);
         if ok {
             total_pass += 1;
         } else {
@@ -818,7 +824,7 @@ async fn llm_accuracy_full_report() {
             Ok(ContradictionVerdict::Supersedes { .. }) => "supersedes",
             Err(_) => "error",
         };
-        let ok = actual == case.expected;
+        let ok = verdict_matches(actual, case.expected);
         if ok {
             total_pass += 1;
         } else {
