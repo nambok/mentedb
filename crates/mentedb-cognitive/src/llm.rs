@@ -406,12 +406,12 @@ fn parse_json_response<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, L
 
     // LLMs sometimes add explanatory text around the JSON.
     // Try to extract the first JSON object from the response.
-    if let Some(start) = stripped.find('{') {
-        if let Some(end) = rfind_matching_brace(stripped, start) {
-            let candidate = &stripped[start..=end];
-            if let Ok(v) = serde_json::from_str::<T>(candidate) {
-                return Ok(v);
-            }
+    if let Some(start) = stripped.find('{')
+        && let Some(end) = rfind_matching_brace(stripped, start)
+    {
+        let candidate = &stripped[start..=end];
+        if let Ok(v) = serde_json::from_str::<T>(candidate) {
+            return Ok(v);
         }
     }
 
@@ -533,6 +533,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn mem_at(content: &str, created_at: u64) -> MemorySummary {
         MemorySummary {
             id: test_id(),
