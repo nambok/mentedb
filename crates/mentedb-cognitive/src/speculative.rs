@@ -1,6 +1,9 @@
 use mentedb_core::types::{MemoryId, Timestamp};
+use serde::{Deserialize, Serialize};
+use std::io;
+use std::path::Path;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheEntry {
     pub topic: String,
     pub topic_embedding: Option<Vec<f32>>,
@@ -11,7 +14,7 @@ pub struct CacheEntry {
     last_accessed: Timestamp,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CacheStats {
     pub hits: u64,
     pub misses: u64,
@@ -194,6 +197,79 @@ impl Default for SpeculativeCache {
     }
 }
 
+/// On-disk format for the speculative cache. Only entries that have been
+/// hit at least once are worth persisting.
+#[derive(Serialize, Deserialize)]
+struct CacheSnapshot {
+    version: u32,
+    entries: Vec<CacheEntry>,
+    stats: CacheStats,
+}
+
+const CACHE_SNAPSHOT_VERSION: u32 = 1;
+
+impl SpeculativeCache {
+    /// Save cache entries with at least `min_hits` to a JSON file.
+    /// Entries below the threshold are considered stale and dropped.
+    /// Uses atomic write (temp file + rename) to avoid corruption.
+    pub fn save(&self, path: &Path, min_hits: u32) -> io::Result<()> {
+        let entries: Vec<CacheEntry> = self
+            .entries
+            .iter()
+            .filter(|e| e.hit_count >= min_hits)
+            .cloned()
+            .collect();
+        let snapshot = CacheSnapshot {
+            version: CACHE_SNAPSHOT_VERSION,
+            entries,
+            stats: self.stats.clone(),
+        };
+        let json = serde_json::to_string(&snapshot)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, path)
+    }
+
+    /// Load cache entries from a JSON file, merging into the current cache.
+    /// Preserves the configured max_size and thresholds. Resets last_accessed
+    /// timestamps so LRU eviction works correctly after reload.
+    pub fn load(&mut self, path: &Path) -> io::Result<()> {
+        let json = std::fs::read_to_string(path)?;
+        let snapshot: CacheSnapshot = serde_json::from_str(&json)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        if snapshot.version != CACHE_SNAPSHOT_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "unsupported cache snapshot version: {} (expected {})",
+                    snapshot.version, CACHE_SNAPSHOT_VERSION
+                ),
+            ));
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+
+        for mut entry in snapshot.entries {
+            if self.entries.len() >= self.max_size {
+                self.evict_lru();
+            }
+            if !self.entries.iter().any(|e| e.topic == entry.topic) {
+                entry.last_accessed = now;
+                self.entries.push(entry);
+            }
+        }
+        self.stats.hits += snapshot.stats.hits;
+        self.stats.misses += snapshot.stats.misses;
+        self.stats.evictions += snapshot.stats.evictions;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +364,57 @@ mod tests {
         });
         cache.evict_stale(0, u64::MAX);
         assert_eq!(cache.stats().cache_size, 0);
+    }
+
+    #[test]
+    fn test_save_and_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.json");
+
+        let mut cache = SpeculativeCache::default();
+        cache.pre_assemble(
+            vec!["hot topic".to_string(), "cold topic".to_string()],
+            |topic| {
+                Some((
+                    format!("Context for {}", topic),
+                    vec![MemoryId::new()],
+                    None,
+                ))
+            },
+        );
+        // Hit the hot topic so it has hit_count >= 1
+        cache.try_hit("hot topic", None);
+
+        // Save with min_hits=1 — only "hot topic" should persist
+        cache.save(&path, 1).unwrap();
+
+        let mut loaded = SpeculativeCache::default();
+        loaded.load(&path).unwrap();
+        assert_eq!(loaded.stats().cache_size, 1);
+
+        let hit = loaded.try_hit("hot topic", None);
+        assert!(hit.is_some());
+        let miss = loaded.try_hit("cold topic", None);
+        assert!(miss.is_none());
+    }
+
+    #[test]
+    fn test_save_empty_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.json");
+
+        let cache = SpeculativeCache::default();
+        cache.save(&path, 1).unwrap();
+
+        let mut loaded = SpeculativeCache::default();
+        loaded.load(&path).unwrap();
+        assert_eq!(loaded.stats().cache_size, 0);
+    }
+
+    #[test]
+    fn test_load_missing_file() {
+        let mut cache = SpeculativeCache::default();
+        let result = cache.load(Path::new("/nonexistent/cache.json"));
+        assert!(result.is_err());
     }
 }
