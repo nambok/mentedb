@@ -46,8 +46,15 @@ pub mod stream;
 pub mod trajectory;
 /// Write time inference engine for automatic relationship discovery.
 pub mod write_inference;
+/// LLM powered cognitive judgment for memory operations.
+pub mod llm;
 
 pub use interference::{InterferenceDetector, InterferencePair};
+pub use llm::{
+    ClusterMember, CognitiveLlmService, ConsolidationDecision, ContradictionVerdict,
+    EntityCandidate, EntityMergeGroup, InvalidationVerdict, LlmJudge, LlmJudgeError,
+    MemorySummary, MockLlmJudge, TopicLabel,
+};
 pub use pain::{PainRegistry, PainSignal};
 pub use phantom::{EntityRegistry, PhantomConfig, PhantomMemory, PhantomPriority, PhantomTracker};
 pub use speculative::{CacheEntry, CacheStats, SpeculativeCache};

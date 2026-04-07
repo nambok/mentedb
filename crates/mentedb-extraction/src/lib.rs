@@ -1,4 +1,5 @@
 pub mod config;
+pub mod cognitive_adapter;
 pub mod error;
 pub mod pipeline;
 pub mod prompts;
@@ -6,6 +7,7 @@ pub mod provider;
 pub mod schema;
 
 pub use config::{ExtractionConfig, LlmProvider};
+pub use cognitive_adapter::ExtractionLlmJudge;
 pub use error::ExtractionError;
 pub use pipeline::{
     CognitiveFinding, CognitiveFindingType, ExtractionPipeline, ExtractionStats,
