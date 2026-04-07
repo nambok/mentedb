@@ -25,7 +25,64 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Install protobuf compiler
         run: sudo apt-get install -y protobuf-compiler
-      - name: Run release-plz
+      - name: Publish all workspace crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          # Publish crates in dependency order.
+          # release-plz `release` skips crates with no direct file changes
+          # (consolidation, extraction) even when the workspace version was
+          # bumped, so we publish manually in the correct order.
+          CRATES=(
+            mentedb-core
+            mentedb-cognitive
+            mentedb-context
+            mentedb-embedding
+            mentedb-graph
+            mentedb-index
+            mentedb-query
+            mentedb-storage
+            mentedb-consolidation
+            mentedb-extraction
+            mentedb
+          )
+
+          for crate in "${CRATES[@]}"; do
+            # Get version from the crate's Cargo.toml (handles workspace inheritance)
+            version=$(cargo metadata --no-deps --format-version 1 \
+              | jq -r ".packages[] | select(.name == \"$crate\") | .version")
+
+            # Check if this version is already on crates.io
+            published=$(curl -sf "https://crates.io/api/v1/crates/$crate/$version" \
+              | jq -r '.version.num // empty' 2>/dev/null || true)
+
+            if [ "$published" = "$version" ]; then
+              echo "✅ $crate $version already published, skipping"
+              continue
+            fi
+
+            echo "📦 Publishing $crate $version..."
+            # Retry up to 3 times (crates.io indexing can be slow)
+            for attempt in 1 2 3; do
+              if cargo publish -p "$crate" --no-verify 2>&1; then
+                echo "✅ $crate $version published"
+                # Wait for crates.io to index before publishing dependents
+                echo "⏳ Waiting 30s for crates.io indexing..."
+                sleep 30
+                break
+              else
+                if [ "$attempt" -lt 3 ]; then
+                  echo "⚠️  Attempt $attempt failed, retrying in 30s..."
+                  sleep 30
+                else
+                  echo "❌ Failed to publish $crate after 3 attempts"
+                  exit 1
+                fi
+              fi
+            done
+          done
+          echo "🎉 All crates published successfully"
+      - name: Create git tags and GitHub releases
         uses: release-plz/action@v0.5
         with:
           command: release
