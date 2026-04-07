@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/nambok/mentedb/compare/mentedb-v0.3.0...mentedb-v0.3.1) (2026-04-07)
+
+
+### Bug Fixes
+
+* sync workspace dep versions with 0.3.0 and track in release-please ([#27](https://github.com/nambok/mentedb/issues/27)) ([3d0d901](https://github.com/nambok/mentedb/commit/3d0d901c98dfc8e69aac6763a1d351c2584e117b))
+
 ## [0.3.0](https://github.com/nambok/mentedb/compare/mentedb-v0.2.11...mentedb-v0.3.0) (2026-04-07)
 
 
