@@ -127,12 +127,44 @@ impl HttpExtractionProvider {
         }
 
         let parsed: serde_json::Value = serde_json::from_str(&text)?;
-        parsed["content"][0]["text"]
-            .as_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| {
-                ExtractionError::ParseError("Missing text in Anthropic response".to_string())
+
+        // Anthropic may return multiple content blocks; find the first text block
+        let content_text = parsed["content"]
+            .as_array()
+            .and_then(|blocks| {
+                blocks.iter().find_map(|block| {
+                    if block["type"].as_str() == Some("text") {
+                        block["text"].as_str().map(|s| s.to_string())
+                    } else {
+                        None
+                    }
+                })
             })
+            .or_else(|| {
+                // Fallback: try the old path for backwards compat
+                parsed["content"][0]["text"]
+                    .as_str()
+                    .map(|s| s.to_string())
+            });
+
+        match content_text {
+            Some(t) if !t.trim().is_empty() => Ok(t),
+            Some(_) => {
+                tracing::warn!(
+                    model = %self.config.model,
+                    "Anthropic returned empty text content"
+                );
+                Ok("{\"memories\": []}".to_string())
+            }
+            None => {
+                tracing::warn!(
+                    model = %self.config.model,
+                    response_preview = &text[..text.len().min(300)],
+                    "No text block found in Anthropic response"
+                );
+                Ok("{\"memories\": []}".to_string())
+            }
+        }
     }
 
     async fn call_ollama(
