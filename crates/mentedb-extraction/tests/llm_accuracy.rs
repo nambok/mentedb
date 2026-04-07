@@ -14,13 +14,69 @@ use mentedb_cognitive::llm::*;
 use mentedb_core::memory::MemoryType;
 use mentedb_core::types::MemoryId;
 use mentedb_extraction::cognitive_adapter::ExtractionLlmJudge;
-use mentedb_extraction::config::ExtractionConfig;
+use mentedb_extraction::config::{ExtractionConfig, LlmProvider};
 use mentedb_extraction::provider::HttpExtractionProvider;
 
+/// Build a CognitiveLlmService from environment variables.
+///
+/// Environment variables:
+///   LLM_PROVIDER  - "ollama" (default), "openai", "anthropic", "custom"
+///   LLM_API_KEY   - API key (required for openai/anthropic/custom)
+///   LLM_MODEL     - Model name (defaults per provider)
+///   LLM_API_URL   - Custom API URL (optional, uses provider defaults)
+///
+/// Examples:
+///   # Ollama (default)
+///   cargo test -p mentedb-extraction --test llm_accuracy -- --ignored --nocapture
+///
+///   # OpenAI
+///   LLM_PROVIDER=openai LLM_API_KEY=sk-... cargo test -p mentedb-extraction --test llm_accuracy -- --ignored --nocapture
+///
+///   # Anthropic
+///   LLM_PROVIDER=anthropic LLM_API_KEY=sk-ant-... cargo test -p mentedb-extraction --test llm_accuracy -- --ignored --nocapture
+///
+///   # Custom (e.g. Groq via OpenAI-compatible endpoint)
+///   LLM_PROVIDER=custom LLM_API_KEY=gsk-... LLM_API_URL=https://api.groq.com/openai/v1/chat/completions LLM_MODEL=llama-3.1-8b-instant cargo test -p mentedb-extraction --test llm_accuracy -- --ignored --nocapture
 fn ollama_service() -> CognitiveLlmService<ExtractionLlmJudge> {
-    let mut config = ExtractionConfig::ollama();
-    config.model = "llama3.2".to_string();
-    let provider = HttpExtractionProvider::new(config).expect("failed to create Ollama provider");
+    let provider_str = std::env::var("LLM_PROVIDER").unwrap_or_else(|_| "ollama".into());
+    let api_key = std::env::var("LLM_API_KEY").ok();
+    let model_override = std::env::var("LLM_MODEL").ok();
+    let url_override = std::env::var("LLM_API_URL").ok();
+
+    let mut config = match provider_str.to_lowercase().as_str() {
+        "openai" => {
+            let key = api_key.expect("LLM_API_KEY required for openai provider");
+            ExtractionConfig::openai(key)
+        }
+        "anthropic" => {
+            let key = api_key.expect("LLM_API_KEY required for anthropic provider");
+            ExtractionConfig::anthropic(key)
+        }
+        "custom" => {
+            let key = api_key.expect("LLM_API_KEY required for custom provider");
+            let mut cfg = ExtractionConfig::openai(key);
+            cfg.provider = LlmProvider::Custom;
+            cfg
+        }
+        _ => ExtractionConfig::ollama(),
+    };
+
+    if let Some(model) = model_override {
+        config.model = model;
+    } else if config.provider == LlmProvider::Ollama {
+        config.model = "llama3.1:8b".to_string();
+    }
+
+    if let Some(url) = url_override {
+        config.api_url = url;
+    }
+
+    eprintln!(
+        "\n  Provider: {:?} | Model: {} | URL: {}\n",
+        config.provider, config.model, config.api_url
+    );
+
+    let provider = HttpExtractionProvider::new(config).expect("failed to create LLM provider");
     let judge = ExtractionLlmJudge::new(provider);
     CognitiveLlmService::new(judge)
 }
