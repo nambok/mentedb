@@ -34,6 +34,8 @@
 
 /// Interference detection between confusable memories.
 pub mod interference;
+/// LLM powered cognitive judgment for memory operations.
+pub mod llm;
 /// Pain signal registry for negative experience tracking.
 pub mod pain;
 /// Phantom memory detection for knowledge gaps.
@@ -48,6 +50,11 @@ pub mod trajectory;
 pub mod write_inference;
 
 pub use interference::{InterferenceDetector, InterferencePair};
+pub use llm::{
+    ClusterMember, CognitiveLlmService, ConsolidationDecision, ContradictionVerdict,
+    EntityCandidate, EntityMergeGroup, InvalidationVerdict, LlmJudge, LlmJudgeError, MemorySummary,
+    MockLlmJudge, TopicLabel,
+};
 pub use pain::{PainRegistry, PainSignal};
 pub use phantom::{EntityRegistry, PhantomConfig, PhantomMemory, PhantomPriority, PhantomTracker};
 pub use speculative::{CacheEntry, CacheStats, SpeculativeCache};

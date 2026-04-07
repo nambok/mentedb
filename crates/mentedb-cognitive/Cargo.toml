@@ -19,10 +19,12 @@ ahash = { workspace = true }
 parking_lot = { workspace = true }
 tracing = { workspace = true }
 crossbeam = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 criterion = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 [[bench]]
 name = "speculative_bench"
