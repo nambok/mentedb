@@ -339,6 +339,24 @@ docker-compose up -d
 | Attention Budget | PASS | U-curve ordering maintains 100% LLM compliance |
 | Noise Ratio | PASS | 100% useful vs 80% naive, +20pp improvement |
 
+### LLM Accuracy Benchmarks (62 cases)
+
+MenteDB's cognitive layer uses LLM judgment for memory invalidation, contradiction detection, and topic canonicalization. We maintain a curated test suite of 62 cases to validate accuracy across providers.
+
+| Provider | Invalidation (23) | Contradiction (24) | Topic (15) | **Total** |
+|----------|-------------------|-------------------|------------|-----------|
+| Anthropic Claude Sonnet 4 | 100% | 100% | 100% | **100% (62/62)** |
+| Ollama llama3.1 8b | 87% | 66.7% | 93.3% | **80.6% (50/62)** |
+| Ollama llama3.2 3B | 78.3% | 58.3% | 80% | **71% (44/62)** |
+
+**Three tier design:** Works without any LLM (heuristics only), works well with a free local model via Ollama, and achieves perfect accuracy with a cloud API. We strongly recommend configuring your own LLM provider for the best experience.
+
+```bash
+# Run the accuracy benchmark yourself
+LLM_PROVIDER=anthropic LLM_API_KEY=sk-ant-... \
+  cargo test -p mentedb-extraction --test llm_accuracy -- --ignored --nocapture
+```
+
 ### Mem0 vs MenteDB (head-to-head)
 
 | | MenteDB | Mem0 |
