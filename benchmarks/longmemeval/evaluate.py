@@ -27,66 +27,33 @@ DATASET_FILES = {
     "oracle": "longmemeval_oracle.json",
 }
 
-# Evaluation prompts adapted from the official LongMemEval evaluate_qa.py
+# Evaluation prompts: EXACT copies from the official LongMemEval evaluate_qa.py
+# Source: https://github.com/xiaowu0162/LongMemEval/blob/main/src/evaluation/evaluate_qa.py
 JUDGE_PROMPTS = {
-    "default": """You are evaluating a chat assistant's memory capabilities.
+    "single-session-user": "I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. \n\nQuestion: {question}\n\nCorrect Answer: {answer}\n\nModel Response: {hypothesis}\n\nIs the model response correct? Answer yes or no only.",
 
-Question: {question}
-Gold Answer: {answer}
-Model Response: {hypothesis}
+    "single-session-assistant": "I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. \n\nQuestion: {question}\n\nCorrect Answer: {answer}\n\nModel Response: {hypothesis}\n\nIs the model response correct? Answer yes or no only.",
 
-Is the model's response correct? The response is correct if it contains or is equivalent
-to the gold answer. Minor phrasing differences are acceptable.
-Answer with exactly "yes" or "no".""",
+    "multi-session": "I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. \n\nQuestion: {question}\n\nCorrect Answer: {answer}\n\nModel Response: {hypothesis}\n\nIs the model response correct? Answer yes or no only.",
 
-    "knowledge-update": """You are evaluating a chat assistant's memory capabilities.
+    "temporal-reasoning": "I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. In addition, do not penalize off-by-one errors for the number of days. If the question asks for the number of days/weeks/months, etc., and the model makes off-by-one errors (e.g., predicting 19 days when the answer is 18), the model's response is still correct. \n\nQuestion: {question}\n\nCorrect Answer: {answer}\n\nModel Response: {hypothesis}\n\nIs the model response correct? Answer yes or no only.",
 
-Question: {question}
-Gold Answer (most recent/updated): {answer}
-Model Response: {hypothesis}
+    "knowledge-update": "I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response contains some previous information along with an updated answer, the response should be considered as correct as long as the updated answer is the required answer.\n\nQuestion: {question}\n\nCorrect Answer: {answer}\n\nModel Response: {hypothesis}\n\nIs the model response correct? Answer yes or no only.",
 
-Is the model's response correct? The response is correct if it provides the UPDATED answer.
-It is acceptable if the response mentions both old and new information, as long as the
-updated answer is clearly present.
-Answer with exactly "yes" or "no".""",
+    "single-session-preference": "I will give you a question, a rubric for desired personalized response, and a response from a model. Please answer yes if the response satisfies the desired response. Otherwise, answer no. The model does not need to reflect all the points in the rubric. The response is correct as long as it recalls and utilizes the user's personal information correctly.\n\nQuestion: {question}\n\nRubric: {answer}\n\nModel Response: {hypothesis}\n\nIs the model response correct? Answer yes or no only.",
 
-    "temporal-reasoning": """You are evaluating a chat assistant's memory capabilities.
-
-Question: {question}
-Gold Answer: {answer}
-Model Response: {hypothesis}
-
-Is the model's response correct? For temporal/counting questions, the response is correct
-if the number matches the gold answer. An off-by-one difference is acceptable for
-day-counting questions.
-Answer with exactly "yes" or "no".""",
-
-    "single-session-preference": """You are evaluating a chat assistant's memory capabilities.
-
-Question: {question}
-Gold Answer/Rubric: {answer}
-Model Response: {hypothesis}
-
-Is the model's response correct? The response is correct if it appropriately utilizes the
-user's personal information, preferences, or context from past conversations as described
-in the rubric.
-Answer with exactly "yes" or "no".""",
-
-    "abstention": """You are evaluating a chat assistant's memory capabilities.
-
-Question: {question}
-Note: This question asks about something that was NEVER discussed in conversation history.
-Model Response: {hypothesis}
-
-Is the model's response correct? The response is correct if the model identifies that it
-cannot answer the question, does not have the information, or otherwise abstains from
-giving a specific answer. Responses that make up an answer are INCORRECT.
-Answer with exactly "yes" or "no".""",
+    "abstention": "I will give you an unanswerable question, an explanation, and a response from a model. Please answer yes if the model correctly identifies the question as unanswerable. The model could say that the information is incomplete, or some other information is given but the asked information is not.\n\nQuestion: {question}\n\nExplanation: {answer}\n\nModel Response: {hypothesis}\n\nDoes the model correctly identify the question as unanswerable? Answer yes or no only.",
 }
+
+# Official judge model — must match for comparable results
+OFFICIAL_JUDGE_MODEL = "gpt-4o-2024-08-06"
 
 
 def get_judge_prompt(question_data, hypothesis):
-    """Select the appropriate judge prompt based on question type."""
+    """Select the appropriate judge prompt based on question type.
+
+    Uses the EXACT official prompts from LongMemEval evaluate_qa.py.
+    """
     qtype = question_data["question_type"]
     qid = question_data["question_id"]
 
@@ -95,7 +62,9 @@ def get_judge_prompt(question_data, hypothesis):
     elif qtype in JUDGE_PROMPTS:
         template = JUDGE_PROMPTS[qtype]
     else:
-        template = JUDGE_PROMPTS["default"]
+        # Fallback for any unknown type — use the same generic prompt as
+        # single-session-user (the official code would raise NotImplementedError)
+        template = JUDGE_PROMPTS["single-session-user"]
 
     return template.format(
         question=question_data["question"],
@@ -104,31 +73,24 @@ def get_judge_prompt(question_data, hypothesis):
     )
 
 
-def judge_answer(client, provider, question_data, hypothesis):
-    """Use an LLM to judge whether the hypothesis is correct."""
+def judge_answer(client, question_data, hypothesis):
+    """Use GPT-4o to judge whether the hypothesis is correct.
+
+    Always uses gpt-4o-2024-08-06 to match the official LongMemEval evaluation.
+    Requires OPENAI_API_KEY — this is non-negotiable for comparable results.
+    """
     prompt = get_judge_prompt(question_data, hypothesis)
 
     try:
-        if provider == "openai":
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-                max_tokens=10,
-            )
-            verdict = response.choices[0].message.content.strip().lower()
-        elif provider == "anthropic":
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=10,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-            )
-            verdict = response.content[0].text.strip().lower()
-        else:
-            return 0
-
-        return 1 if verdict.startswith("yes") else 0
+        response = client.chat.completions.create(
+            model=OFFICIAL_JUDGE_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=10,
+            n=1,
+        )
+        verdict = response.choices[0].message.content.strip().lower()
+        return 1 if "yes" in verdict else 0
     except Exception as e:
         print(f"  Judge error on {question_data['question_id']}: {e}")
         return 0
@@ -209,27 +171,31 @@ def compute_metrics(eval_results, reference):
 
 
 def run_evaluation(hypothesis_file, variant="s"):
-    # Support both OpenAI and Anthropic as judge
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-    from harness import get_llm_client
-
-    llm_client, llm_provider = get_llm_client()
-    if not llm_client:
-        print("Need OPENAI_API_KEY or ANTHROPIC_API_KEY for judge evaluation.")
+    # Official evaluation requires OpenAI GPT-4o as judge
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    if not openai_key:
+        print("OPENAI_API_KEY is required for evaluation.")
+        print("The official LongMemEval eval uses gpt-4o-2024-08-06 as judge.")
+        print("Using a different judge model would make results non-comparable.")
         sys.exit(1)
 
-    judge_model = "gpt-4o" if llm_provider == "openai" else "claude-sonnet-4-20250514"
+    try:
+        import openai
+        judge_client = openai.OpenAI()
+    except ImportError:
+        print("openai package required for evaluation: pip install openai")
+        sys.exit(1)
 
     reference = load_reference(variant)
     hypotheses = load_hypotheses(hypothesis_file)
 
     print(f"Evaluating {len(hypotheses)} predictions against {variant} reference...")
-    print(f"Judge: {judge_model}\n")
+    print(f"Judge: {OFFICIAL_JUDGE_MODEL} (official LongMemEval judge)\n")
 
     eval_results = []
     correct = 0
 
-    eval_log_file = hypothesis_file + f".eval-results-{judge_model}"
+    eval_log_file = hypothesis_file + f".eval-results-{OFFICIAL_JUDGE_MODEL}"
 
     from tqdm import tqdm
     for entry in tqdm(hypotheses, desc="Judging"):
@@ -241,13 +207,13 @@ def run_evaluation(hypothesis_file, variant="s"):
             print(f"  Warning: {qid} not found in reference, skipping")
             continue
 
-        label = judge_answer(llm_client, llm_provider, ref, hypothesis)
+        label = judge_answer(judge_client, ref, hypothesis)
         correct += label
 
         eval_entry = {
             "question_id": qid,
             "hypothesis": hypothesis,
-            "autoeval_label": {"model": judge_model, "label": label},
+            "autoeval_label": {"model": OFFICIAL_JUDGE_MODEL, "label": label},
             "label": label,
         }
         eval_results.append(eval_entry)
@@ -268,6 +234,7 @@ def run_evaluation(hypothesis_file, variant="s"):
     with open(metrics_file, "w") as f:
         f.write("LongMemEval Results (MenteDB)\n")
         f.write(f"Dataset: {variant}\n")
+        f.write(f"Judge: {OFFICIAL_JUDGE_MODEL}\n")
         f.write(f"Questions: {len(eval_results)}\n\n")
         for k, v in metrics.items():
             f.write(f"{k}: {v:.1f}%\n")
