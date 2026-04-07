@@ -234,7 +234,15 @@ impl MenteDB {
 
     /// Text-based similarity search using the configured embedding provider.
     /// Uses OpenAI/Cohere/Voyage if configured, falls back to hash embedding.
-    fn search_text(&mut self, query: &str, k: usize) -> PyResult<Vec<SearchResult>> {
+    #[pyo3(signature = (query, k=10, tags=None, after=None, before=None))]
+    fn search_text(
+        &mut self,
+        query: &str,
+        k: usize,
+        tags: Option<Vec<String>>,
+        after: Option<u64>,
+        before: Option<u64>,
+    ) -> PyResult<Vec<SearchResult>> {
         let db = self.db.as_mut().ok_or_else(|| {
             PyRuntimeError::new_err("database is closed")
         })?;
@@ -244,7 +252,47 @@ impl MenteDB {
         } else {
             hash_embedding(query, 384)
         };
-        let hits = db.recall_similar(&embedding, k).map_err(to_pyerr)?;
+
+        let tag_strs: Option<Vec<&str>> = tags.as_ref().map(|t| t.iter().map(|s| s.as_str()).collect());
+        let tag_refs: Option<&[&str]> = tag_strs.as_deref();
+        let time_range = match (after, before) {
+            (Some(a), Some(b)) => Some((a, b)),
+            _ => None,
+        };
+
+        let hits = db
+            .recall_similar_filtered(&embedding, k, tag_refs, time_range)
+            .map_err(to_pyerr)?;
+        Ok(hits
+            .into_iter()
+            .map(|(id, score)| SearchResult {
+                id: id.to_string(),
+                score,
+            })
+            .collect())
+    }
+
+    /// Multi-query search with Reciprocal Rank Fusion.
+    ///
+    /// Takes multiple query strings, embeds each, and merges results via RRF
+    /// for broader recall across different semantic aspects.
+    #[pyo3(signature = (queries, k=10))]
+    fn search_multi(&mut self, queries: Vec<String>, k: usize) -> PyResult<Vec<SearchResult>> {
+        let db = self.db.as_mut().ok_or_else(|| {
+            PyRuntimeError::new_err("database is closed")
+        })?;
+
+        let mut embeddings = Vec::with_capacity(queries.len());
+        for q in &queries {
+            let emb = if let Some(ref embedder) = self.embedder {
+                embedder.embed(q).map_err(to_pyerr)?
+            } else {
+                hash_embedding(q, 384)
+            };
+            embeddings.push(emb);
+        }
+
+        let hits = db.recall_similar_multi(&embeddings, k).map_err(to_pyerr)?;
         Ok(hits
             .into_iter()
             .map(|(id, score)| SearchResult {
@@ -351,10 +399,12 @@ impl MenteDB {
         let mut stored_ids = Vec::new();
         for memory in &quality_passed {
             let mt = map_extraction_type_to_memory_type(&memory.memory_type);
+            // Fact-augmented embedding: include entities and tags in the vector
+            let embed_text = memory.embedding_key();
             let emb = if let Some(ref embedder) = self.embedder {
-                embedder.embed(&memory.content).map_err(to_pyerr)?
+                embedder.embed(&embed_text).map_err(to_pyerr)?
             } else {
-                hash_embedding(&memory.content, 384)
+                hash_embedding(&embed_text, 384)
             };
             let mut node = MemoryNode::new(aid, mt, memory.content.clone(), emb);
             node.tags = memory.tags.clone();
@@ -363,6 +413,40 @@ impl MenteDB {
             let id = node.id;
             db.store(node).map_err(to_pyerr)?;
             stored_ids.push(id.to_string());
+        }
+
+        // Turn-level decomposition: store individual user turns as episodic memories
+        // for finer-grained retrieval alongside the LLM-extracted facts.
+        for line in conversation.lines() {
+            let trimmed = line.trim();
+            let user_content = if let Some(rest) = trimmed.strip_prefix("User:") {
+                Some(rest.trim())
+            } else if let Some(rest) = trimmed.strip_prefix("user:") {
+                Some(rest.trim())
+            } else {
+                None
+            };
+
+            if let Some(content) = user_content {
+                if content.len() > 30 {
+                    let emb = if let Some(ref embedder) = self.embedder {
+                        embedder.embed(content).map_err(to_pyerr)?
+                    } else {
+                        hash_embedding(content, 384)
+                    };
+                    let mut node = MemoryNode::new(
+                        aid,
+                        MemoryType::Episodic,
+                        content.to_string(),
+                        emb,
+                    );
+                    node.tags = vec!["turn".to_string()];
+                    node.salience = 0.4;
+                    let id = node.id;
+                    db.store(node).map_err(to_pyerr)?;
+                    stored_ids.push(id.to_string());
+                }
+            }
         }
 
         Python::with_gil(|py| {

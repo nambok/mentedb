@@ -58,9 +58,21 @@ class MenteDB:
         """Vector similarity search. Returns a list of SearchResult."""
         return self._db.search(embedding, k)
 
-    def search_text(self, query: str, k: int = 10):
-        """Text-based similarity search using the configured embedding provider."""
-        return self._db.search_text(query, k)
+    def search_text(self, query: str, k: int = 10, tags: list[str] | None = None,
+                    after: int | None = None, before: int | None = None):
+        """Text-based similarity search using the configured embedding provider.
+
+        Optionally filter by tags (AND) and/or time range (microsecond timestamps).
+        """
+        return self._db.search_text(query, k, tags, after, before)
+
+    def search_multi(self, queries: list[str], k: int = 10):
+        """Multi-query search with Reciprocal Rank Fusion.
+
+        Searches for each query separately and merges results via RRF
+        for broader recall across different semantic aspects.
+        """
+        return self._db.search_multi(queries, k)
 
     def get_memory(self, memory_id: str):
         """Retrieve a single memory by its UUID."""

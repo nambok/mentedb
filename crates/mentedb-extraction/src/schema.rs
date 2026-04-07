@@ -27,6 +27,27 @@ pub struct ExtractedMemory {
     pub reasoning: String,
 }
 
+impl ExtractedMemory {
+    /// Build an augmented text string for embedding generation.
+    ///
+    /// Concatenates the content with entities and tags to create a richer
+    /// vector representation that matches on more search queries.
+    pub fn embedding_key(&self) -> String {
+        let mut key = self.content.clone();
+        if !self.entities.is_empty() {
+            key.push_str(" [entities: ");
+            key.push_str(&self.entities.join(", "));
+            key.push(']');
+        }
+        if !self.tags.is_empty() {
+            key.push_str(" [topics: ");
+            key.push_str(&self.tags.join(", "));
+            key.push(']');
+        }
+        key
+    }
+}
+
 fn default_confidence() -> f32 {
     0.5
 }

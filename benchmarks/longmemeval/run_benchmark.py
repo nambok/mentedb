@@ -53,11 +53,26 @@ Instructions:
 1. First, identify which retrieved conversations contain information relevant to the question.
 2. For temporal questions, pay attention to dates and compute time differences carefully.
 3. For knowledge update questions, use the MOST RECENT information, not outdated facts.
-4. If the retrieved conversations do NOT contain enough information to answer confidently,
-   respond with exactly: "I don't have enough information to answer this question."
+4. Synthesize information from multiple memories when needed. Make reasonable inferences.
 5. Be concise. Give a direct answer.
 
 Answer:"""
+
+
+def extract_search_queries(question: str, llm_client, llm_provider: str) -> list[str]:
+    """Extract entity-based search queries from a question for multi-query retrieval."""
+    prompt = (
+        "Extract 2-3 short search queries from this question that would help find relevant memories. "
+        "Include the key entities, names, places, dates, and topics. "
+        "Return one query per line, no numbering.\n\n"
+        f"Question: {question}"
+    )
+    try:
+        response = llm_chat(llm_client, llm_provider, prompt, temperature=0.0, max_tokens=150)
+        queries = [q.strip() for q in response.strip().split("\n") if q.strip()]
+        return queries[:3]
+    except Exception:
+        return []
 
 
 def load_dataset(variant="s"):
@@ -123,11 +138,19 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
 
 
 def retrieve_and_answer(db, question_data, llm_client, llm_provider, top_k=20):
-    """Search MenteDB for relevant memories and generate an answer."""
+    """Search MenteDB for relevant memories and generate an answer.
+
+    Uses multi-query RRF search: the original question + entity-extracted sub-queries.
+    """
     question = question_data["question"]
     question_date = question_data["question_date"]
 
-    results = db.search_text(question, k=top_k)
+    # Build multi-query list: original question + entity-expanded sub-queries
+    queries = [question]
+    sub_queries = extract_search_queries(question, llm_client, llm_provider)
+    queries.extend(sub_queries)
+
+    results = db.search_multi(queries, k=top_k)
 
     retrieved_parts = []
     for r in results:

@@ -1413,8 +1413,9 @@ dependencies = [
 
 [[package]]
 name = "mentedb"
-version = "0.2.11"
+version = "0.4.2"
 dependencies = [
+ "mentedb-cognitive",
  "mentedb-context",
  "mentedb-core",
  "mentedb-embedding",
@@ -1429,20 +1430,22 @@ dependencies = [
 
 [[package]]
 name = "mentedb-cognitive"
-version = "0.2.11"
+version = "0.4.2"
 dependencies = [
  "ahash",
  "crossbeam",
  "mentedb-core",
  "parking_lot",
  "serde",
+ "serde_json",
+ "thiserror 2.0.18",
  "tracing",
  "uuid",
 ]
 
 [[package]]
 name = "mentedb-consolidation"
-version = "0.2.11"
+version = "0.4.2"
 dependencies = [
  "ahash",
  "mentedb-core",
@@ -1453,7 +1456,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-context"
-version = "0.2.11"
+version = "0.4.2"
 dependencies = [
  "ahash",
  "mentedb-core",
@@ -1465,7 +1468,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-core"
-version = "0.2.11"
+version = "0.4.2"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1480,7 +1483,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-embedding"
-version = "0.2.11"
+version = "0.4.2"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1498,7 +1501,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-extraction"
-version = "0.2.11"
+version = "0.4.2"
 dependencies = [
  "mentedb-cognitive",
  "mentedb-core",
@@ -1514,7 +1517,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-graph"
-version = "0.2.11"
+version = "0.4.2"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1528,7 +1531,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-index"
-version = "0.2.11"
+version = "0.4.2"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1544,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-python"
-version = "0.2.11"
+version = "0.3.1"
 dependencies = [
  "mentedb",
  "mentedb-cognitive",
@@ -1564,7 +1567,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-query"
-version = "0.2.11"
+version = "0.4.2"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -1575,7 +1578,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-storage"
-version = "0.2.11"
+version = "0.4.2"
 dependencies = [
  "ahash",
  "bytes",

@@ -20,3 +20,5 @@ cargo_errors.txt
 *.key
 *.secret
 .venv/
+__pycache__/
+*.dSYM/
