@@ -93,6 +93,8 @@ message StoreRequest {
     string space_id = 7;
     float salience = 8;
     float confidence = 9;
+    optional uint64 valid_from = 10;
+    optional uint64 valid_until = 11;
 }
 
 message StoreResponse {
@@ -145,6 +147,8 @@ message RelateRequest {
     string target = 2;
     string edge_type = 3;
     float weight = 4;
+    optional uint64 valid_from = 5;
+    optional uint64 valid_until = 6;
 }
 
 message RelateResponse {

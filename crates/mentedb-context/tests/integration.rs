@@ -65,6 +65,8 @@ fn sample_edges(memories: &[ScoredMemory]) -> Vec<MemoryEdge> {
         edge_type: EdgeType::Related,
         weight: 0.8,
         created_at: 1000,
+        valid_from: None,
+        valid_until: None,
     }]
 }
 

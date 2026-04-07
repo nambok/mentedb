@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 use mentedb_context::{AssemblyConfig, ContextAssembler, ContextWindow, ScoredMemory};
 use mentedb_core::edge::EdgeType;
 use mentedb_core::error::MenteResult;
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{MemoryId, Timestamp};
 use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
 use mentedb_embedding::provider::EmbeddingProvider;
 use mentedb_graph::GraphManager;
@@ -216,28 +216,78 @@ impl MenteDb {
     /// Shortcut for vector similarity search.
     ///
     /// Returns the top-k most similar memory IDs with their scores.
-    /// Memories that have been superseded or contradicted via graph edges
-    /// are automatically excluded from results.
+    /// Memories that have been superseded, contradicted, or temporally
+    /// invalidated are automatically excluded from results.
     pub fn recall_similar(
         &mut self,
         embedding: &[f32],
         k: usize,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
-        debug!("Recall similar, k={}", k);
-        // Over-fetch to account for filtered-out superseded results
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        self.recall_similar_at(embedding, k, now)
+    }
+
+    /// Vector similarity search at a specific point in time.
+    ///
+    /// Only returns memories that were temporally valid at the given timestamp.
+    /// Superseded/contradicted memories are excluded unless the edge itself
+    /// was not yet valid at that time.
+    pub fn recall_similar_at(
+        &mut self,
+        embedding: &[f32],
+        k: usize,
+        at: Timestamp,
+    ) -> MenteResult<Vec<(MemoryId, f32)>> {
+        debug!("Recall similar, k={}, at={}", k, at);
+        // Over-fetch to account for filtered-out results
         let results = self.index.hybrid_search(embedding, None, None, k * 3);
         let graph = self.graph.graph();
         let filtered: Vec<(MemoryId, f32)> = results
             .into_iter()
             .filter(|(id, _)| {
+                // Skip memories with active Supersedes/Contradicts edges at this timestamp
                 let incoming = graph.incoming(*id);
-                !incoming.iter().any(|(_, e)| {
-                    e.edge_type == EdgeType::Supersedes || e.edge_type == EdgeType::Contradicts
-                })
+                let has_active_supersede = incoming.iter().any(|(_, e)| {
+                    (e.edge_type == EdgeType::Supersedes || e.edge_type == EdgeType::Contradicts)
+                        && e.is_valid_at(at)
+                });
+                !has_active_supersede
+            })
+            .filter(|(id, _)| {
+                // Skip memories that are not temporally valid at this timestamp
+                if let Some(&page_id) = self.page_map.get(id)
+                    && let Ok(node) = self.storage.load_memory(page_id)
+                {
+                    node.is_valid_at(at)
+                } else {
+                    true
+                }
             })
             .take(k)
             .collect();
         Ok(filtered)
+    }
+
+    /// Invalidate a memory by setting its valid_until timestamp.
+    ///
+    /// The memory remains in storage for historical queries but is excluded
+    /// from current recall results.
+    pub fn invalidate_memory(&mut self, id: MemoryId, at: Timestamp) -> MenteResult<()> {
+        debug!("Invalidating memory {} at {}", id, at);
+        let page_id = self
+            .page_map
+            .get(&id)
+            .copied()
+            .ok_or(MenteError::MemoryNotFound(id))?;
+        let mut node = self.storage.load_memory(page_id)?;
+        node.invalidate(at);
+        // Re-store the updated node
+        let new_page_id = self.storage.store_memory(&node)?;
+        self.page_map.insert(id, new_page_id);
+        Ok(())
     }
 
     /// Adds a typed, weighted edge between two memories in the graph.

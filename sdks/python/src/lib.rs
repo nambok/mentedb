@@ -261,6 +261,8 @@ impl MenteDB {
         target: &str,
         edge_type: &str,
         weight: f32,
+        valid_from: Option<u64>,
+        valid_until: Option<u64>,
     ) -> PyResult<()> {
         let db = self.db.as_mut().ok_or_else(|| {
             PyRuntimeError::new_err("database is closed")
@@ -272,6 +274,8 @@ impl MenteDB {
             edge_type: parse_edge_type(edge_type)?,
             weight,
             created_at: now_us(),
+            valid_from,
+            valid_until,
         };
 
         db.relate(edge).map_err(to_pyerr)

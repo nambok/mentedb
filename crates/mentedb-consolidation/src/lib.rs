@@ -55,6 +55,8 @@ pub(crate) mod test_helpers {
             space_id: SpaceId::new(),
             attributes: HashMap::new(),
             tags: Vec::new(),
+            valid_from: None,
+            valid_until: None,
         }
     }
 }

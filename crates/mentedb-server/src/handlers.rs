@@ -141,6 +141,8 @@ pub async fn store_memory(
         space_id,
         attributes,
         tags,
+        valid_from: req.get("valid_from").and_then(|v| v.as_u64()),
+        valid_until: req.get("valid_until").and_then(|v| v.as_u64()),
     };
 
     let mut db = state.db.write().await;
@@ -353,12 +355,17 @@ pub async fn create_edge(
         .unwrap_or_default()
         .as_micros() as u64;
 
+    let valid_from = req.get("valid_from").and_then(|v| v.as_u64());
+    let valid_until = req.get("valid_until").and_then(|v| v.as_u64());
+
     let edge = MemoryEdge {
         source,
         target,
         edge_type,
         weight,
         created_at: now,
+        valid_from,
+        valid_until,
     };
 
     let mut db = state.db.write().await;
@@ -469,6 +476,8 @@ async fn run_extraction(
             space_id,
             attributes: std::collections::HashMap::new(),
             tags: memory.tags.clone(),
+            valid_from: None,
+            valid_until: None,
         };
         match db.store(node) {
             Ok(()) => stored_ids.push(id.to_string()),
