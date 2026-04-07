@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.4.1...mentedb-cognitive-v0.4.2) - 2026-04-07
+
+### Other
+
+- Add entity resolution with three tier strategy ([#43](https://github.com/nambok/mentedb/pull/43))
+
 ## [0.4.1](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.4.0...mentedb-cognitive-v0.4.1) - 2026-04-07
 
 ### Other
