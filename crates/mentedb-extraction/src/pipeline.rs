@@ -96,15 +96,19 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
         let trimmed = raw.trim();
 
         // Strip markdown code fences if present
-        let json_str = if trimmed.starts_with("```") {
+        let stripped = if trimmed.starts_with("```") {
             let without_prefix = trimmed
                 .trim_start_matches("```json")
                 .trim_start_matches("```");
             without_prefix.trim_end_matches("```").trim()
-        } else if let Some(start) = trimmed.find('{') {
-            // Handle preamble text before JSON (e.g. "Here are the memories:\n{...}")
-            let candidate = &trimmed[start..];
-            // Find matching closing brace by counting depth, respecting strings
+        } else {
+            trimmed
+        };
+
+        // Find the outermost JSON object using brace-depth matching
+        // that respects quoted strings (handles braces inside string values)
+        let json_str = if let Some(start) = stripped.find('{') {
+            let candidate = &stripped[start..];
             let mut depth = 0i32;
             let mut in_string = false;
             let mut escape_next = false;
@@ -137,7 +141,7 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
             }
             &candidate[..end]
         } else {
-            trimmed
+            stripped
         };
 
         serde_json::from_str::<ExtractionResult>(json_str).map_err(|e| {
