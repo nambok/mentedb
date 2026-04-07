@@ -102,6 +102,8 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
 
     thread = threading.current_thread().name
     total = len(sessions)
+    cognitive_ok = 0
+    cognitive_fail = 0
     for i, (session, date) in enumerate(zip(sessions, dates)):
         text = format_session(session, date)
         ts = date_to_microseconds(date)
@@ -109,22 +111,25 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
         if use_cognitive and llm_provider:
             # Full cognitive pipeline with retry on transient errors
             max_retries = 3
+            ingested = False
             for attempt in range(max_retries):
                 try:
                     result = db.ingest(text, provider=llm_provider)
                     memory_ids.extend(result.get("stored_ids", []))
-                    if (i + 1) % 10 == 0 or i == total - 1:
-                        print(f"    [{thread}] session {i+1}/{total} ingested", flush=True)
+                    cognitive_ok += 1
+                    ingested = True
                     break
                 except Exception as e:
                     err = str(e).lower()
                     if attempt < max_retries - 1 and ("connection" in err or "rate" in err or "timeout" in err or "overloaded" in err or "529" in err or "503" in err):
                         wait = (attempt + 1) * 5
-                        print(f"    [{thread}] session {i+1}/{total} retry {attempt+1} in {wait}s: {e}", flush=True)
                         time.sleep(wait)
                     else:
-                        print(f"    [{thread}] session {i+1}/{total} FAILED: {e}", flush=True)
+                        cognitive_fail += 1
                         break
+
+            if (i + 1) % 10 == 0 or i == total - 1:
+                print(f"    [{thread}] progress {i+1}/{total} (cognitive: {cognitive_ok} ok, {cognitive_fail} fallback)", flush=True)
 
             # Also store the raw session for retrieval coverage
             mid = db.store(text, memory_type="episodic",
