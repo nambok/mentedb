@@ -24,6 +24,16 @@ pub struct TrajectoryNode {
 const MAX_TURNS_DEFAULT: usize = 100;
 const REINFORCEMENT_BONUS: u32 = 2;
 
+/// Basic topic normalization: lowercase, collapse whitespace, trim.
+/// This handles the easy cases (casing, extra spaces) without attempting
+/// semantic canonicalization (tracked in #22).
+fn normalize_topic(raw: &str) -> String {
+    raw.split_whitespace()
+        .map(|w| w.to_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Tracks topic transitions as a Markov chain. Maps
 /// from_topic -> (to_topic -> frequency_count).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -33,33 +43,39 @@ pub struct TransitionMap {
 
 impl TransitionMap {
     pub fn record(&mut self, from: &str, to: &str) {
+        let from = normalize_topic(from);
+        let to = normalize_topic(to);
         *self
             .transitions
-            .entry(from.to_string())
+            .entry(from)
             .or_default()
-            .entry(to.to_string())
+            .entry(to)
             .or_insert(0) += 1;
     }
 
     pub fn reinforce(&mut self, from: &str, to: &str) {
+        let from = normalize_topic(from);
+        let to = normalize_topic(to);
         *self
             .transitions
-            .entry(from.to_string())
+            .entry(from)
             .or_default()
-            .entry(to.to_string())
+            .entry(to)
             .or_insert(0) += REINFORCEMENT_BONUS;
     }
 
     pub fn decay(&mut self, from: &str, to: &str) {
-        if let Some(targets) = self.transitions.get_mut(from) {
-            if let Some(count) = targets.get_mut(to) {
+        let from = normalize_topic(from);
+        let to = normalize_topic(to);
+        if let Some(targets) = self.transitions.get_mut(&from) {
+            if let Some(count) = targets.get_mut(&to) {
                 *count = count.saturating_sub(1);
                 if *count == 0 {
-                    targets.remove(to);
+                    targets.remove(&to);
                 }
             }
             if targets.is_empty() {
-                self.transitions.remove(from);
+                self.transitions.remove(&from);
             }
         }
     }
@@ -67,13 +83,11 @@ impl TransitionMap {
     /// Returns the top N predicted topics from a given topic,
     /// sorted by frequency descending.
     pub fn predict_from(&self, topic: &str, limit: usize) -> Vec<(String, u32)> {
-        let Some(targets) = self.transitions.get(topic) else {
+        let topic = normalize_topic(topic);
+        let Some(targets) = self.transitions.get(&topic) else {
             return Vec::new();
         };
-        let mut ranked: Vec<(String, u32)> = targets
-            .iter()
-            .map(|(t, &c)| (t.clone(), c))
-            .collect();
+        let mut ranked: Vec<(String, u32)> = targets.iter().map(|(t, &c)| (t.clone(), c)).collect();
         ranked.sort_by(|a, b| b.1.cmp(&a.1));
         ranked.truncate(limit);
         ranked
@@ -321,11 +335,26 @@ mod tests {
     fn test_transition_recording() {
         let mut tracker = TrajectoryTracker::default();
         tracker.record_turn(make_turn(1, "auth", DecisionState::Investigating, vec![]));
-        tracker.record_turn(make_turn(2, "database", DecisionState::Investigating, vec![]));
+        tracker.record_turn(make_turn(
+            2,
+            "database",
+            DecisionState::Investigating,
+            vec![],
+        ));
         tracker.record_turn(make_turn(3, "auth", DecisionState::Investigating, vec![]));
-        tracker.record_turn(make_turn(4, "database", DecisionState::Investigating, vec![]));
+        tracker.record_turn(make_turn(
+            4,
+            "database",
+            DecisionState::Investigating,
+            vec![],
+        ));
         tracker.record_turn(make_turn(5, "auth", DecisionState::Investigating, vec![]));
-        tracker.record_turn(make_turn(6, "deployment", DecisionState::Investigating, vec![]));
+        tracker.record_turn(make_turn(
+            6,
+            "deployment",
+            DecisionState::Investigating,
+            vec![],
+        ));
 
         // auth -> database happened twice, auth -> deployment once
         let preds = tracker.transitions.predict_from("auth", 5);
@@ -394,7 +423,12 @@ mod tests {
     fn test_reinforce_via_tracker() {
         let mut tracker = TrajectoryTracker::default();
         tracker.record_turn(make_turn(1, "auth", DecisionState::Investigating, vec![]));
-        tracker.record_turn(make_turn(2, "database", DecisionState::Investigating, vec![]));
+        tracker.record_turn(make_turn(
+            2,
+            "database",
+            DecisionState::Investigating,
+            vec![],
+        ));
 
         // One natural transition recorded
         assert_eq!(tracker.transitions.predict_from("auth", 1)[0].1, 1);
@@ -413,7 +447,12 @@ mod tests {
 
         // Build pattern: auth -> database
         tracker.record_turn(make_turn(1, "auth", DecisionState::Investigating, vec![]));
-        tracker.record_turn(make_turn(2, "database", DecisionState::Investigating, vec![]));
+        tracker.record_turn(make_turn(
+            2,
+            "database",
+            DecisionState::Investigating,
+            vec![],
+        ));
 
         // Land on auth with "database" as an open question too
         tracker.record_turn(make_turn(
@@ -426,5 +465,19 @@ mod tests {
         let preds = tracker.predict_next_topics();
         let unique: ahash::AHashSet<&String> = preds.iter().collect();
         assert_eq!(preds.len(), unique.len(), "predictions should be unique");
+    }
+
+    #[test]
+    fn test_normalization_collapses_variants() {
+        let mut map = TransitionMap::default();
+        map.record("Auth Setup", "database");
+        map.record("auth setup", "DATABASE");
+        map.record("  auth   setup  ", "  database  ");
+
+        // All three should collapse into one transition with count 3
+        let preds = map.predict_from("AUTH SETUP", 1);
+        assert_eq!(preds.len(), 1);
+        assert_eq!(preds[0].0, "database");
+        assert_eq!(preds[0].1, 3);
     }
 }
