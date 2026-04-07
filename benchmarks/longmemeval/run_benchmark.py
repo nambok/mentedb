@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -99,6 +100,8 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
     sessions = question_data["haystack_sessions"]
     dates = question_data["haystack_dates"]
 
+    thread = threading.current_thread().name
+    total = len(sessions)
     for i, (session, date) in enumerate(zip(sessions, dates)):
         text = format_session(session, date)
         ts = date_to_microseconds(date)
@@ -108,10 +111,10 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
             try:
                 result = db.ingest(text, provider=llm_provider)
                 memory_ids.extend(result.get("stored_ids", []))
+                if (i + 1) % 10 == 0 or i == total - 1:
+                    print(f"    [{thread}] session {i+1}/{total} ingested", flush=True)
             except Exception as e:
-                # Extraction can fail on some sessions (e.g. too long, parse errors)
-                # Fall back to raw storage silently
-                pass
+                print(f"    [{thread}] session {i+1}/{total} FAILED: {e}", flush=True)
 
             # Also store the raw session for retrieval coverage
             mid = db.store(text, memory_type="episodic",
