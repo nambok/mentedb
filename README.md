@@ -71,7 +71,7 @@ The result: a clean, curated memory that actually helps the AI perform better.
 
 | Feature | Traditional DBs | Vector DBs | Mem0/Zep | MenteDB |
 |---------|----------------|------------|----------|---------|
-| Storage model | Tables/Documents | Embeddings | Key value | Memory nodes (embeddings + graph + temporal) |
+| Storage model | Tables/Documents | Embeddings | Key value | Memory nodes (embeddings + graph + bi-temporal) |
 | Query result | Raw data | Similarity scores | Raw memories | **Token budget optimized context** |
 | Memory quality | Manual | None | LLM extract | **LLM extract + quality filter + dedup + contradiction** |
 | Understands AI attention? | No | No | No | **Yes, U curve ordering** |
@@ -83,6 +83,8 @@ The result: a clean, curated memory that actually helps the AI perform better.
 
 - **Automatic Memory Extraction** LLM powered pipeline extracts structured memories from raw conversations
 - **Write Time Intelligence** Quality filter, deduplication, and contradiction detection at ingest
+- **LLM Powered Cognitive Inference** CognitiveLlmService judges whether new memories invalidate, update, or are compatible with existing ones (supports Anthropic, OpenAI, Ollama)
+- **Bi-Temporal Validity** Memories and edges carry `valid_from`/`valid_until` timestamps. Temporal invalidation instead of deletion. Point-in-time queries via `recall_similar_at(embedding, k, timestamp)`
 - **Attention Optimized Context Assembly** Respects the U curve (critical data at start/end of context)
 - **Belief Propagation** When facts change, downstream beliefs are flagged for re evaluation
 - **Delta Aware Serving** Only sends what changed since last turn (90% reduction in memory retrieval tokens over 20 turns)

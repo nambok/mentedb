@@ -1,3 +1,4 @@
+use crate::llm::{CognitiveLlmService, LlmJudge};
 use mentedb_core::types::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -38,23 +39,34 @@ fn normalize_topic(raw: &str) -> String {
 
 /// Tracks topic transitions as a Markov chain. Maps
 /// from_topic -> (to_topic -> frequency_count).
+///
+/// Also maintains a learned topic cache that maps raw user messages
+/// to canonical topic labels, so repeated patterns skip the LLM.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TransitionMap {
     transitions: HashMap<String, HashMap<String, u32>>,
+    /// Learned mapping from raw topic strings to canonical labels.
+    /// Built up over time via LLM canonicalization calls.
+    #[serde(default)]
+    topic_cache: HashMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct TransitionSnapshot {
     version: u32,
     transitions: HashMap<String, HashMap<String, u32>>,
+    #[serde(default)]
+    topic_cache: HashMap<String, String>,
 }
 
-const TRANSITION_SNAPSHOT_VERSION: u32 = 1;
+const TRANSITION_SNAPSHOT_VERSION: u32 = 2;
 
 impl TransitionMap {
+    /// Record a transition, applying the topic cache if available.
+    /// If a canonical label exists for a raw topic, uses that instead.
     pub fn record(&mut self, from: &str, to: &str) {
-        let from = normalize_topic(from);
-        let to = normalize_topic(to);
+        let from = self.resolve_topic(from);
+        let to = self.resolve_topic(to);
         *self
             .transitions
             .entry(from)
@@ -64,8 +76,8 @@ impl TransitionMap {
     }
 
     pub fn reinforce(&mut self, from: &str, to: &str) {
-        let from = normalize_topic(from);
-        let to = normalize_topic(to);
+        let from = self.resolve_topic(from);
+        let to = self.resolve_topic(to);
         *self
             .transitions
             .entry(from)
@@ -75,8 +87,8 @@ impl TransitionMap {
     }
 
     pub fn decay(&mut self, from: &str, to: &str) {
-        let from = normalize_topic(from);
-        let to = normalize_topic(to);
+        let from = self.resolve_topic(from);
+        let to = self.resolve_topic(to);
         if let Some(targets) = self.transitions.get_mut(&from) {
             if let Some(count) = targets.get_mut(&to) {
                 *count = count.saturating_sub(1);
@@ -93,7 +105,7 @@ impl TransitionMap {
     /// Returns the top N predicted topics from a given topic,
     /// sorted by frequency descending.
     pub fn predict_from(&self, topic: &str, limit: usize) -> Vec<(String, u32)> {
-        let topic = normalize_topic(topic);
+        let topic = self.resolve_topic(topic);
         let Some(targets) = self.transitions.get(&topic) else {
             return Vec::new();
         };
@@ -101,6 +113,54 @@ impl TransitionMap {
         ranked.sort_by(|a, b| b.1.cmp(&a.1));
         ranked.truncate(limit);
         ranked
+    }
+
+    /// Resolve a raw topic to its canonical label.
+    /// Checks the learned cache first, falls back to normalize_topic().
+    fn resolve_topic(&self, raw: &str) -> String {
+        let normalized = normalize_topic(raw);
+        self.topic_cache
+            .get(&normalized)
+            .cloned()
+            .unwrap_or(normalized)
+    }
+
+    /// Store a learned mapping from a raw topic to its canonical label.
+    pub fn learn_canonical(&mut self, raw: &str, canonical: &str) {
+        let normalized = normalize_topic(raw);
+        let canonical = normalize_topic(canonical);
+        if normalized != canonical {
+            self.topic_cache.insert(normalized, canonical);
+        }
+    }
+
+    /// Look up a cached canonical label for a raw topic.
+    pub fn get_canonical(&self, raw: &str) -> Option<&String> {
+        let normalized = normalize_topic(raw);
+        self.topic_cache.get(&normalized)
+    }
+
+    /// Returns the list of known canonical topic labels (deduped).
+    pub fn known_topics(&self) -> Vec<String> {
+        let mut topics: Vec<String> = self.topic_cache.values().cloned().collect();
+        // Also include transition keys and targets that aren't in the cache
+        for (key, targets) in &self.transitions {
+            if !topics.contains(key) {
+                topics.push(key.clone());
+            }
+            for target in targets.keys() {
+                if !topics.contains(target) {
+                    topics.push(target.clone());
+                }
+            }
+        }
+        topics.sort();
+        topics.dedup();
+        topics
+    }
+
+    pub fn topic_cache_size(&self) -> usize {
+        self.topic_cache.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -134,6 +194,7 @@ impl TransitionMap {
         let snapshot = TransitionSnapshot {
             version: TRANSITION_SNAPSHOT_VERSION,
             transitions: pruned,
+            topic_cache: self.topic_cache.clone(),
         };
         let json = serde_json::to_string(&snapshot)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -144,16 +205,17 @@ impl TransitionMap {
 
     /// Load a transition map from a JSON file, merging counts into the
     /// current map so that patterns accumulate across sessions.
+    /// Supports both v1 (no topic_cache) and v2 (with topic_cache) formats.
     pub fn load(&mut self, path: &Path) -> io::Result<()> {
         let json = std::fs::read_to_string(path)?;
         let snapshot: TransitionSnapshot = serde_json::from_str(&json)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-        if snapshot.version != TRANSITION_SNAPSHOT_VERSION {
+        if snapshot.version > TRANSITION_SNAPSHOT_VERSION {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "unsupported transition snapshot version: {} (expected {})",
+                    "unsupported transition snapshot version: {} (expected <= {})",
                     snapshot.version, TRANSITION_SNAPSHOT_VERSION
                 ),
             ));
@@ -165,6 +227,12 @@ impl TransitionMap {
                 *entry.entry(to).or_insert(0) += count;
             }
         }
+
+        // Merge topic cache (loaded values don't overwrite existing)
+        for (raw, canonical) in snapshot.topic_cache {
+            self.topic_cache.entry(raw).or_insert(canonical);
+        }
+
         Ok(())
     }
 }
@@ -194,6 +262,56 @@ impl TrajectoryTracker {
             self.trajectory.remove(0);
         }
         self.trajectory.push(turn);
+    }
+
+    /// Record a turn with LLM-powered topic canonicalization.
+    ///
+    /// Checks the learned topic cache first (no LLM call needed for known patterns).
+    /// On cache miss, asks the LLM for a canonical label and stores it for future use.
+    /// Falls back to the heuristic path on any LLM error.
+    pub async fn record_turn_with_llm<J: LlmJudge>(
+        &mut self,
+        mut turn: TrajectoryNode,
+        llm: &CognitiveLlmService<J>,
+    ) {
+        // Canonicalize the incoming topic
+        let canonical = self.canonicalize_topic(&turn.topic_summary, llm).await;
+        turn.topic_summary = canonical;
+
+        if let Some(prev) = self.trajectory.last() {
+            self.transitions
+                .record(&prev.topic_summary, &turn.topic_summary);
+        }
+
+        if self.trajectory.len() >= self.max_turns {
+            self.trajectory.remove(0);
+        }
+        self.trajectory.push(turn);
+    }
+
+    /// Resolve a topic to its canonical label, using cache or LLM.
+    async fn canonicalize_topic<J: LlmJudge>(
+        &mut self,
+        raw: &str,
+        llm: &CognitiveLlmService<J>,
+    ) -> String {
+        // Tier 3: Check learned cache first (free, no LLM call)
+        if let Some(cached) = self.transitions.get_canonical(raw) {
+            return cached.clone();
+        }
+
+        // Tier 2: Ask the LLM
+        let existing = self.transitions.known_topics();
+        match llm.canonicalize_topic(raw, &existing).await {
+            Ok(label) => {
+                self.transitions.learn_canonical(raw, &label.topic);
+                normalize_topic(&label.topic)
+            }
+            Err(_) => {
+                // Tier 1: Fallback to normalize + exact match
+                normalize_topic(raw)
+            }
+        }
     }
 
     pub fn get_trajectory(&self) -> &[TrajectoryNode] {
@@ -611,5 +729,184 @@ mod tests {
         // testing: 1 existing only
         assert_eq!(preds[1].0, "testing");
         assert_eq!(preds[1].1, 1);
+    }
+
+    #[test]
+    fn test_topic_cache_learn_and_resolve() {
+        let mut map = TransitionMap::default();
+
+        // Without cache, "auth setup" and "configure authentication" are different keys
+        map.record("auth setup", "database");
+        map.record("configure authentication", "database");
+        // Two separate entries
+        assert_eq!(map.predict_from("auth setup", 1)[0].1, 1);
+
+        // Teach the cache
+        map.learn_canonical("auth setup", "authentication");
+        map.learn_canonical("configure authentication", "authentication");
+
+        // Now both resolve to "authentication"
+        map.record("auth setup", "database");
+        map.record("configure authentication", "database");
+        let preds = map.predict_from("authentication", 1);
+        assert_eq!(preds[0].0, "database");
+        assert_eq!(preds[0].1, 2);
+    }
+
+    #[test]
+    fn test_topic_cache_persists_across_save_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transitions.json");
+
+        let mut map = TransitionMap::default();
+        map.learn_canonical("auth setup", "authentication");
+        map.learn_canonical("db design", "database");
+        map.record("auth setup", "db design");
+        map.save(&path, 1).unwrap();
+
+        let mut loaded = TransitionMap::default();
+        loaded.load(&path).unwrap();
+
+        // Cache should survive the roundtrip
+        assert_eq!(
+            loaded.get_canonical("auth setup"),
+            Some(&"authentication".to_string())
+        );
+        assert_eq!(
+            loaded.get_canonical("db design"),
+            Some(&"database".to_string())
+        );
+        // Transition should use canonical keys
+        let preds = loaded.predict_from("authentication", 1);
+        assert_eq!(preds[0].0, "database");
+    }
+
+    #[test]
+    fn test_known_topics_includes_cache_and_transitions() {
+        let mut map = TransitionMap::default();
+        map.learn_canonical("auth setup", "authentication");
+        map.record("deployment", "testing");
+
+        let topics = map.known_topics();
+        assert!(topics.contains(&"authentication".to_string()));
+        assert!(topics.contains(&"deployment".to_string()));
+        assert!(topics.contains(&"testing".to_string()));
+    }
+
+    #[test]
+    fn test_v1_snapshot_loads_without_topic_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transitions.json");
+
+        // Write a v1 snapshot manually (no topic_cache field)
+        let v1_json = r#"{"version":1,"transitions":{"auth":{"database":3}}}"#;
+        std::fs::write(&path, v1_json).unwrap();
+
+        let mut map = TransitionMap::default();
+        map.load(&path).unwrap();
+
+        // Transitions loaded, cache empty
+        let preds = map.predict_from("auth", 1);
+        assert_eq!(preds[0].0, "database");
+        assert_eq!(preds[0].1, 3);
+        assert_eq!(map.topic_cache_size(), 0);
+    }
+
+    use crate::llm::{CognitiveLlmService, MockLlmJudge};
+
+    #[tokio::test]
+    async fn test_record_turn_with_llm_canonicalizes() {
+        let judge = MockLlmJudge::new(r#"{"topic": "authentication", "is_new": false}"#);
+        let llm = CognitiveLlmService::new(judge);
+        let mut tracker = TrajectoryTracker::default();
+
+        tracker
+            .record_turn_with_llm(
+                make_turn(
+                    1,
+                    "auth setup question",
+                    DecisionState::Investigating,
+                    vec![],
+                ),
+                &llm,
+            )
+            .await;
+
+        // Topic should be canonicalized to "authentication"
+        assert_eq!(tracker.get_trajectory()[0].topic_summary, "authentication");
+        // Cache should have the learned mapping
+        assert_eq!(
+            tracker.transitions.get_canonical("auth setup question"),
+            Some(&"authentication".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_record_turn_with_llm_uses_cache_on_repeat() {
+        let judge = MockLlmJudge::new(r#"{"topic": "authentication", "is_new": false}"#);
+        let llm = CognitiveLlmService::new(judge);
+        let mut tracker = TrajectoryTracker::default();
+
+        // First call learns the mapping
+        tracker
+            .record_turn_with_llm(
+                make_turn(1, "auth setup", DecisionState::Investigating, vec![]),
+                &llm,
+            )
+            .await;
+
+        // Pre-teach a different canonical for the next topic
+        // to prove the cache is being used (not the LLM)
+        tracker
+            .transitions
+            .learn_canonical("configure auth", "authentication");
+
+        // This should use cache, NOT the MockLlmJudge
+        // (MockLlmJudge always returns "authentication" anyway, but the point is
+        // the cache path is exercised — no LLM call needed)
+        tracker
+            .record_turn_with_llm(
+                make_turn(2, "configure auth", DecisionState::Investigating, vec![]),
+                &llm,
+            )
+            .await;
+
+        assert_eq!(tracker.get_trajectory()[1].topic_summary, "authentication");
+
+        // Both turns should contribute to the same transition key
+        // Turn 1: "authentication" recorded (no prev)
+        // Turn 2: "authentication" -> "authentication" (same topic)
+        assert_eq!(tracker.get_trajectory().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_record_turn_with_llm_transitions_accumulate() {
+        let judge = MockLlmJudge::new(r#"{"topic": "authentication", "is_new": false}"#);
+        let llm = CognitiveLlmService::new(judge);
+        let mut tracker = TrajectoryTracker::default();
+
+        // Record first turn (no transition yet)
+        tracker
+            .record_turn_with_llm(
+                make_turn(1, "auth setup", DecisionState::Investigating, vec![]),
+                &llm,
+            )
+            .await;
+
+        // Now record with a different mock response for "database"
+        let judge2 = MockLlmJudge::new(r#"{"topic": "database", "is_new": false}"#);
+        let llm2 = CognitiveLlmService::new(judge2);
+        tracker
+            .record_turn_with_llm(
+                make_turn(2, "db schema design", DecisionState::Investigating, vec![]),
+                &llm2,
+            )
+            .await;
+
+        // Should have transition: authentication -> database
+        let preds = tracker.transitions.predict_from("authentication", 3);
+        assert_eq!(preds.len(), 1);
+        assert_eq!(preds[0].0, "database");
+        assert_eq!(preds[0].1, 1);
     }
 }
