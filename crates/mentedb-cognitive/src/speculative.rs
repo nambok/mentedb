@@ -237,7 +237,6 @@ mod tests {
     #[test]
     fn test_embedding_hit() {
         let mut cache = SpeculativeCache::default();
-        let topic_emb = vec![1.0, 0.0, 0.0, 0.0];
         cache.pre_assemble(vec!["rust ownership".to_string()], |_topic| {
             Some((
                 "Context about ownership".to_string(),
