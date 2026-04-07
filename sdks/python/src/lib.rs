@@ -302,7 +302,7 @@ impl MenteDB {
         let tag_refs: Option<&[&str]> = tag_strs.as_deref();
         let time_range = before.map(|b| (0u64, b));
 
-        let hits = db.recall_similar_multi(&embeddings, k, tag_refs, time_range).map_err(to_pyerr)?;
+        let hits = db.recall_hybrid_multi(&embeddings, Some(&queries), k, tag_refs, time_range).map_err(to_pyerr)?;
         Ok(hits
             .into_iter()
             .map(|(id, score)| SearchResult {
@@ -358,7 +358,7 @@ impl MenteDB {
         let tag_refs: Option<&[&str]> = tag_strs.as_deref();
         let time_range = before.map(|b| (0u64, b));
 
-        let hits = db.recall_similar_multi(&embeddings, k, tag_refs, time_range).map_err(to_pyerr)?;
+        let hits = db.recall_hybrid_multi(&embeddings, Some(&all_queries), k, tag_refs, time_range).map_err(to_pyerr)?;
         Ok(hits
             .into_iter()
             .map(|(id, score)| SearchResult {

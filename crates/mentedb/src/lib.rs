@@ -268,9 +268,26 @@ impl MenteDb {
         tags: Option<&[&str]>,
         time_range: Option<(Timestamp, Timestamp)>,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
-        debug!("Recall similar, k={}, at={}", k, at);
+        self.recall_hybrid_at(embedding, None, k, at, tags, time_range)
+    }
+
+    /// Hybrid search combining vector similarity and BM25 keyword matching.
+    ///
+    /// When `query_text` is provided, BM25 results are fused with vector
+    /// results via Reciprocal Rank Fusion (RRF) for better recall on
+    /// exact entity names, dates, and specific terms.
+    pub fn recall_hybrid_at(
+        &mut self,
+        embedding: &[f32],
+        query_text: Option<&str>,
+        k: usize,
+        at: Timestamp,
+        tags: Option<&[&str]>,
+        time_range: Option<(Timestamp, Timestamp)>,
+    ) -> MenteResult<Vec<(MemoryId, f32)>> {
+        debug!("Recall hybrid, k={}, at={}, bm25={}", k, at, query_text.is_some());
         // Over-fetch to account for filtered-out results
-        let results = self.index.hybrid_search(embedding, tags, time_range, k * 3);
+        let results = self.index.hybrid_search_with_query(embedding, query_text, tags, time_range, k * 3);
         let graph = self.graph.graph();
         let filtered: Vec<(MemoryId, f32)> = results
             .into_iter()
@@ -303,9 +320,25 @@ impl MenteDb {
     /// Runs multiple vector searches (one per embedding) and merges results
     /// using RRF: score = Σ 1/(k + rank_i). This improves recall by matching
     /// on different semantic aspects of a query.
+    /// When `query_texts` is provided, each search also runs BM25 matching.
     pub fn recall_similar_multi(
         &mut self,
         embeddings: &[Vec<f32>],
+        k: usize,
+        tags: Option<&[&str]>,
+        time_range: Option<(Timestamp, Timestamp)>,
+    ) -> MenteResult<Vec<(MemoryId, f32)>> {
+        self.recall_hybrid_multi(embeddings, None, k, tags, time_range)
+    }
+
+    /// Multi-query hybrid search with BM25 + vector fusion.
+    ///
+    /// Each query text is searched via both BM25 and vector, then all results
+    /// are merged via RRF.
+    pub fn recall_hybrid_multi(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        query_texts: Option<&[String]>,
         k: usize,
         tags: Option<&[&str]>,
         time_range: Option<(Timestamp, Timestamp)>,
@@ -315,8 +348,14 @@ impl MenteDb {
         let rrf_k: f32 = 60.0;
         let mut rrf_scores: HashMap<MemoryId, f32> = HashMap::new();
 
-        for emb in embeddings {
-            let results = self.recall_similar_filtered(emb, k, tags, time_range)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+
+        for (i, emb) in embeddings.iter().enumerate() {
+            let qt = query_texts.and_then(|texts| texts.get(i).map(|s| s.as_str()));
+            let results = self.recall_hybrid_at(emb, qt, k, now, tags, time_range)?;
             for (rank, (id, _score)) in results.iter().enumerate() {
                 *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
             }
