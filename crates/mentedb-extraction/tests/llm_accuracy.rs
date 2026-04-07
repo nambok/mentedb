@@ -253,155 +253,207 @@ const INVALIDATION_CASES: &[InvalidationCase] = &[
 struct ContradictionCase {
     a: &'static str,
     b: &'static str,
+    /// Timestamp for memory A.
+    a_time: u64,
+    /// Timestamp for memory B.
+    b_time: u64,
     expected: &'static str, // "compatible", "contradicts", or "supersedes"
     description: &'static str,
 }
 
 const CONTRADICTION_CASES: &[ContradictionCase] = &[
-    // --- Compatible ---
+    // --- Compatible (same time — both can be true simultaneously) ---
     ContradictionCase {
         a: "Likes Python",
         b: "Also enjoys Rust",
+        a_time: 1000,
+        b_time: 1000,
         expected: "compatible",
         description: "can like multiple languages",
     },
     ContradictionCase {
         a: "Works from home",
         b: "Has an office desk for in person days",
+        a_time: 1000,
+        b_time: 1000,
         expected: "compatible",
         description: "hybrid work",
     },
     ContradictionCase {
         a: "Prefers dark mode",
         b: "Uses a 32 inch monitor",
+        a_time: 1000,
+        b_time: 1000,
         expected: "compatible",
         description: "unrelated preferences",
     },
     ContradictionCase {
         a: "Uses Git for version control",
         b: "Uses Jira for project tracking",
+        a_time: 1000,
+        b_time: 1000,
         expected: "compatible",
         description: "different tool categories",
     },
     ContradictionCase {
         a: "Drinks coffee in the morning",
         b: "Drinks tea in the afternoon",
+        a_time: 1000,
+        b_time: 1000,
         expected: "compatible",
         description: "time separated habits",
     },
     ContradictionCase {
         a: "Expert in backend development",
         b: "Learning frontend development",
+        a_time: 1000,
+        b_time: 1000,
         expected: "compatible",
         description: "growing skillset",
     },
     ContradictionCase {
         a: "Uses macOS for development",
         b: "Runs Linux on the server",
+        a_time: 1000,
+        b_time: 1000,
         expected: "compatible",
         description: "different machines",
     },
     ContradictionCase {
         a: "Likes reading fiction",
         b: "Enjoys non fiction books too",
+        a_time: 1000,
+        b_time: 1000,
         expected: "compatible",
         description: "both can be true",
     },
-    // --- Contradicts ---
+    // --- Contradicts (same time — cannot both be true at once) ---
     ContradictionCase {
         a: "Prefers tabs for indentation",
         b: "Prefers spaces for indentation",
+        a_time: 1000,
+        b_time: 1000,
         expected: "contradicts",
         description: "mutually exclusive",
     },
     ContradictionCase {
         a: "Database must be NoSQL",
         b: "Database must be relational SQL",
+        a_time: 1000,
+        b_time: 1000,
         expected: "contradicts",
         description: "opposing requirements",
     },
     ContradictionCase {
         a: "Project is fully open source",
         b: "Project is proprietary and confidential",
+        a_time: 1000,
+        b_time: 1000,
         expected: "contradicts",
         description: "cannot be both",
     },
     ContradictionCase {
         a: "The deadline is absolutely firm",
         b: "The deadline is flexible and can be moved",
+        a_time: 1000,
+        b_time: 1000,
         expected: "contradicts",
         description: "opposing constraints",
     },
     ContradictionCase {
         a: "We must use a monorepo",
         b: "Each service needs its own repository",
+        a_time: 1000,
+        b_time: 1000,
         expected: "contradicts",
         description: "opposing architecture",
     },
     ContradictionCase {
         a: "All API calls must be synchronous",
         b: "All API calls must be asynchronous",
+        a_time: 1000,
+        b_time: 1000,
         expected: "contradicts",
         description: "opposing design",
     },
     ContradictionCase {
         a: "No third party dependencies allowed",
         b: "Use as many libraries as possible to save time",
+        a_time: 1000,
+        b_time: 1000,
         expected: "contradicts",
         description: "opposing policies",
     },
     ContradictionCase {
         a: "Testing is not a priority right now",
         b: "We need 100% test coverage before shipping",
+        a_time: 1000,
+        b_time: 1000,
         expected: "contradicts",
         description: "opposing priorities",
     },
-    // --- Supersedes ---
+    // --- Supersedes (B is newer — temporal update, not contradiction) ---
     ContradictionCase {
         a: "Using React 17",
         b: "Upgraded to React 18 last week",
+        a_time: 1000,
+        b_time: 2000,
         expected: "supersedes",
         description: "version upgrade",
     },
     ContradictionCase {
         a: "Primary database is MySQL",
         b: "Migrated from MySQL to PostgreSQL this quarter",
+        a_time: 1000,
+        b_time: 2000,
         expected: "supersedes",
         description: "database migration",
     },
     ContradictionCase {
         a: "Team has 3 members",
         b: "Team grew to 7 after the new hires",
+        a_time: 1000,
+        b_time: 2000,
         expected: "supersedes",
         description: "team growth",
     },
     ContradictionCase {
         a: "CI pipeline uses Jenkins",
         b: "Replaced Jenkins with GitHub Actions",
+        a_time: 1000,
+        b_time: 2000,
         expected: "supersedes",
         description: "tool replacement",
     },
     ContradictionCase {
         a: "API is at version 1",
         b: "Launched version 2 of the API",
+        a_time: 1000,
+        b_time: 2000,
         expected: "supersedes",
         description: "API version bump",
     },
     ContradictionCase {
         a: "Office is downtown",
         b: "Company moved to the suburbs campus",
+        a_time: 1000,
+        b_time: 2000,
         expected: "supersedes",
         description: "location move",
     },
     ContradictionCase {
         a: "CEO is John",
         b: "Jane became CEO after John retired",
+        a_time: 1000,
+        b_time: 2000,
         expected: "supersedes",
         description: "leadership change",
     },
     ContradictionCase {
         a: "Monthly budget is $50k",
         b: "Budget increased to $75k starting this month",
+        a_time: 1000,
+        b_time: 2000,
         expected: "supersedes",
         description: "budget update",
     },
@@ -603,8 +655,8 @@ async fn llm_accuracy_contradiction() {
     println!("======================================================================\n");
 
     for case in CONTRADICTION_CASES {
-        let a = mem(case.a, 1000);
-        let b = mem(case.b, 2000);
+        let a = mem(case.a, case.a_time);
+        let b = mem(case.b, case.b_time);
 
         let result = svc.detect_contradiction(&a, &b).await;
         let actual = match &result {
@@ -758,7 +810,7 @@ async fn llm_accuracy_full_report() {
     );
     for case in CONTRADICTION_CASES {
         let result = svc
-            .detect_contradiction(&mem(case.a, 1000), &mem(case.b, 2000))
+            .detect_contradiction(&mem(case.a, case.a_time), &mem(case.b, case.b_time))
             .await;
         let actual = match &result {
             Ok(ContradictionVerdict::Compatible { .. }) => "compatible",
