@@ -1,9 +1,20 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "changelog-sections": [
+    {"type": "fix", "section": "Bug Fixes"},
+    {"type": "minor", "section": "Release"},
+    {"type": "major", "section": "Release"},
+    {"type": "chore", "section": "Miscellaneous", "hidden": true},
+    {"type": "docs", "section": "Documentation", "hidden": true},
+    {"type": "ci", "hidden": true},
+    {"type": "test", "hidden": true},
+    {"type": "refactor", "hidden": true}
+  ],
   "packages": {
     ".": {
       "release-type": "simple",
       "component": "mentedb",
+      "release-as": "0.3.0",
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
       "extra-files": [
