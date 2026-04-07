@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/nambok/mentedb/compare/mentedb-v0.2.11...mentedb-v0.3.0) (2026-04-07)
+
+
+### Release
+
+* release 0.3.0 ([#25](https://github.com/nambok/mentedb/issues/25)) ([9ded592](https://github.com/nambok/mentedb/commit/9ded592d340deab92e3e9c413aa41ecd52907698))
+
 ## [0.2.11](https://github.com/nambok/mentedb/compare/mentedb-v0.2.10...mentedb-v0.2.11) (2026-04-06)
 
 
