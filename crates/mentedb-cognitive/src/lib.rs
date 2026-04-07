@@ -16,14 +16,17 @@
 //!   (phantom memories). Flags gaps so the agent can acquire missing knowledge.
 //!
 //! - [`speculative`]: Pre-assembles context windows for predicted upcoming queries
-//!   based on conversation trajectory. Uses Jaccard keyword overlap for cache hits.
+//!   based on conversation trajectory. Uses cosine similarity on embeddings with
+//!   keyword overlap as fallback.
 //!
 //! - [`stream`]: Monitors the LLM's output token stream in real time, comparing
 //!   against stored facts to detect contradictions, forgotten knowledge, corrections,
 //!   and reinforcements mid-generation.
 //!
 //! - [`trajectory`]: Tracks the reasoning arc of a conversation as a sequence of
-//!   decision states. Supports resume context generation and next-topic prediction.
+//!   decision states. Learns topic transition patterns via a Markov chain frequency
+//!   map that improves predictions over time. Supports resume context generation,
+//!   next-topic prediction, and feedback reinforcement from cache hits.
 //!
 //! - [`write_inference`]: Runs inference at write time to detect contradictions,
 //!   create relationship edges, mark obsolete memories, adjust confidence, and
@@ -49,5 +52,5 @@ pub use pain::{PainRegistry, PainSignal};
 pub use phantom::{EntityRegistry, PhantomConfig, PhantomMemory, PhantomPriority, PhantomTracker};
 pub use speculative::{CacheEntry, CacheStats, SpeculativeCache};
 pub use stream::{CognitionStream, StreamAlert, StreamConfig, TokenEvent};
-pub use trajectory::{DecisionState, TrajectoryNode, TrajectoryTracker};
+pub use trajectory::{DecisionState, TrajectoryNode, TrajectoryTracker, TransitionMap};
 pub use write_inference::{InferredAction, WriteInferenceConfig, WriteInferenceEngine};

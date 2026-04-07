@@ -1,5 +1,6 @@
 use mentedb_core::types::Timestamp;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DecisionState {
@@ -21,10 +22,90 @@ pub struct TrajectoryNode {
 }
 
 const MAX_TURNS_DEFAULT: usize = 100;
+const REINFORCEMENT_BONUS: u32 = 2;
+
+/// Basic topic normalization: lowercase, collapse whitespace, trim.
+/// This handles the easy cases (casing, extra spaces) without attempting
+/// semantic canonicalization (tracked in #22).
+fn normalize_topic(raw: &str) -> String {
+    raw.split_whitespace()
+        .map(|w| w.to_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Tracks topic transitions as a Markov chain. Maps
+/// from_topic -> (to_topic -> frequency_count).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TransitionMap {
+    transitions: HashMap<String, HashMap<String, u32>>,
+}
+
+impl TransitionMap {
+    pub fn record(&mut self, from: &str, to: &str) {
+        let from = normalize_topic(from);
+        let to = normalize_topic(to);
+        *self
+            .transitions
+            .entry(from)
+            .or_default()
+            .entry(to)
+            .or_insert(0) += 1;
+    }
+
+    pub fn reinforce(&mut self, from: &str, to: &str) {
+        let from = normalize_topic(from);
+        let to = normalize_topic(to);
+        *self
+            .transitions
+            .entry(from)
+            .or_default()
+            .entry(to)
+            .or_insert(0) += REINFORCEMENT_BONUS;
+    }
+
+    pub fn decay(&mut self, from: &str, to: &str) {
+        let from = normalize_topic(from);
+        let to = normalize_topic(to);
+        if let Some(targets) = self.transitions.get_mut(&from) {
+            if let Some(count) = targets.get_mut(&to) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    targets.remove(&to);
+                }
+            }
+            if targets.is_empty() {
+                self.transitions.remove(&from);
+            }
+        }
+    }
+
+    /// Returns the top N predicted topics from a given topic,
+    /// sorted by frequency descending.
+    pub fn predict_from(&self, topic: &str, limit: usize) -> Vec<(String, u32)> {
+        let topic = normalize_topic(topic);
+        let Some(targets) = self.transitions.get(&topic) else {
+            return Vec::new();
+        };
+        let mut ranked: Vec<(String, u32)> = targets.iter().map(|(t, &c)| (t.clone(), c)).collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1));
+        ranked.truncate(limit);
+        ranked
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.transitions.is_empty()
+    }
+
+    pub fn total_transitions(&self) -> usize {
+        self.transitions.values().map(|t| t.len()).sum()
+    }
+}
 
 pub struct TrajectoryTracker {
     trajectory: Vec<TrajectoryNode>,
     max_turns: usize,
+    pub transitions: TransitionMap,
 }
 
 impl TrajectoryTracker {
@@ -32,10 +113,16 @@ impl TrajectoryTracker {
         Self {
             trajectory: Vec::new(),
             max_turns,
+            transitions: TransitionMap::default(),
         }
     }
 
     pub fn record_turn(&mut self, turn: TrajectoryNode) {
+        if let Some(prev) = self.trajectory.last() {
+            self.transitions
+                .record(&prev.topic_summary, &turn.topic_summary);
+        }
+
         if self.trajectory.len() >= self.max_turns {
             self.trajectory.remove(0);
         }
@@ -104,30 +191,65 @@ impl TrajectoryTracker {
 
     pub fn predict_next_topics(&self) -> Vec<String> {
         let mut predictions = Vec::new();
+        let mut seen = ahash::AHashSet::new();
 
-        if let Some(last) = self.trajectory.last() {
-            // Open questions are the best predictors
-            for q in &last.open_questions {
+        let Some(last) = self.trajectory.last() else {
+            return predictions;
+        };
+
+        // Learned transitions are the strongest signal
+        let learned = self.transitions.predict_from(&last.topic_summary, 3);
+        for (topic, _count) in &learned {
+            if seen.insert(topic.clone()) {
+                predictions.push(topic.clone());
+            }
+        }
+
+        // Open questions fill remaining slots
+        for q in &last.open_questions {
+            if predictions.len() >= 3 {
+                break;
+            }
+            if seen.insert(q.clone()) {
                 predictions.push(q.clone());
-                if predictions.len() >= 3 {
-                    return predictions;
-                }
             }
+        }
 
-            // Last topic as continuation
-            if predictions.len() < 3 {
-                predictions.push(format!("{} (continued)", last.topic_summary));
+        // Continuation of current topic
+        if predictions.len() < 3 {
+            let cont = format!("{} (continued)", last.topic_summary);
+            if seen.insert(cont.clone()) {
+                predictions.push(cont);
             }
+        }
 
-            // Look at trajectory pattern for related topics
-            if predictions.len() < 3 && self.trajectory.len() >= 2 {
-                let prev = &self.trajectory[self.trajectory.len() - 2];
-                predictions.push(format!("{} (revisit)", prev.topic_summary));
+        // Revisit previous topic
+        if predictions.len() < 3 && self.trajectory.len() >= 2 {
+            let prev = &self.trajectory[self.trajectory.len() - 2];
+            let rev = format!("{} (revisit)", prev.topic_summary);
+            if seen.insert(rev.clone()) {
+                predictions.push(rev);
             }
         }
 
         predictions.truncate(3);
         predictions
+    }
+
+    /// Called when the speculative cache gets a hit. Reinforces the
+    /// transition from the previous topic to the hit topic.
+    pub fn reinforce_transition(&mut self, hit_topic: &str) {
+        if let Some(last) = self.trajectory.last() {
+            self.transitions.reinforce(&last.topic_summary, hit_topic);
+        }
+    }
+
+    /// Called when the speculative cache misses. Slightly decays the
+    /// transition from the previous topic to the predicted topic.
+    pub fn decay_transition(&mut self, predicted_topic: &str) {
+        if let Some(last) = self.trajectory.last() {
+            self.transitions.decay(&last.topic_summary, predicted_topic);
+        }
     }
 }
 
@@ -207,5 +329,155 @@ mod tests {
         }
         assert_eq!(tracker.get_trajectory().len(), MAX_TURNS_DEFAULT);
         assert_eq!(tracker.get_trajectory()[0].turn_id, 5);
+    }
+
+    #[test]
+    fn test_transition_recording() {
+        let mut tracker = TrajectoryTracker::default();
+        tracker.record_turn(make_turn(1, "auth", DecisionState::Investigating, vec![]));
+        tracker.record_turn(make_turn(
+            2,
+            "database",
+            DecisionState::Investigating,
+            vec![],
+        ));
+        tracker.record_turn(make_turn(3, "auth", DecisionState::Investigating, vec![]));
+        tracker.record_turn(make_turn(
+            4,
+            "database",
+            DecisionState::Investigating,
+            vec![],
+        ));
+        tracker.record_turn(make_turn(5, "auth", DecisionState::Investigating, vec![]));
+        tracker.record_turn(make_turn(
+            6,
+            "deployment",
+            DecisionState::Investigating,
+            vec![],
+        ));
+
+        // auth -> database happened twice, auth -> deployment once
+        let preds = tracker.transitions.predict_from("auth", 5);
+        assert_eq!(preds.len(), 2);
+        assert_eq!(preds[0].0, "database");
+        assert_eq!(preds[0].1, 2);
+        assert_eq!(preds[1].0, "deployment");
+        assert_eq!(preds[1].1, 1);
+    }
+
+    #[test]
+    fn test_learned_predictions_take_priority() {
+        let mut tracker = TrajectoryTracker::default();
+
+        // Build a pattern: auth -> database (3 times)
+        for _ in 0..3 {
+            tracker.record_turn(make_turn(0, "auth", DecisionState::Investigating, vec![]));
+            tracker.record_turn(make_turn(
+                0,
+                "database",
+                DecisionState::Investigating,
+                vec![],
+            ));
+        }
+
+        // Now land on auth with an open question
+        tracker.record_turn(make_turn(
+            0,
+            "auth",
+            DecisionState::Investigating,
+            vec!["how to handle JWT expiry?"],
+        ));
+
+        let preds = tracker.predict_next_topics();
+        // Learned transition "database" should come first
+        assert_eq!(preds[0], "database");
+    }
+
+    #[test]
+    fn test_reinforce_and_decay() {
+        let mut map = TransitionMap::default();
+        map.record("auth", "database");
+        map.record("auth", "database");
+        assert_eq!(map.predict_from("auth", 1)[0].1, 2);
+
+        // Reinforce adds bonus
+        map.reinforce("auth", "database");
+        assert_eq!(map.predict_from("auth", 1)[0].1, 4);
+
+        // Decay subtracts 1
+        map.decay("auth", "database");
+        assert_eq!(map.predict_from("auth", 1)[0].1, 3);
+    }
+
+    #[test]
+    fn test_decay_removes_zero_entries() {
+        let mut map = TransitionMap::default();
+        map.record("auth", "database");
+        assert_eq!(map.total_transitions(), 1);
+
+        map.decay("auth", "database");
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_reinforce_via_tracker() {
+        let mut tracker = TrajectoryTracker::default();
+        tracker.record_turn(make_turn(1, "auth", DecisionState::Investigating, vec![]));
+        tracker.record_turn(make_turn(
+            2,
+            "database",
+            DecisionState::Investigating,
+            vec![],
+        ));
+
+        // One natural transition recorded
+        assert_eq!(tracker.transitions.predict_from("auth", 1)[0].1, 1);
+
+        // Simulate cache hit reinforcement
+        tracker.reinforce_transition("database");
+        assert_eq!(
+            tracker.transitions.predict_from("database", 1)[0].1,
+            REINFORCEMENT_BONUS
+        );
+    }
+
+    #[test]
+    fn test_no_duplicate_predictions() {
+        let mut tracker = TrajectoryTracker::default();
+
+        // Build pattern: auth -> database
+        tracker.record_turn(make_turn(1, "auth", DecisionState::Investigating, vec![]));
+        tracker.record_turn(make_turn(
+            2,
+            "database",
+            DecisionState::Investigating,
+            vec![],
+        ));
+
+        // Land on auth with "database" as an open question too
+        tracker.record_turn(make_turn(
+            3,
+            "auth",
+            DecisionState::Investigating,
+            vec!["database"],
+        ));
+
+        let preds = tracker.predict_next_topics();
+        let unique: ahash::AHashSet<&String> = preds.iter().collect();
+        assert_eq!(preds.len(), unique.len(), "predictions should be unique");
+    }
+
+    #[test]
+    fn test_normalization_collapses_variants() {
+        let mut map = TransitionMap::default();
+        map.record("Auth Setup", "database");
+        map.record("auth setup", "DATABASE");
+        map.record("  auth   setup  ", "  database  ");
+
+        // All three should collapse into one transition with count 3
+        let preds = map.predict_from("AUTH SETUP", 1);
+        assert_eq!(preds.len(), 1);
+        assert_eq!(preds[0].0, "database");
+        assert_eq!(preds[0].1, 3);
     }
 }
