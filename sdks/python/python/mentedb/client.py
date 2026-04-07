@@ -82,6 +82,21 @@ class MenteDB:
         """Remove a memory by its UUID."""
         self._db.forget(memory_id)
 
+    def ingest(
+        self,
+        conversation: str,
+        provider: str | None = None,
+        agent_id: str | None = None,
+    ) -> dict:
+        """Extract memories from a conversation using the LLM pipeline and store them.
+
+        Requires MENTEDB_LLM_PROVIDER and MENTEDB_LLM_API_KEY env vars,
+        or pass provider ("openai", "anthropic", "ollama") explicitly.
+
+        Returns a dict with memories_stored, rejected_low_quality, stored_ids, etc.
+        """
+        return self._db.ingest(conversation, provider, agent_id)
+
     def close(self):
         """Flush and close the database."""
         self._db.close()

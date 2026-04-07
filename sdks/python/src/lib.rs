@@ -351,7 +351,11 @@ impl MenteDB {
         let mut stored_ids = Vec::new();
         for memory in &quality_passed {
             let mt = map_extraction_type_to_memory_type(&memory.memory_type);
-            let emb = hash_embedding(&memory.content, 384);
+            let emb = if let Some(ref embedder) = self.embedder {
+                embedder.embed(&memory.content).map_err(to_pyerr)?
+            } else {
+                hash_embedding(&memory.content, 384)
+            };
             let mut node = MemoryNode::new(aid, mt, memory.content.clone(), emb);
             node.tags = memory.tags.clone();
             node.salience = memory.confidence;

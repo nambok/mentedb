@@ -78,7 +78,7 @@ def load_dataset(variant="s"):
 
 
 def format_session(session, date):
-    """Format a chat session into a readable string with its date."""
+    """Format a chat session into a conversation string with its date."""
     lines = [f"[Date: {date}]"]
     for turn in session:
         role = turn["role"].capitalize()
@@ -86,11 +86,12 @@ def format_session(session, date):
     return "\n".join(lines)
 
 
-def ingest_sessions(db, question_data):
+def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
     """Ingest all chat sessions for a question into MenteDB.
 
-    Each session is stored as a single memory with the session date as a tag
-    and the full conversation text as content.
+    When use_cognitive=True, each session is processed through MenteDB's
+    LLM extraction pipeline (fact extraction, knowledge updates, etc.).
+    When False, sessions are stored as raw text (baseline mode).
     """
     memory_ids = []
     sessions = question_data["haystack_sessions"]
@@ -98,9 +99,20 @@ def ingest_sessions(db, question_data):
 
     for i, (session, date) in enumerate(zip(sessions, dates)):
         text = format_session(session, date)
-        tags = [f"date:{date}", f"session:{i}"]
-        mid = db.store(text, memory_type="episodic", tags=tags)
-        memory_ids.append(mid)
+
+        if use_cognitive and llm_provider:
+            # Full cognitive pipeline: LLM extracts structured memories
+            result = db.ingest(text, provider=llm_provider)
+            memory_ids.extend(result.get("stored_ids", []))
+
+            # Also store the raw session for retrieval coverage
+            mid = db.store(text, memory_type="episodic", tags=[f"date:{date}", f"session:{i}"])
+            memory_ids.append(mid)
+        else:
+            # Baseline: raw session storage only
+            tags = [f"date:{date}", f"session:{i}"]
+            mid = db.store(text, memory_type="episodic", tags=tags)
+            memory_ids.append(mid)
 
     return memory_ids
 
@@ -137,7 +149,7 @@ def retrieve_and_answer(db, question_data, llm_client, llm_provider, top_k=20):
     return answer.strip()
 
 
-def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None):
+def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None, use_cognitive=True):
     """Run the full LongMemEval benchmark."""
     if not has_llm_key():
         print("Need OPENAI_API_KEY or ANTHROPIC_API_KEY for answer generation.")
@@ -151,6 +163,22 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None):
     if not embedding_provider:
         embedding_provider = "openai" if embedding_api_key else "hash"
 
+    # Detect LLM provider for cognitive ingestion
+    cognitive_provider = None
+    if use_cognitive:
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            cognitive_provider = "anthropic"
+            os.environ.setdefault("MENTEDB_LLM_PROVIDER", "anthropic")
+            os.environ.setdefault("MENTEDB_LLM_API_KEY", os.environ["ANTHROPIC_API_KEY"])
+        elif os.environ.get("OPENAI_API_KEY"):
+            cognitive_provider = "openai"
+            os.environ.setdefault("MENTEDB_LLM_PROVIDER", "openai")
+            os.environ.setdefault("MENTEDB_LLM_API_KEY", os.environ["OPENAI_API_KEY"])
+        else:
+            print("Cognitive mode requires ANTHROPIC_API_KEY or OPENAI_API_KEY.")
+            print("Use --no-cognitive for raw storage baseline.")
+            sys.exit(1)
+
     llm_client, llm_provider = get_llm_client()
     if not llm_client:
         print("Could not initialize LLM client.")
@@ -159,6 +187,7 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None):
     print(f"LongMemEval Benchmark")
     print(f"  Dataset: {variant}")
     print(f"  Embedding: {embedding_provider} / {embedding_model}")
+    print(f"  Cognitive: {'ON (' + cognitive_provider + ')' if cognitive_provider else 'OFF (raw storage)'}")
     print(f"  Reader: {llm_provider}")
     print(f"  Top-K: {top_k}")
     print()
@@ -209,7 +238,7 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None):
                 embedding_model=embedding_model,
             )
 
-            ingest_sessions(db, question_data)
+            ingest_sessions(db, question_data, use_cognitive=use_cognitive, llm_provider=cognitive_provider)
             hypothesis = retrieve_and_answer(
                 db, question_data, llm_client, llm_provider, top_k=top_k
             )
@@ -259,6 +288,8 @@ def main():
                         help="Limit to first N questions (for testing)")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from a previous partial run")
+    parser.add_argument("--no-cognitive", action="store_true",
+                        help="Disable cognitive pipeline (raw storage baseline)")
     args = parser.parse_args()
 
     run_benchmark(
@@ -266,6 +297,7 @@ def main():
         top_k=args.top_k,
         limit=args.limit,
         resume_from=args.resume if args.resume else None,
+        use_cognitive=not args.no_cognitive,
     )
 
 
