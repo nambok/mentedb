@@ -104,18 +104,30 @@ def get_judge_prompt(question_data, hypothesis):
     )
 
 
-def judge_answer(client, question_data, hypothesis):
-    """Use GPT-4o to judge whether the hypothesis is correct."""
+def judge_answer(client, provider, question_data, hypothesis):
+    """Use an LLM to judge whether the hypothesis is correct."""
     prompt = get_judge_prompt(question_data, hypothesis)
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=10,
-        )
-        verdict = response.choices[0].message.content.strip().lower()
+        if provider == "openai":
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=10,
+            )
+            verdict = response.choices[0].message.content.strip().lower()
+        elif provider == "anthropic":
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=10,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+            )
+            verdict = response.content[0].text.strip().lower()
+        else:
+            return 0
+
         return 1 if verdict.startswith("yes") else 0
     except Exception as e:
         print(f"  Judge error on {question_data['question_id']}: {e}")
@@ -197,28 +209,27 @@ def compute_metrics(eval_results, reference):
 
 
 def run_evaluation(hypothesis_file, variant="s"):
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        print("OPENAI_API_KEY required for GPT-4o judge evaluation.")
+    # Support both OpenAI and Anthropic as judge
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from harness import get_llm_client
+
+    llm_client, llm_provider = get_llm_client()
+    if not llm_client:
+        print("Need OPENAI_API_KEY or ANTHROPIC_API_KEY for judge evaluation.")
         sys.exit(1)
 
-    try:
-        import openai
-        client = openai.OpenAI()
-    except ImportError:
-        print("openai package required: pip install openai")
-        sys.exit(1)
+    judge_model = "gpt-4o" if llm_provider == "openai" else "claude-sonnet-4-20250514"
 
     reference = load_reference(variant)
     hypotheses = load_hypotheses(hypothesis_file)
 
     print(f"Evaluating {len(hypotheses)} predictions against {variant} reference...")
-    print(f"Judge: GPT-4o\n")
+    print(f"Judge: {judge_model}\n")
 
     eval_results = []
     correct = 0
 
-    eval_log_file = hypothesis_file + ".eval-results-gpt-4o"
+    eval_log_file = hypothesis_file + f".eval-results-{judge_model}"
 
     from tqdm import tqdm
     for entry in tqdm(hypotheses, desc="Judging"):
@@ -230,13 +241,13 @@ def run_evaluation(hypothesis_file, variant="s"):
             print(f"  Warning: {qid} not found in reference, skipping")
             continue
 
-        label = judge_answer(client, ref, hypothesis)
+        label = judge_answer(llm_client, llm_provider, ref, hypothesis)
         correct += label
 
         eval_entry = {
             "question_id": qid,
             "hypothesis": hypothesis,
-            "autoeval_label": {"model": "gpt-4o", "label": label},
+            "autoeval_label": {"model": judge_model, "label": label},
             "label": label,
         }
         eval_results.append(eval_entry)

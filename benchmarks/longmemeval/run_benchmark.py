@@ -143,9 +143,13 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None):
         print("Need OPENAI_API_KEY or ANTHROPIC_API_KEY for answer generation.")
         sys.exit(1)
 
-    embedding_provider = os.environ.get("EMBEDDING_PROVIDER", "openai")
+    embedding_provider = os.environ.get("EMBEDDING_PROVIDER", "")
     embedding_api_key = os.environ.get("OPENAI_API_KEY", "")
     embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
+
+    # Auto detect embedding provider: use OpenAI if key available, else hash
+    if not embedding_provider:
+        embedding_provider = "openai" if embedding_api_key else "hash"
 
     llm_client, llm_provider = get_llm_client()
     if not llm_client:
