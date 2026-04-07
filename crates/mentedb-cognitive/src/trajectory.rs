@@ -1,6 +1,8 @@
 use mentedb_core::types::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io;
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DecisionState {
@@ -99,6 +101,28 @@ impl TransitionMap {
 
     pub fn total_transitions(&self) -> usize {
         self.transitions.values().map(|t| t.len()).sum()
+    }
+
+    /// Save the transition map to a JSON file.
+    pub fn save(&self, path: &Path) -> io::Result<()> {
+        let json = serde_json::to_string(self)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        std::fs::write(path, json)
+    }
+
+    /// Load a transition map from a JSON file, merging counts into the
+    /// current map so that patterns accumulate across sessions.
+    pub fn load(&mut self, path: &Path) -> io::Result<()> {
+        let json = std::fs::read_to_string(path)?;
+        let loaded: TransitionMap = serde_json::from_str(&json)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        for (from, targets) in loaded.transitions {
+            let entry = self.transitions.entry(from).or_default();
+            for (to, count) in targets {
+                *entry.entry(to).or_insert(0) += count;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -479,5 +503,50 @@ mod tests {
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].0, "database");
         assert_eq!(preds[0].1, 3);
+    }
+
+    #[test]
+    fn test_transition_map_save_and_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transitions.json");
+
+        let mut map = TransitionMap::default();
+        map.record("auth", "database");
+        map.record("auth", "database");
+        map.record("auth", "deploy");
+        map.save(&path).unwrap();
+
+        // Load into a fresh map — counts should carry over
+        let mut loaded = TransitionMap::default();
+        loaded.load(&path).unwrap();
+        let preds = loaded.predict_from("auth", 5);
+        assert_eq!(preds[0].0, "database");
+        assert_eq!(preds[0].1, 2);
+        assert_eq!(preds[1].0, "deploy");
+        assert_eq!(preds[1].1, 1);
+    }
+
+    #[test]
+    fn test_transition_map_load_merges() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transitions.json");
+
+        let mut map = TransitionMap::default();
+        map.record("auth", "database");
+        map.save(&path).unwrap();
+
+        // Load into a map that already has data — counts should add
+        let mut existing = TransitionMap::default();
+        existing.record("auth", "database");
+        existing.record("auth", "testing");
+        existing.load(&path).unwrap();
+
+        let preds = existing.predict_from("auth", 5);
+        // database: 1 existing + 1 loaded = 2
+        assert_eq!(preds[0].0, "database");
+        assert_eq!(preds[0].1, 2);
+        // testing: 1 existing only
+        assert_eq!(preds[1].0, "testing");
+        assert_eq!(preds[1].1, 1);
     }
 }

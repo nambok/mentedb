@@ -2048,6 +2048,7 @@ dependencies = [
  "mentedb-core",
  "parking_lot",
  "serde",
+ "serde_json",
  "tempfile",
  "tracing",
  "uuid",
