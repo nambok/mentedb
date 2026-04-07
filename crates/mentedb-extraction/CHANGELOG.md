@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.3.2...mentedb-extraction-v0.4.1) - 2026-04-07
+
+### Other
+
+- Wire LLM topic canonicalization into TransitionMap ([#42](https://github.com/nambok/mentedb/pull/42))
+
 ## [0.3.2](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.3.1...mentedb-extraction-v0.3.2) - 2026-04-07
 
 ### Added
