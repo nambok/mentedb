@@ -381,9 +381,10 @@ fn parse_json_response<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, L
         return Ok(v);
     }
 
-    // LLMs sometimes wrap JSON in markdown code blocks
     let trimmed = raw.trim();
-    let cleaned = if trimmed.starts_with("```json") {
+
+    // LLMs sometimes wrap JSON in markdown code blocks
+    let stripped = if trimmed.starts_with("```json") {
         trimmed
             .strip_prefix("```json")
             .and_then(|s| s.strip_suffix("```"))
@@ -399,11 +400,51 @@ fn parse_json_response<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T, L
         trimmed
     };
 
-    serde_json::from_str::<T>(cleaned).map_err(|e| {
-        LlmJudgeError::ParseError(format!(
-            "could not parse LLM response as expected type: {e}. Raw response: {raw}"
-        ))
-    })
+    if let Ok(v) = serde_json::from_str::<T>(stripped) {
+        return Ok(v);
+    }
+
+    // LLMs sometimes add explanatory text around the JSON.
+    // Try to extract the first JSON object from the response.
+    if let Some(start) = stripped.find('{') {
+        if let Some(end) = rfind_matching_brace(stripped, start) {
+            let candidate = &stripped[start..=end];
+            if let Ok(v) = serde_json::from_str::<T>(candidate) {
+                return Ok(v);
+            }
+        }
+    }
+
+    Err(LlmJudgeError::ParseError(format!(
+        "could not parse LLM response as expected type. Raw response: {raw}"
+    )))
+}
+
+/// Find the closing brace that matches the opening brace at `start`.
+fn rfind_matching_brace(s: &str, start: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for (i, ch) in s[start..].char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_string => escape_next = true,
+            '"' => in_string = !in_string,
+            '{' if !in_string => depth += 1,
+            '}' if !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(start + i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -742,6 +783,35 @@ mod tests {
         let result = svc.judge_invalidation(&mem("A"), &mem("B")).await.unwrap();
 
         assert!(matches!(result, InvalidationVerdict::Keep { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_json_surrounded_by_text() {
+        let judge = MockLlmJudge::new(
+            "Here is my analysis:\n{\"verdict\": \"invalidate\", \"reason\": \"job changed\"}\nLet me know if you need more detail.",
+        );
+        let svc = CognitiveLlmService::new(judge);
+
+        let result = svc.judge_invalidation(&mem("A"), &mem("B")).await.unwrap();
+
+        assert!(matches!(result, InvalidationVerdict::Invalidate { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_json_with_nested_braces_in_strings() {
+        let judge = MockLlmJudge::new(
+            "Sure! {\"verdict\": \"update\", \"merged_content\": \"uses {curly} braces\", \"reason\": \"test\"}",
+        );
+        let svc = CognitiveLlmService::new(judge);
+
+        let result = svc.judge_invalidation(&mem("A"), &mem("B")).await.unwrap();
+
+        match result {
+            InvalidationVerdict::Update { merged_content, .. } => {
+                assert!(merged_content.contains("{curly}"))
+            }
+            other => panic!("Expected Update, got {:?}", other),
+        }
     }
 
     #[tokio::test]
