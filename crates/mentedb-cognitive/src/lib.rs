@@ -6,6 +6,10 @@
 //!
 //! ## Modules
 //!
+//! - [`entity`]: Resolves entity references (names, pronouns, descriptions) to
+//!   canonical names using a three-tier strategy: learned cache, rule-based substring
+//!   matching, and LLM-powered resolution. Persists alias tables across sessions.
+//!
 //! - [`interference`]: Detects pairs of memories similar enough to confuse an LLM,
 //!   generates disambiguation text, and reorders context to maximize separation.
 //!
@@ -32,6 +36,8 @@
 //!   create relationship edges, mark obsolete memories, adjust confidence, and
 //!   trigger belief propagation automatically.
 
+/// Entity resolution for merging equivalent references.
+pub mod entity;
 /// Interference detection between confusable memories.
 pub mod interference;
 /// LLM powered cognitive judgment for memory operations.
@@ -49,6 +55,7 @@ pub mod trajectory;
 /// Write time inference engine for automatic relationship discovery.
 pub mod write_inference;
 
+pub use entity::{EntityResolver, ResolutionSource, ResolvedEntity};
 pub use interference::{InterferenceDetector, InterferencePair};
 pub use llm::{
     ClusterMember, CognitiveLlmService, ConsolidationDecision, ContradictionVerdict,
