@@ -112,6 +112,7 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
             # Full cognitive pipeline with retry on transient errors
             max_retries = 3
             ingested = False
+            first_error = None
             for attempt in range(max_retries):
                 try:
                     result = db.ingest(text, provider=llm_provider)
@@ -121,11 +122,29 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
                     break
                 except Exception as e:
                     err = str(e).lower()
+                    if first_error is None:
+                        first_error = str(e)
+                    # Fatal errors: don't retry, surface immediately
+                    if "401" in err or "unauthorized" in err or "invalid_api_key" in err or "api key" in err:
+                        cognitive_fail += 1
+                        if cognitive_fail == 1:
+                            print(f"    [{thread}] ⚠️  FATAL: {first_error[:200]}", flush=True)
+                            print(f"    [{thread}] ⚠️  Check MENTEDB_LLM_API_KEY and MENTEDB_LLM_PROVIDER", flush=True)
+                        break
+                    # Model not found
+                    if "404" in err or "not found" in err or "does not exist" in err:
+                        cognitive_fail += 1
+                        if cognitive_fail == 1:
+                            print(f"    [{thread}] ⚠️  MODEL ERROR: {first_error[:200]}", flush=True)
+                        break
                     if attempt < max_retries - 1 and ("connection" in err or "rate" in err or "timeout" in err or "overloaded" in err or "529" in err or "503" in err):
                         wait = (attempt + 1) * 5
                         time.sleep(wait)
                     else:
                         cognitive_fail += 1
+                        # Show first error to help debug
+                        if cognitive_fail == 1:
+                            print(f"    [{thread}] ⚠️  First extraction error: {first_error[:200]}", flush=True)
                         break
 
             if (i + 1) % 10 == 0 or i == total - 1:
@@ -145,7 +164,7 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
     return memory_ids
 
 
-def retrieve_and_answer(db, question_data, llm_client, llm_provider, top_k=20):
+def retrieve_and_answer(db, question_data, llm_client, llm_provider, top_k=20, reader_model=None):
     """Search MenteDB for relevant memories and generate an answer.
 
     Uses the engine's search_expanded() for LLM-powered query decomposition + RRF.
@@ -182,13 +201,13 @@ def retrieve_and_answer(db, question_data, llm_client, llm_provider, top_k=20):
         question=question,
     )
 
-    answer = llm_chat(llm_client, llm_provider, prompt, temperature=0.0, max_tokens=300)
+    answer = llm_chat(llm_client, llm_provider, prompt, temperature=0.0, max_tokens=300, model_override=reader_model)
     return answer.strip()
 
 
 def process_single_question(question_data, embedding_provider, embedding_api_key,
                             embedding_model, use_cognitive, cognitive_provider,
-                            llm_provider, top_k):
+                            llm_provider, top_k, reader_model=None):
     """Process a single question end-to-end. Designed to run in a thread pool."""
     import mentedb as mentedb_pkg
     import shutil
@@ -222,7 +241,8 @@ def process_single_question(question_data, embedding_provider, embedding_api_key
 
         search_start = time.time()
         hypothesis = retrieve_and_answer(
-            db, question_data, llm_client, llm_provider, top_k=top_k
+            db, question_data, llm_client, llm_provider, top_k=top_k,
+            reader_model=reader_model
         )
         search_time = time.time() - search_start
         db.close()
@@ -240,11 +260,11 @@ def process_single_question(question_data, embedding_provider, embedding_api_key
     return {"question_id": qid, "hypothesis": hypothesis}
 
 
-def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None,
-                  use_cognitive=True, workers=3):
+def run_benchmark(variant="s", top_k=20, limit=None, offset=0, resume_from=None,
+                  use_cognitive=True, workers=3, reader_model=None):
     """Run the full LongMemEval benchmark."""
     if not has_llm_key():
-        print("Need OPENAI_API_KEY or ANTHROPIC_API_KEY for answer generation.")
+        print("Need OPENAI_API_KEY, ANTHROPIC_API_KEY, or OLLAMA_MODEL for answer generation.")
         sys.exit(1)
 
     embedding_provider = os.environ.get("EMBEDDING_PROVIDER", "")
@@ -258,7 +278,21 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None,
     # Detect LLM provider for cognitive ingestion
     cognitive_provider = None
     if use_cognitive:
-        if os.environ.get("ANTHROPIC_API_KEY"):
+        # If user explicitly set MENTEDB_LLM_PROVIDER, respect it
+        explicit_provider = os.environ.get("MENTEDB_LLM_PROVIDER", "")
+        if explicit_provider == "openai":
+            cognitive_provider = "openai"
+            os.environ.setdefault("MENTEDB_LLM_API_KEY", os.environ.get("OPENAI_API_KEY", ""))
+        elif explicit_provider == "anthropic":
+            cognitive_provider = "anthropic"
+            os.environ.setdefault("MENTEDB_LLM_API_KEY", os.environ.get("ANTHROPIC_API_KEY", ""))
+        elif explicit_provider == "ollama":
+            from harness import get_ollama_base_url, get_ollama_model
+            cognitive_provider = "ollama"
+            os.environ.setdefault("MENTEDB_LLM_API_KEY", "ollama")
+            os.environ.setdefault("MENTEDB_LLM_API_URL", get_ollama_base_url())
+            os.environ.setdefault("MENTEDB_LLM_MODEL", get_ollama_model())
+        elif os.environ.get("ANTHROPIC_API_KEY"):
             cognitive_provider = "anthropic"
             os.environ.setdefault("MENTEDB_LLM_PROVIDER", "anthropic")
             os.environ.setdefault("MENTEDB_LLM_API_KEY", os.environ["ANTHROPIC_API_KEY"])
@@ -266,8 +300,15 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None,
             cognitive_provider = "openai"
             os.environ.setdefault("MENTEDB_LLM_PROVIDER", "openai")
             os.environ.setdefault("MENTEDB_LLM_API_KEY", os.environ["OPENAI_API_KEY"])
+        elif os.environ.get("OLLAMA_MODEL"):
+            from harness import get_ollama_base_url, get_ollama_model
+            cognitive_provider = "ollama"
+            os.environ.setdefault("MENTEDB_LLM_PROVIDER", "ollama")
+            os.environ.setdefault("MENTEDB_LLM_API_KEY", "ollama")
+            os.environ.setdefault("MENTEDB_LLM_API_URL", get_ollama_base_url())
+            os.environ.setdefault("MENTEDB_LLM_MODEL", get_ollama_model())
         else:
-            print("Cognitive mode requires ANTHROPIC_API_KEY or OPENAI_API_KEY.")
+            print("Cognitive mode requires ANTHROPIC_API_KEY, OPENAI_API_KEY, or OLLAMA_MODEL.")
             print("Use --no-cognitive for raw storage baseline.")
             sys.exit(1)
 
@@ -276,9 +317,31 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None,
         print("Could not initialize LLM client.")
         sys.exit(1)
 
-    # Resolve models for display
-    cognitive_model = os.environ.get("MENTEDB_LLM_MODEL", "claude-sonnet-4-20250514" if cognitive_provider == "anthropic" else "gpt-4o-mini")
-    reader_model = "claude-sonnet-4-20250514" if llm_provider == "anthropic" else "gpt-4o-mini"
+    # Smart defaults: cheap model for extraction, smart model for reading
+    DEFAULTS = {
+        "openai":    {"extractor": "gpt-4o-mini",             "reader": "gpt-4o"},
+        "anthropic": {"extractor": "claude-haiku-4-5",  "reader": "claude-sonnet-4-20250514"},
+        "ollama":    {"extractor": None,                      "reader": None},  # uses OLLAMA_MODEL
+    }
+
+    # Cognitive extraction model
+    if cognitive_provider == "ollama":
+        from harness import get_ollama_model
+        cognitive_model = os.environ.get("MENTEDB_LLM_MODEL", get_ollama_model())
+    else:
+        default_extractor = DEFAULTS.get(cognitive_provider, {}).get("extractor", "gpt-4o-mini")
+        cognitive_model = os.environ.get("MENTEDB_LLM_MODEL", default_extractor)
+        # Also set the env var so the Rust engine picks it up
+        os.environ["MENTEDB_LLM_MODEL"] = cognitive_model
+
+    # Reader model (--reader-model flag overrides defaults)
+    if reader_model:
+        pass  # explicit override
+    elif llm_provider == "ollama":
+        from harness import get_ollama_model
+        reader_model = get_ollama_model()
+    else:
+        reader_model = DEFAULTS.get(llm_provider, {}).get("reader", "gpt-4o-mini")
 
     print(f"{'='*60}")
     print(f"  LongMemEval Benchmark — MenteDB")
@@ -304,11 +367,23 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None,
     print()
 
     dataset = load_dataset(variant)
+    total_available = len(dataset)
+    if offset:
+        dataset = dataset[offset:]
     if limit:
         dataset = dataset[:limit]
 
+    # Name output file by range for pagination
+    range_start = offset
+    range_end = offset + len(dataset)
+    run_tag = f"q{range_start}-{range_end}"
+
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    output_file = os.path.join(RESULTS_DIR, "hypotheses.jsonl")
+    output_file = os.path.join(RESULTS_DIR, f"hypotheses_{run_tag}.jsonl")
+
+    print(f"  Questions:        {range_start}..{range_end} of {total_available}")
+    print(f"  Output:           {output_file}")
+    print()
 
     # Support resuming from a partial run
     existing_ids = set()
@@ -340,7 +415,7 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None,
             entry = process_single_question(
                 question_data, embedding_provider, embedding_api_key,
                 embedding_model, use_cognitive, cognitive_provider,
-                llm_provider, top_k,
+                llm_provider, top_k, reader_model=reader_model,
             )
             results.append(entry)
             with open(output_file, "a") as f:
@@ -356,7 +431,7 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None,
                     process_single_question,
                     question_data, embedding_provider, embedding_api_key,
                     embedding_model, use_cognitive, cognitive_provider,
-                    llm_provider, top_k,
+                    llm_provider, top_k, reader_model,
                 )
                 futures[future] = question_data["question_id"]
 
@@ -406,22 +481,28 @@ def main():
                         default=int(os.environ.get("TOP_K", "20")),
                         help="Number of memories to retrieve (default: 20)")
     parser.add_argument("--limit", type=int, default=None,
-                        help="Limit to first N questions (for testing)")
+                        help="Limit to N questions (for testing)")
+    parser.add_argument("--offset", type=int, default=0,
+                        help="Skip first N questions (for pagination, e.g. --offset 50 --limit 50 for page 2)")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from a previous partial run")
     parser.add_argument("--no-cognitive", action="store_true",
                         help="Disable cognitive pipeline (raw storage baseline)")
     parser.add_argument("--workers", type=int, default=3,
                         help="Number of parallel workers (default: 3)")
+    parser.add_argument("--reader-model", type=str, default=None,
+                        help="Override reader model (default: gpt-4o for OpenAI, Sonnet for Anthropic)")
     args = parser.parse_args()
 
     run_benchmark(
         variant=args.dataset,
         top_k=args.top_k,
         limit=args.limit,
+        offset=args.offset,
         resume_from=args.resume if args.resume else None,
         use_cognitive=not args.no_cognitive,
         workers=args.workers,
+        reader_model=args.reader_model,
     )
 
 

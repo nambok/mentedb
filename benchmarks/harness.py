@@ -95,13 +95,26 @@ def has_anthropic_key():
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
+def has_ollama():
+    """Check if Ollama is available (OLLAMA_MODEL env var set)."""
+    return bool(os.environ.get("OLLAMA_MODEL"))
+
+
 def has_llm_key():
-    return has_openai_key() or has_anthropic_key()
+    return has_openai_key() or has_anthropic_key() or has_ollama()
+
+
+def get_ollama_base_url():
+    return os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+
+
+def get_ollama_model():
+    return os.environ.get("OLLAMA_MODEL", "llama3.1:8b")
 
 
 def get_llm_client():
     """Return (client, provider_name) for whichever LLM key is available.
-    Prefers Anthropic if both are set."""
+    Prefers Anthropic > OpenAI > Ollama."""
     if has_anthropic_key():
         try:
             import anthropic
@@ -114,14 +127,22 @@ def get_llm_client():
             return openai.OpenAI(), "openai"
         except ImportError:
             print("  openai package not installed: pip install openai")
+    if has_ollama():
+        try:
+            import openai
+            client = openai.OpenAI(base_url=get_ollama_base_url(), api_key="ollama")
+            return client, "ollama"
+        except ImportError:
+            print("  openai package not installed (needed for Ollama compat): pip install openai")
     return None, None
 
 
-def llm_chat(client, provider, prompt, temperature=0.0, max_tokens=200, json_mode=False):
+def llm_chat(client, provider, prompt, temperature=0.0, max_tokens=200, json_mode=False, model_override=None):
     """Unified chat completion across providers. Returns the response text."""
-    if provider == "openai":
+    if provider in ("openai", "ollama"):
+        model = model_override or (get_ollama_model() if provider == "ollama" else "gpt-4o-mini")
         kwargs = {
-            "model": "gpt-4o-mini",
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -131,8 +152,9 @@ def llm_chat(client, provider, prompt, temperature=0.0, max_tokens=200, json_mod
         response = client.chat.completions.create(**kwargs)
         return response.choices[0].message.content
     elif provider == "anthropic":
+        model = model_override or "claude-sonnet-4-20250514"
         kwargs = {
-            "model": "claude-sonnet-4-20250514",
+            "model": model,
             "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
