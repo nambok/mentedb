@@ -1,6 +1,24 @@
 [workspace]
 git_release_enable = true
 semver_check = true
+publish_timeout = "10m"
+
+# Consolidation and extraction use workspace version but rarely have direct
+# file changes. Include their dependency crates' commits so release-plz
+# always treats them as changed and publishes them alongside everything else.
+[[package]]
+name = "mentedb-consolidation"
+changelog_include = ["mentedb-core"]
+
+[[package]]
+name = "mentedb-extraction"
+changelog_include = ["mentedb-core", "mentedb-cognitive"]
+
+# The facade re-exports everything — include all crates so its changelog
+# is comprehensive and it always publishes after its dependencies.
+[[package]]
+name = "mentedb"
+changelog_include = ["mentedb-core", "mentedb-cognitive", "mentedb-consolidation", "mentedb-extraction"]
 
 # SDKs are versioned via workspace but not published to crates.io
 [[package]]
