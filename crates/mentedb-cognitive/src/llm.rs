@@ -63,7 +63,10 @@ pub enum InvalidationVerdict {
     /// The new memory makes the old one no longer true.
     Invalidate { reason: String },
     /// The old memory should be updated with new information.
-    Update { merged_content: String, reason: String },
+    Update {
+        merged_content: String,
+        reason: String,
+    },
 }
 
 /// Result of asking the LLM whether two memories contradict each other.
@@ -262,7 +265,10 @@ impl<J: LlmJudge> CognitiveLlmService<J> {
             serde_json::to_string_pretty(new).unwrap_or_default(),
         );
 
-        let response = self.judge.complete(prompts::INVALIDATION_SYSTEM, &user_prompt).await?;
+        let response = self
+            .judge
+            .complete(prompts::INVALIDATION_SYSTEM, &user_prompt)
+            .await?;
         parse_json_response::<InvalidationVerdict>(&response)
     }
 
@@ -278,7 +284,10 @@ impl<J: LlmJudge> CognitiveLlmService<J> {
             serde_json::to_string_pretty(b).unwrap_or_default(),
         );
 
-        let response = self.judge.complete(prompts::CONTRADICTION_SYSTEM, &user_prompt).await?;
+        let response = self
+            .judge
+            .complete(prompts::CONTRADICTION_SYSTEM, &user_prompt)
+            .await?;
         parse_json_response::<ContradictionVerdict>(&response)
     }
 
@@ -296,7 +305,10 @@ impl<J: LlmJudge> CognitiveLlmService<J> {
             serde_json::to_string_pretty(candidates).unwrap_or_default(),
         );
 
-        let response = self.judge.complete(prompts::ENTITY_RESOLUTION_SYSTEM, &user_prompt).await?;
+        let response = self
+            .judge
+            .complete(prompts::ENTITY_RESOLUTION_SYSTEM, &user_prompt)
+            .await?;
 
         #[derive(Deserialize)]
         struct EntityResponse {
@@ -323,7 +335,10 @@ impl<J: LlmJudge> CognitiveLlmService<J> {
             serde_json::to_string_pretty(cluster).unwrap_or_default(),
         );
 
-        let response = self.judge.complete(prompts::CONSOLIDATION_SYSTEM, &user_prompt).await?;
+        let response = self
+            .judge
+            .complete(prompts::CONSOLIDATION_SYSTEM, &user_prompt)
+            .await?;
         parse_json_response::<ConsolidationDecision>(&response)
     }
 
@@ -338,7 +353,10 @@ impl<J: LlmJudge> CognitiveLlmService<J> {
             message, existing_topics,
         );
 
-        let response = self.judge.complete(prompts::TOPIC_SYSTEM, &user_prompt).await?;
+        let response = self
+            .judge
+            .complete(prompts::TOPIC_SYSTEM, &user_prompt)
+            .await?;
         parse_json_response::<TopicLabel>(&response)
     }
 }
@@ -492,10 +510,7 @@ mod tests {
         let svc = CognitiveLlmService::new(judge);
 
         let result = svc
-            .judge_invalidation(
-                &mem("Alice works at Acme"),
-                &mem("Bob works at Google"),
-            )
+            .judge_invalidation(&mem("Alice works at Acme"), &mem("Bob works at Google"))
             .await
             .unwrap();
 
@@ -504,16 +519,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_judge_invalidation_invalidate() {
-        let judge = MockLlmJudge::new(
-            r#"{"verdict": "invalidate", "reason": "Alice changed jobs"}"#,
-        );
+        let judge =
+            MockLlmJudge::new(r#"{"verdict": "invalidate", "reason": "Alice changed jobs"}"#);
         let svc = CognitiveLlmService::new(judge);
 
         let result = svc
-            .judge_invalidation(
-                &mem("Alice works at Acme"),
-                &mem("Alice joined Google"),
-            )
+            .judge_invalidation(&mem("Alice works at Acme"), &mem("Alice joined Google"))
             .await
             .unwrap();
 
@@ -528,10 +539,7 @@ mod tests {
         let svc = CognitiveLlmService::new(judge);
 
         let result = svc
-            .judge_invalidation(
-                &mem("Project uses React"),
-                &mem("Project migrated to Vue"),
-            )
+            .judge_invalidation(&mem("Project uses React"), &mem("Project migrated to Vue"))
             .await
             .unwrap();
 
@@ -552,10 +560,7 @@ mod tests {
         let svc = CognitiveLlmService::new(judge);
 
         let result = svc
-            .detect_contradiction(
-                &mem("Likes Python"),
-                &mem("Uses PostgreSQL"),
-            )
+            .detect_contradiction(&mem("Likes Python"), &mem("Uses PostgreSQL"))
             .await
             .unwrap();
 
@@ -564,16 +569,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_detect_contradiction_contradicts() {
-        let judge = MockLlmJudge::new(
-            r#"{"verdict": "contradicts", "reason": "Cannot prefer both"}"#,
-        );
+        let judge =
+            MockLlmJudge::new(r#"{"verdict": "contradicts", "reason": "Cannot prefer both"}"#);
         let svc = CognitiveLlmService::new(judge);
 
         let result = svc
-            .detect_contradiction(
-                &mem("Prefers tabs"),
-                &mem("Prefers spaces"),
-            )
+            .detect_contradiction(&mem("Prefers tabs"), &mem("Prefers spaces"))
             .await
             .unwrap();
 
@@ -599,10 +600,7 @@ mod tests {
         };
 
         let result = svc
-            .detect_contradiction(
-                &mem("Uses React"),
-                &mem_b,
-            )
+            .detect_contradiction(&mem("Uses React"), &mem_b)
             .await
             .unwrap();
 
@@ -617,9 +615,21 @@ mod tests {
         let svc = CognitiveLlmService::new(judge);
 
         let candidates = vec![
-            EntityCandidate { name: "Alice".into(), context: None, memory_id: None },
-            EntityCandidate { name: "my manager".into(), context: Some("my manager Alice told me".into()), memory_id: None },
-            EntityCandidate { name: "Alice Smith".into(), context: None, memory_id: None },
+            EntityCandidate {
+                name: "Alice".into(),
+                context: None,
+                memory_id: None,
+            },
+            EntityCandidate {
+                name: "my manager".into(),
+                context: Some("my manager Alice told me".into()),
+                memory_id: None,
+            },
+            EntityCandidate {
+                name: "Alice Smith".into(),
+                context: None,
+                memory_id: None,
+            },
         ];
 
         let groups = svc.resolve_entities(&candidates).await.unwrap();
@@ -645,13 +655,29 @@ mod tests {
         let svc = CognitiveLlmService::new(judge);
 
         let cluster = vec![
-            ClusterMember { id: "a".into(), content: "Uses Rust".into(), memory_type: "Semantic".into(), confidence: 0.9, created_at: 1000 },
-            ClusterMember { id: "b".into(), content: "Prefers Rust for safety".into(), memory_type: "Semantic".into(), confidence: 0.85, created_at: 2000 },
+            ClusterMember {
+                id: "a".into(),
+                content: "Uses Rust".into(),
+                memory_type: "Semantic".into(),
+                confidence: 0.9,
+                created_at: 1000,
+            },
+            ClusterMember {
+                id: "b".into(),
+                content: "Prefers Rust for safety".into(),
+                memory_type: "Semantic".into(),
+                confidence: 0.85,
+                created_at: 2000,
+            },
         ];
 
         let decision = svc.consolidate(&cluster).await.unwrap();
         match decision {
-            ConsolidationDecision::Merge { merged_content, remove_ids, .. } => {
+            ConsolidationDecision::Merge {
+                merged_content,
+                remove_ids,
+                ..
+            } => {
                 assert!(merged_content.contains("Rust"));
                 assert_eq!(remove_ids.len(), 2);
             }
@@ -670,15 +696,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_canonicalize_topic_existing() {
-        let judge = MockLlmJudge::new(
-            r#"{"topic": "authentication", "is_new": false}"#,
-        );
+        let judge = MockLlmJudge::new(r#"{"topic": "authentication", "is_new": false}"#);
         let svc = CognitiveLlmService::new(judge);
 
         let label = svc
             .canonicalize_topic(
                 "how do I configure the auth middleware",
-                &["database".into(), "authentication".into(), "deployment".into()],
+                &[
+                    "database".into(),
+                    "authentication".into(),
+                    "deployment".into(),
+                ],
             )
             .await
             .unwrap();
@@ -689,9 +717,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_canonicalize_topic_new() {
-        let judge = MockLlmJudge::new(
-            r#"{"topic": "caching", "is_new": true}"#,
-        );
+        let judge = MockLlmJudge::new(r#"{"topic": "caching", "is_new": true}"#);
         let svc = CognitiveLlmService::new(judge);
 
         let label = svc
@@ -713,10 +739,7 @@ mod tests {
         );
         let svc = CognitiveLlmService::new(judge);
 
-        let result = svc
-            .judge_invalidation(&mem("A"), &mem("B"))
-            .await
-            .unwrap();
+        let result = svc.judge_invalidation(&mem("A"), &mem("B")).await.unwrap();
 
         assert!(matches!(result, InvalidationVerdict::Keep { .. }));
     }
@@ -731,12 +754,15 @@ mod tests {
         }
 
         let svc = CognitiveLlmService::new(FailingJudge);
-        let result = svc
-            .judge_invalidation(&mem("A"), &mem("B"))
-            .await;
+        let result = svc.judge_invalidation(&mem("A"), &mem("B")).await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("connection refused"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("connection refused")
+        );
     }
 
     #[tokio::test]
@@ -747,10 +773,7 @@ mod tests {
         let svc = CognitiveLlmService::new(judge.clone());
 
         let _ = svc
-            .judge_invalidation(
-                &mem("Alice works at Acme"),
-                &mem("Alice joined Google"),
-            )
+            .judge_invalidation(&mem("Alice works at Acme"), &mem("Alice joined Google"))
             .await;
 
         let calls = judge.calls();

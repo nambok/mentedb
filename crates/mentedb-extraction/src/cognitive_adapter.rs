@@ -2,8 +2,8 @@
 //! cognitive service. This bridges the extraction infrastructure (HTTP clients,
 //! provider configs, retry logic) with the cognitive judgment layer.
 
-use crate::provider::HttpExtractionProvider;
 use crate::ExtractionProvider;
+use crate::provider::HttpExtractionProvider;
 use mentedb_cognitive::LlmJudgeError;
 
 /// Wraps an [`HttpExtractionProvider`] so it can be used as a [`LlmJudge`]
