@@ -23,6 +23,7 @@ import os
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 
 from tqdm import tqdm
 
@@ -78,6 +79,15 @@ def format_session(session, date):
     return "\n".join(lines)
 
 
+def date_to_microseconds(date_str):
+    """Convert a date string like '2024-03-15' to microseconds since epoch."""
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1_000_000)
+    except (ValueError, TypeError):
+        return None
+
+
 def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
     """Ingest all chat sessions for a question into MenteDB.
 
@@ -91,6 +101,7 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
 
     for i, (session, date) in enumerate(zip(sessions, dates)):
         text = format_session(session, date)
+        ts = date_to_microseconds(date)
 
         if use_cognitive and llm_provider:
             # Full cognitive pipeline: LLM extracts structured memories
@@ -103,12 +114,14 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
                 pass
 
             # Also store the raw session for retrieval coverage
-            mid = db.store(text, memory_type="episodic", tags=[f"date:{date}", f"session:{i}"])
+            mid = db.store(text, memory_type="episodic",
+                          tags=[f"date:{date}", f"session:{i}"],
+                          created_at=ts)
             memory_ids.append(mid)
         else:
             # Baseline: raw session storage only
             tags = [f"date:{date}", f"session:{i}"]
-            mid = db.store(text, memory_type="episodic", tags=tags)
+            mid = db.store(text, memory_type="episodic", tags=tags, created_at=ts)
             memory_ids.append(mid)
 
     return memory_ids
@@ -123,8 +136,12 @@ def retrieve_and_answer(db, question_data, llm_client, llm_provider, top_k=20):
     question = question_data["question"]
     question_date = question_data["question_date"]
 
+    # Convert question date to microseconds for time-aware filtering.
+    # Only retrieve memories created before the question was asked.
+    before_ts = date_to_microseconds(question_date)
+
     # Use engine-native expanded search (query decomposition + RRF happens inside)
-    results = db.search_expanded(question, k=top_k)
+    results = db.search_expanded(question, k=top_k, before=before_ts)
 
     retrieved_parts = []
     for r in results:

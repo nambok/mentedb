@@ -147,7 +147,7 @@ impl MenteDB {
     }
 
     /// Store a memory and return its UUID string.
-    #[pyo3(signature = (content, memory_type, embedding=None, agent_id=None, tags=None))]
+    #[pyo3(signature = (content, memory_type, embedding=None, agent_id=None, tags=None, created_at=None))]
     fn store(
         &mut self,
         content: &str,
@@ -155,6 +155,7 @@ impl MenteDB {
         embedding: Option<Vec<f32>>,
         agent_id: Option<&str>,
         tags: Option<Vec<String>>,
+        created_at: Option<u64>,
     ) -> PyResult<String> {
         let db = self.db.as_mut().ok_or_else(|| {
             PyRuntimeError::new_err("database is closed")
@@ -181,6 +182,11 @@ impl MenteDB {
         let mut node = MemoryNode::new(aid, mt, content.to_string(), emb);
         if let Some(t) = tags {
             node.tags = t;
+        }
+        if let Some(ts) = created_at {
+            node.created_at = ts;
+            node.accessed_at = ts;
+            node.valid_from = Some(ts);
         }
 
         let id = node.id;
@@ -276,8 +282,8 @@ impl MenteDB {
     ///
     /// Takes multiple query strings, embeds each, and merges results via RRF
     /// for broader recall across different semantic aspects.
-    #[pyo3(signature = (queries, k=10))]
-    fn search_multi(&mut self, queries: Vec<String>, k: usize) -> PyResult<Vec<SearchResult>> {
+    #[pyo3(signature = (queries, k=10, tags=None, before=None))]
+    fn search_multi(&mut self, queries: Vec<String>, k: usize, tags: Option<Vec<String>>, before: Option<u64>) -> PyResult<Vec<SearchResult>> {
         let db = self.db.as_mut().ok_or_else(|| {
             PyRuntimeError::new_err("database is closed")
         })?;
@@ -292,7 +298,11 @@ impl MenteDB {
             embeddings.push(emb);
         }
 
-        let hits = db.recall_similar_multi(&embeddings, k).map_err(to_pyerr)?;
+        let tag_strs: Option<Vec<&str>> = tags.as_ref().map(|t| t.iter().map(|s| s.as_str()).collect());
+        let tag_refs: Option<&[&str]> = tag_strs.as_deref();
+        let time_range = before.map(|b| (0u64, b));
+
+        let hits = db.recall_similar_multi(&embeddings, k, tag_refs, time_range).map_err(to_pyerr)?;
         Ok(hits
             .into_iter()
             .map(|(id, score)| SearchResult {
@@ -303,16 +313,18 @@ impl MenteDB {
     }
 
     /// Expanded search: uses the engine's LLM to decompose a query into
-    /// sub-queries, then runs multi-query RRF search.
+    /// sub-queries, then runs multi-query RRF search with optional time filtering.
     ///
     /// This is the engine-native way to get broad recall — the LLM call
     /// happens inside the engine, not in the benchmark or application layer.
-    #[pyo3(signature = (query, k=10, provider=None))]
+    #[pyo3(signature = (query, k=10, provider=None, tags=None, before=None))]
     fn search_expanded(
         &mut self,
         query: &str,
         k: usize,
         provider: Option<&str>,
+        tags: Option<Vec<String>>,
+        before: Option<u64>,
     ) -> PyResult<Vec<SearchResult>> {
         let db = self.db.as_mut().ok_or_else(|| {
             PyRuntimeError::new_err("database is closed")
@@ -342,7 +354,11 @@ impl MenteDB {
             embeddings.push(emb);
         }
 
-        let hits = db.recall_similar_multi(&embeddings, k).map_err(to_pyerr)?;
+        let tag_strs: Option<Vec<&str>> = tags.as_ref().map(|t| t.iter().map(|s| s.as_str()).collect());
+        let tag_refs: Option<&[&str]> = tag_strs.as_deref();
+        let time_range = before.map(|b| (0u64, b));
+
+        let hits = db.recall_similar_multi(&embeddings, k, tag_refs, time_range).map_err(to_pyerr)?;
         Ok(hits
             .into_iter()
             .map(|(id, score)| SearchResult {

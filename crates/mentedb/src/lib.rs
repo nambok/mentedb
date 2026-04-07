@@ -307,19 +307,16 @@ impl MenteDb {
         &mut self,
         embeddings: &[Vec<f32>],
         k: usize,
+        tags: Option<&[&str]>,
+        time_range: Option<(Timestamp, Timestamp)>,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
         use std::collections::HashMap;
 
         let rrf_k: f32 = 60.0;
         let mut rrf_scores: HashMap<MemoryId, f32> = HashMap::new();
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_micros() as u64;
-
         for emb in embeddings {
-            let results = self.recall_similar_at(emb, k, now)?;
+            let results = self.recall_similar_filtered(emb, k, tags, time_range)?;
             for (rank, (id, _score)) in results.iter().enumerate() {
                 *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
             }

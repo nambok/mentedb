@@ -44,11 +44,16 @@ class MenteDB:
         embedding: list[float] | None = None,
         agent_id: str | None = None,
         tags: list[str] | None = None,
+        created_at: int | None = None,
     ) -> str:
-        """Store a memory and return its UUID."""
+        """Store a memory and return its UUID.
+
+        Optionally set created_at (microsecond timestamp) to place the memory
+        at a specific point in time for temporal filtering.
+        """
         if isinstance(memory_type, MemoryType):
             memory_type = memory_type.value
-        return self._db.store(content, memory_type, embedding, agent_id, tags)
+        return self._db.store(content, memory_type, embedding, agent_id, tags, created_at)
 
     def recall(self, query: str):
         """Recall memories using an MQL query string."""
@@ -66,21 +71,25 @@ class MenteDB:
         """
         return self._db.search_text(query, k, tags, after, before)
 
-    def search_multi(self, queries: list[str], k: int = 10):
+    def search_multi(self, queries: list[str], k: int = 10, tags: list[str] | None = None,
+                     before: int | None = None):
         """Multi-query search with Reciprocal Rank Fusion.
 
         Searches for each query separately and merges results via RRF
         for broader recall across different semantic aspects.
+        Optionally filters by tags and/or time (before timestamp in microseconds).
         """
-        return self._db.search_multi(queries, k)
+        return self._db.search_multi(queries, k, tags, before)
 
-    def search_expanded(self, query: str, k: int = 10, provider: str | None = None):
+    def search_expanded(self, query: str, k: int = 10, provider: str | None = None,
+                        tags: list[str] | None = None, before: int | None = None):
         """Expanded search with engine-native query decomposition.
 
         Uses the engine's LLM to decompose the query into sub-queries,
         then runs multi-query RRF search for broader recall.
+        Optionally filters by tags and/or time (before timestamp in microseconds).
         """
-        return self._db.search_expanded(query, k, provider)
+        return self._db.search_expanded(query, k, provider, tags, before)
 
     def get_memory(self, memory_id: str):
         """Retrieve a single memory by its UUID."""
