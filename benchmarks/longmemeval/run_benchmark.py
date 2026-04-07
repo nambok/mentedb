@@ -40,23 +40,15 @@ DATASET_FILES = {
     "oracle": "longmemeval_oracle.json",
 }
 
-READER_PROMPT = """You are a helpful assistant with access to a user's conversation history.
-Below are relevant past conversations retrieved from memory, along with their dates.
-Use them to answer the question accurately.
+READER_PROMPT = """I will give you several history chats between you and a user. Please answer the question based on the relevant chat history.
+
+
+History Chats:
 
 {retrieved_context}
 
-Current date: {question_date}
+Current Date: {question_date}
 Question: {question}
-
-Instructions:
-1. First, identify which retrieved conversations contain information relevant to the question.
-2. For temporal questions, pay attention to dates and compute time differences carefully.
-3. For knowledge update questions, use the MOST RECENT information, not outdated facts.
-4. If the retrieved conversations do NOT contain enough information to answer confidently,
-   respond with exactly: "I don't have enough information to answer this question."
-5. Be concise. Give a direct answer.
-
 Answer:"""
 
 
