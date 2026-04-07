@@ -1,5 +1,4 @@
 [workspace]
-custom_minor_increment_regex = "^minor"
 git_release_enable = true
 semver_check = true
 
