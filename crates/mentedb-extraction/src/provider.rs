@@ -29,6 +29,25 @@ impl HttpExtractionProvider {
         Ok(Self { client, config })
     }
 
+    /// Expand a search query into multiple sub-queries via LLM.
+    ///
+    /// Given a natural language question, extracts 2-3 search queries
+    /// targeting key entities, names, places, dates, and topics.
+    /// Returns the sub-queries (does NOT include the original).
+    pub async fn expand_query(&self, query: &str) -> Result<Vec<String>, ExtractionError> {
+        let system_prompt = "You extract search queries from questions. \
+            Return 2-3 short search queries, one per line, no numbering. \
+            Focus on key entities, names, places, dates, and topics.";
+        let result = self.call_with_retry(query, system_prompt).await?;
+        let queries: Vec<String> = result
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .take(3)
+            .collect();
+        Ok(queries)
+    }
+
     async fn call_openai(
         &self,
         conversation: &str,

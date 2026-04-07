@@ -74,6 +74,14 @@ class MenteDB:
         """
         return self._db.search_multi(queries, k)
 
+    def search_expanded(self, query: str, k: int = 10, provider: str | None = None):
+        """Expanded search with engine-native query decomposition.
+
+        Uses the engine's LLM to decompose the query into sub-queries,
+        then runs multi-query RRF search for broader recall.
+        """
+        return self._db.search_expanded(query, k, provider)
+
     def get_memory(self, memory_id: str):
         """Retrieve a single memory by its UUID."""
         return self._db.get_memory(memory_id)

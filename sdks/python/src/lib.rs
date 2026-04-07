@@ -302,6 +302,56 @@ impl MenteDB {
             .collect())
     }
 
+    /// Expanded search: uses the engine's LLM to decompose a query into
+    /// sub-queries, then runs multi-query RRF search.
+    ///
+    /// This is the engine-native way to get broad recall — the LLM call
+    /// happens inside the engine, not in the benchmark or application layer.
+    #[pyo3(signature = (query, k=10, provider=None))]
+    fn search_expanded(
+        &mut self,
+        query: &str,
+        k: usize,
+        provider: Option<&str>,
+    ) -> PyResult<Vec<SearchResult>> {
+        let db = self.db.as_mut().ok_or_else(|| {
+            PyRuntimeError::new_err("database is closed")
+        })?;
+
+        // Build LLM config for query expansion
+        let config = build_extraction_config_from_env(provider)?;
+        let http_provider = HttpExtractionProvider::new(config).map_err(to_pyerr)?;
+
+        // Expand query via LLM
+        let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
+        let sub_queries = rt
+            .block_on(http_provider.expand_query(query))
+            .unwrap_or_default();
+
+        // Build embedding list: original query + sub-queries
+        let mut all_queries = vec![query.to_string()];
+        all_queries.extend(sub_queries);
+
+        let mut embeddings = Vec::with_capacity(all_queries.len());
+        for q in &all_queries {
+            let emb = if let Some(ref embedder) = self.embedder {
+                embedder.embed(q).map_err(to_pyerr)?
+            } else {
+                hash_embedding(q, 384)
+            };
+            embeddings.push(emb);
+        }
+
+        let hits = db.recall_similar_multi(&embeddings, k).map_err(to_pyerr)?;
+        Ok(hits
+            .into_iter()
+            .map(|(id, score)| SearchResult {
+                id: id.to_string(),
+                score,
+            })
+            .collect())
+    }
+
     /// Add a typed, weighted edge between two memories.
     fn relate(
         &mut self,
