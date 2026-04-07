@@ -216,24 +216,37 @@ impl MenteDb {
     /// Shortcut for vector similarity search.
     ///
     /// Returns the top-k most similar memory IDs with their scores.
-    /// Memories that have been superseded or contradicted via graph edges
-    /// are automatically excluded from results.
+    /// Memories that have been superseded, contradicted, or temporally
+    /// invalidated via graph edges are automatically excluded from results.
     pub fn recall_similar(
         &mut self,
         embedding: &[f32],
         k: usize,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
         debug!("Recall similar, k={}", k);
-        // Over-fetch to account for filtered-out superseded results
+        // Over-fetch to account for filtered-out results
         let results = self.index.hybrid_search(embedding, None, None, k * 3);
         let graph = self.graph.graph();
         let filtered: Vec<(MemoryId, f32)> = results
             .into_iter()
             .filter(|(id, _)| {
+                // Skip memories with invalidated incoming Supersedes/Contradicts edges
                 let incoming = graph.incoming(*id);
-                !incoming.iter().any(|(_, e)| {
-                    e.edge_type == EdgeType::Supersedes || e.edge_type == EdgeType::Contradicts
-                })
+                let has_active_supersede = incoming.iter().any(|(_, e)| {
+                    (e.edge_type == EdgeType::Supersedes || e.edge_type == EdgeType::Contradicts)
+                        && !e.is_invalidated()
+                });
+                !has_active_supersede
+            })
+            .filter(|(id, _)| {
+                // Skip memories that have been temporally invalidated
+                if let Some(&page_id) = self.page_map.get(id)
+                    && let Ok(node) = self.storage.load_memory(page_id)
+                {
+                    !node.is_invalidated()
+                } else {
+                    true
+                }
             })
             .take(k)
             .collect();

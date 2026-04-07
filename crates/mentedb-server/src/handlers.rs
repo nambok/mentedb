@@ -141,6 +141,8 @@ pub async fn store_memory(
         space_id,
         attributes,
         tags,
+        valid_from: None,
+        valid_until: None,
     };
 
     let mut db = state.db.write().await;
@@ -359,6 +361,8 @@ pub async fn create_edge(
         edge_type,
         weight,
         created_at: now,
+        valid_from: None,
+        valid_until: None,
     };
 
     let mut db = state.db.write().await;
@@ -469,6 +473,8 @@ async fn run_extraction(
             space_id,
             attributes: std::collections::HashMap::new(),
             tags: memory.tags.clone(),
+            valid_from: None,
+            valid_until: None,
         };
         match db.store(node) {
             Ok(()) => stored_ids.push(id.to_string()),

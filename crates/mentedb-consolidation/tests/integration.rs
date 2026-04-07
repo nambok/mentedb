@@ -24,6 +24,8 @@ fn make_memory(content: &str, embedding: Vec<f32>) -> MemoryNode {
         space_id: SpaceId::new(),
         attributes: HashMap::new(),
         tags: Vec::new(),
+        valid_from: None,
+        valid_until: None,
     }
 }
 

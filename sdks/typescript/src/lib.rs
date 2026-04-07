@@ -203,6 +203,8 @@ impl MenteDB {
             edge_type: et,
             weight: weight as f32,
             created_at: now,
+            valid_from: None,
+            valid_until: None,
         };
         self.inner.relate(edge).map_err(mente_err)
     }

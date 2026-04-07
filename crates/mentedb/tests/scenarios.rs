@@ -146,6 +146,8 @@ fn test_coding_assistant_workflow() {
             edge_type: EdgeType::Caused,
             weight: 0.9,
             created_at: now_us(),
+            valid_from: None,
+            valid_until: None,
         };
         let e2 = MemoryEdge {
             source: ids[1], // chose TypeScript
@@ -153,6 +155,8 @@ fn test_coding_assistant_workflow() {
             edge_type: EdgeType::Supports,
             weight: 0.8,
             created_at: now_us(),
+            valid_from: None,
+            valid_until: None,
         };
         db.relate(e1).unwrap();
         db.relate(e2).unwrap();
@@ -1025,6 +1029,8 @@ fn test_gdpr_forget() {
             edge_type: EdgeType::Related,
             weight: 0.7,
             created_at: now_us(),
+            valid_from: None,
+            valid_until: None,
         };
         edge_pairs.push((memory_ids[i], memory_ids[i + 1]));
         db.relate(edge).unwrap();

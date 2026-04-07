@@ -238,6 +238,8 @@ impl MemoryService for MemoryServiceImpl {
             space_id,
             attributes,
             tags: req.tags,
+            valid_from: None,
+            valid_until: None,
         };
 
         let mut db = self.state.db.write().await;
@@ -344,6 +346,8 @@ impl MemoryService for MemoryServiceImpl {
             edge_type,
             weight,
             created_at: now,
+            valid_from: None,
+            valid_until: None,
         };
 
         let mut db = self.state.db.write().await;

@@ -69,6 +69,8 @@ fn main() -> MenteResult<()> {
         edge_type: EdgeType::Related,
         weight: 0.7,
         created_at: 0,
+        valid_from: None,
+        valid_until: None,
     };
     db.relate(edge)?;
     println!("\nRelated memory {} -> {}", m2_id, m3_id);
@@ -80,6 +82,8 @@ fn main() -> MenteResult<()> {
         edge_type: EdgeType::Supports,
         weight: 0.5,
         created_at: 0,
+        valid_from: None,
+        valid_until: None,
     };
     db.relate(support_edge)?;
     println!("Added Supports edge {} -> {}", m1_id, m2_id);

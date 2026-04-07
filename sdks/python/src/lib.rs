@@ -272,6 +272,8 @@ impl MenteDB {
             edge_type: parse_edge_type(edge_type)?,
             weight,
             created_at: now_us(),
+            valid_from: None,
+            valid_until: None,
         };
 
         db.relate(edge).map_err(to_pyerr)

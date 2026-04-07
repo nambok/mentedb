@@ -14,6 +14,12 @@ pub enum InferredAction {
         memory: MemoryId,
         superseded_by: MemoryId,
     },
+    /// Set valid_until on the old memory instead of deleting it.
+    InvalidateMemory {
+        memory: MemoryId,
+        superseded_by: MemoryId,
+        valid_until: u64,
+    },
     CreateEdge {
         source: MemoryId,
         target: MemoryId,
@@ -130,6 +136,12 @@ impl WriteInferenceEngine {
                 actions.push(InferredAction::MarkObsolete {
                     memory: existing.id,
                     superseded_by: new_memory.id,
+                });
+                // Also emit temporal invalidation so the old memory gets valid_until set
+                actions.push(InferredAction::InvalidateMemory {
+                    memory: existing.id,
+                    superseded_by: new_memory.id,
+                    valid_until: new_memory.created_at,
                 });
             }
 

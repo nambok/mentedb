@@ -15,6 +15,12 @@ pub struct StoredEdge {
     pub weight: f32,
     /// When this edge was created.
     pub created_at: Timestamp,
+    /// When this relationship became valid. None = since creation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<Timestamp>,
+    /// When this relationship stopped being valid. None = still valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<Timestamp>,
 }
 
 impl StoredEdge {
@@ -24,7 +30,23 @@ impl StoredEdge {
             edge_type: edge.edge_type,
             weight: edge.weight,
             created_at: edge.created_at,
+            valid_from: edge.valid_from,
+            valid_until: edge.valid_until,
         }
+    }
+
+    /// Returns true if this edge is temporally valid at the given timestamp.
+    pub fn is_valid_at(&self, at: Timestamp) -> bool {
+        let from = self.valid_from.unwrap_or(0);
+        match self.valid_until {
+            Some(until) => at >= from && at < until,
+            None => at >= from,
+        }
+    }
+
+    /// Returns true if this edge has been invalidated.
+    pub fn is_invalidated(&self) -> bool {
+        self.valid_until.is_some()
     }
 }
 
@@ -323,6 +345,8 @@ impl CsrGraph {
                 edge_type: EdgeType::Related,
                 weight: 0.0,
                 created_at: 0,
+                valid_from: None,
+                valid_until: None,
             };
             total
         ];
@@ -379,6 +403,8 @@ mod tests {
             edge_type: etype,
             weight: 0.8,
             created_at: 1000,
+            valid_from: None,
+            valid_until: None,
         }
     }
 

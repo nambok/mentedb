@@ -54,6 +54,14 @@ pub struct MemoryNode {
     pub attributes: std::collections::HashMap<String, AttributeValue>,
     /// Tags for bitmap indexing.
     pub tags: Vec<String>,
+    /// When this fact became true in the real world.
+    /// None means valid since creation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<Timestamp>,
+    /// When this fact stopped being true.
+    /// None means still valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<Timestamp>,
 }
 
 impl MemoryNode {
@@ -83,7 +91,74 @@ impl MemoryNode {
             space_id: SpaceId::nil(),
             attributes: std::collections::HashMap::new(),
             tags: Vec::new(),
+            valid_from: None,
+            valid_until: None,
         }
+    }
+}
+
+impl MemoryNode {
+    /// Returns true if this memory is temporally valid at the given timestamp.
+    pub fn is_valid_at(&self, at: Timestamp) -> bool {
+        let from = self.valid_from.unwrap_or(0);
+        match self.valid_until {
+            Some(until) => at >= from && at < until,
+            None => at >= from,
+        }
+    }
+
+    /// Mark this memory as no longer valid.
+    pub fn invalidate(&mut self, at: Timestamp) {
+        self.valid_until = Some(at);
+    }
+
+    /// Returns true if this memory has been invalidated.
+    pub fn is_invalidated(&self) -> bool {
+        self.valid_until.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::AgentId;
+
+    #[test]
+    fn new_memory_has_no_temporal_bounds() {
+        let node = MemoryNode::new(
+            AgentId::new(),
+            MemoryType::Semantic,
+            "test".to_string(),
+            vec![1.0],
+        );
+        assert_eq!(node.valid_from, None);
+        assert_eq!(node.valid_until, None);
+        assert!(!node.is_invalidated());
+    }
+
+    #[test]
+    fn invalidate_memory() {
+        let mut node = MemoryNode::new(
+            AgentId::new(),
+            MemoryType::Semantic,
+            "Alice works at Acme".to_string(),
+            vec![1.0],
+        );
+        assert!(node.is_valid_at(node.created_at));
+
+        node.invalidate(node.created_at + 1_000_000);
+        assert!(node.is_invalidated());
+        assert!(node.is_valid_at(node.created_at));
+        assert!(!node.is_valid_at(node.created_at + 1_000_000));
+    }
+
+    #[test]
+    fn serde_backward_compatible() {
+        let json = r#"{"id":"00000000-0000-0000-0000-000000000001","agent_id":"00000000-0000-0000-0000-000000000002","memory_type":"Semantic","embedding":[1.0],"content":"test","created_at":1000,"accessed_at":1000,"access_count":0,"salience":1.0,"confidence":1.0,"space_id":"00000000-0000-0000-0000-000000000000","attributes":{},"tags":[]}"#;
+        let node: MemoryNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.valid_from, None);
+        assert_eq!(node.valid_until, None);
+        assert!(node.is_valid_at(5000));
     }
 }
 
