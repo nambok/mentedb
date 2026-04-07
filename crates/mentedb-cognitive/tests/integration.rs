@@ -175,6 +175,7 @@ fn test_speculative_cache() {
             Some((
                 format!("Pre-assembled context for: {}", topic),
                 vec![MemoryId::new()],
+                None,
             ))
         },
     );
@@ -182,13 +183,13 @@ fn test_speculative_cache() {
     assert_eq!(cache.stats().cache_size, 2);
 
     // Should hit on related query
-    let hit = cache.try_hit("database schema");
+    let hit = cache.try_hit("database schema", None);
     assert!(hit.is_some(), "Expected cache hit for 'database schema'");
     assert!(hit.unwrap().context_text.contains("database schema design"));
     assert_eq!(cache.stats().hits, 1);
 
     // Should miss on unrelated query
-    let miss = cache.try_hit("cooking recipes for dinner");
+    let miss = cache.try_hit("cooking recipes for dinner", None);
     assert!(miss.is_none(), "Expected cache miss for unrelated query");
     assert_eq!(cache.stats().misses, 1);
 }
