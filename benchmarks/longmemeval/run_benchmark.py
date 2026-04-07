@@ -174,9 +174,16 @@ def process_single_question(question_data, embedding_provider, embedding_api_key
     """Process a single question end-to-end. Designed to run in a thread pool."""
     import mentedb as mentedb_pkg
     import shutil
+    import threading
 
     qid = question_data["question_id"]
+    qtype = question_data.get("question_type", "unknown")
+    thread = threading.current_thread().name
+    n_sessions = len(question_data.get("haystack_sessions", []))
     tmp_dir = tempfile.mkdtemp(prefix=f"longmemeval-{qid}-")
+
+    q_start = time.time()
+    print(f"  [{thread}] {qid} ({qtype}) — ingesting {n_sessions} sessions...", flush=True)
 
     try:
         db = mentedb_pkg.MenteDB(
@@ -189,14 +196,26 @@ def process_single_question(question_data, embedding_provider, embedding_api_key
         # Each thread needs its own LLM client (not thread-safe)
         llm_client, _ = get_llm_client()
 
-        ingest_sessions(db, question_data, use_cognitive=use_cognitive,
+        ingest_start = time.time()
+        mids = ingest_sessions(db, question_data, use_cognitive=use_cognitive,
                        llm_provider=cognitive_provider)
+        ingest_time = time.time() - ingest_start
+        print(f"  [{thread}] {qid} — ingested {len(mids)} memories in {ingest_time:.0f}s, searching...", flush=True)
+
+        search_start = time.time()
         hypothesis = retrieve_and_answer(
             db, question_data, llm_client, llm_provider, top_k=top_k
         )
+        search_time = time.time() - search_start
         db.close()
+
+        total = time.time() - q_start
+        preview = hypothesis[:80].replace("\n", " ")
+        print(f"  [{thread}] {qid} — done in {total:.0f}s (ingest={ingest_time:.0f}s search+answer={search_time:.0f}s)", flush=True)
+        print(f"  [{thread}] {qid} — answer: {preview}...", flush=True)
     except Exception as e:
         hypothesis = f"Error: {e}"
+        print(f"  [{thread}] {qid} — ERROR: {e}", flush=True)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -239,13 +258,31 @@ def run_benchmark(variant="s", top_k=20, limit=None, resume_from=None,
         print("Could not initialize LLM client.")
         sys.exit(1)
 
-    print(f"LongMemEval Benchmark")
-    print(f"  Dataset: {variant}")
-    print(f"  Embedding: {embedding_provider} / {embedding_model}")
-    print(f"  Cognitive: {'ON (' + cognitive_provider + ')' if cognitive_provider else 'OFF (raw storage)'}")
-    print(f"  Reader: {llm_provider}")
-    print(f"  Top-K: {top_k}")
-    print(f"  Workers: {workers}")
+    # Resolve models for display
+    cognitive_model = os.environ.get("MENTEDB_LLM_MODEL", "claude-sonnet-4-20250514" if cognitive_provider == "anthropic" else "gpt-4o-mini")
+    reader_model = "claude-sonnet-4-20250514" if llm_provider == "anthropic" else "gpt-4o-mini"
+
+    print(f"{'='*60}")
+    print(f"  LongMemEval Benchmark — MenteDB")
+    print(f"{'='*60}")
+    print(f"  Dataset:          {variant} ({len(load_dataset(variant))} questions)")
+    print(f"  Limit:            {limit or 'all'}")
+    print(f"  Embedding:        {embedding_provider} / {embedding_model}")
+    print(f"  Cognitive:        {'ON' if cognitive_provider else 'OFF (raw storage)'}")
+    if cognitive_provider:
+        print(f"    Provider:       {cognitive_provider}")
+        print(f"    Model:          {cognitive_model}")
+    print(f"  Reader:           {llm_provider} / {reader_model}")
+    print(f"  Top-K:            {top_k}")
+    print(f"  Workers:          {workers}")
+    print(f"  Engine features:")
+    print(f"    Fact-augmented keys:  ON")
+    print(f"    Turn decomposition:   ON")
+    print(f"    Multi-query RRF:      ON (via search_expanded)")
+    print(f"    Time-aware filter:    ON (before=question_date)")
+    print(f"  Reader prompt:    official LongMemEval (verbatim)")
+    print(f"  Judge:            gpt-4o-2024-08-06 (official)")
+    print(f"{'='*60}")
     print()
 
     dataset = load_dataset(variant)
