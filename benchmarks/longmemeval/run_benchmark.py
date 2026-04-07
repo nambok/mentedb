@@ -86,42 +86,11 @@ def format_session(session, date):
     return "\n".join(lines)
 
 
-# MenteDB page = 32KB, minus header (32B), length prefix (4B), embedding (~6KB),
-# and JSON metadata overhead (~1KB). Stay well under the limit.
-MAX_CONTENT_BYTES = 20_000
-
-
-def chunk_text(text, max_bytes=MAX_CONTENT_BYTES):
-    """Split text into chunks that fit within a single MenteDB page."""
-    encoded = text.encode("utf-8")
-    if len(encoded) <= max_bytes:
-        return [text]
-
-    chunks = []
-    lines = text.split("\n")
-    current_lines = []
-    current_size = 0
-
-    for line in lines:
-        line_size = len(line.encode("utf-8")) + 1  # +1 for newline
-        if current_size + line_size > max_bytes and current_lines:
-            chunks.append("\n".join(current_lines))
-            current_lines = []
-            current_size = 0
-        current_lines.append(line)
-        current_size += line_size
-
-    if current_lines:
-        chunks.append("\n".join(current_lines))
-
-    return chunks
-
-
 def ingest_sessions(db, question_data):
     """Ingest all chat sessions for a question into MenteDB.
 
-    Each session is stored as one or more memories (chunked if too large)
-    with the session date as a tag and the full conversation text as content.
+    Each session is stored as a single memory with the session date as a tag
+    and the full conversation text as content.
     """
     memory_ids = []
     sessions = question_data["haystack_sessions"]
@@ -129,13 +98,9 @@ def ingest_sessions(db, question_data):
 
     for i, (session, date) in enumerate(zip(sessions, dates)):
         text = format_session(session, date)
-        chunks = chunk_text(text)
-        for ci, chunk in enumerate(chunks):
-            tags = [f"date:{date}", f"session:{i}"]
-            if len(chunks) > 1:
-                tags.append(f"chunk:{ci}/{len(chunks)}")
-            mid = db.store(chunk, memory_type="episodic", tags=tags)
-            memory_ids.append(mid)
+        tags = [f"date:{date}", f"session:{i}"]
+        mid = db.store(text, memory_type="episodic", tags=tags)
+        memory_ids.append(mid)
 
     return memory_ids
 
