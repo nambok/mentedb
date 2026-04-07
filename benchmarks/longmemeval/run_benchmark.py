@@ -102,8 +102,13 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
 
         if use_cognitive and llm_provider:
             # Full cognitive pipeline: LLM extracts structured memories
-            result = db.ingest(text, provider=llm_provider)
-            memory_ids.extend(result.get("stored_ids", []))
+            try:
+                result = db.ingest(text, provider=llm_provider)
+                memory_ids.extend(result.get("stored_ids", []))
+            except Exception as e:
+                # Extraction can fail on some sessions (e.g. too long, parse errors)
+                # Fall back to raw storage silently
+                pass
 
             # Also store the raw session for retrieval coverage
             mid = db.store(text, memory_type="episodic", tags=[f"date:{date}", f"session:{i}"])

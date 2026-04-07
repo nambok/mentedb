@@ -91,7 +91,7 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
     }
 
     /// Parse the raw JSON response from the LLM into an ExtractionResult.
-    /// Handles edge cases like markdown fences around JSON.
+    /// Handles edge cases like markdown fences around JSON and preamble text.
     fn parse_extraction_response(&self, raw: &str) -> Result<ExtractionResult, ExtractionError> {
         let trimmed = raw.trim();
 
@@ -101,6 +101,26 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
                 .trim_start_matches("```json")
                 .trim_start_matches("```");
             without_prefix.trim_end_matches("```").trim()
+        } else if let Some(start) = trimmed.find('{') {
+            // Handle preamble text before JSON (e.g. "Here are the memories:\n{...}")
+            let candidate = &trimmed[start..];
+            // Find matching closing brace by counting depth
+            let mut depth = 0i32;
+            let mut end = candidate.len();
+            for (i, ch) in candidate.char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            &candidate[..end]
         } else {
             trimmed
         };
