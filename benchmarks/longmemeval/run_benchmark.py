@@ -104,6 +104,7 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
     total = len(sessions)
     cognitive_ok = 0
     cognitive_fail = 0
+    first_error_msg = None
     for i, (session, date) in enumerate(zip(sessions, dates)):
         text = format_session(session, date)
         ts = date_to_microseconds(date)
@@ -111,50 +112,39 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
         if use_cognitive and llm_provider:
             # Full cognitive pipeline with retry on transient errors
             max_retries = 3
-            ingested = False
-            first_error = None
             for attempt in range(max_retries):
                 try:
                     result = db.ingest(text, provider=llm_provider)
                     memory_ids.extend(result.get("stored_ids", []))
                     cognitive_ok += 1
-                    ingested = True
                     break
                 except Exception as e:
                     err = str(e).lower()
-                    if first_error is None:
-                        first_error = str(e)
+                    if first_error_msg is None:
+                        first_error_msg = str(e)
                     # Fatal errors: don't retry, surface immediately
                     if "401" in err or "unauthorized" in err or "invalid_api_key" in err or "api key" in err:
                         cognitive_fail += 1
                         if cognitive_fail == 1:
-                            print(f"    [{thread}] ⚠️  FATAL: {first_error[:200]}", flush=True)
+                            print(f"    [{thread}] ⚠️  FATAL: {first_error_msg[:200]}", flush=True)
                             print(f"    [{thread}] ⚠️  Check MENTEDB_LLM_API_KEY and MENTEDB_LLM_PROVIDER", flush=True)
                         break
                     # Model not found
                     if "404" in err or "not found" in err or "does not exist" in err:
                         cognitive_fail += 1
                         if cognitive_fail == 1:
-                            print(f"    [{thread}] ⚠️  MODEL ERROR: {first_error[:200]}", flush=True)
+                            print(f"    [{thread}] ⚠️  MODEL ERROR: {first_error_msg[:200]}", flush=True)
                         break
                     if attempt < max_retries - 1 and ("connection" in err or "rate" in err or "timeout" in err or "overloaded" in err or "529" in err or "503" in err):
-                        wait = (attempt + 1) * 5
-                        time.sleep(wait)
+                        time.sleep((attempt + 1) * 5)
                     else:
                         cognitive_fail += 1
-                        # Show first error to help debug
                         if cognitive_fail == 1:
-                            print(f"    [{thread}] ⚠️  First extraction error: {first_error[:200]}", flush=True)
+                            print(f"    [{thread}] ⚠️  First extraction error: {first_error_msg[:200]}", flush=True)
                         break
 
             if (i + 1) % 10 == 0 or i == total - 1:
                 print(f"    [{thread}] progress {i+1}/{total} (cognitive: {cognitive_ok} ok, {cognitive_fail} fallback)", flush=True)
-
-            # Also store the raw session for retrieval coverage
-            mid = db.store(text, memory_type="episodic",
-                          tags=[f"date:{date}", f"session:{i}"],
-                          created_at=ts)
-            memory_ids.append(mid)
         else:
             # Baseline: raw session storage only
             tags = [f"date:{date}", f"session:{i}"]
@@ -271,9 +261,11 @@ def run_benchmark(variant="s", top_k=20, limit=None, offset=0, resume_from=None,
     embedding_api_key = os.environ.get("OPENAI_API_KEY", "")
     embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
 
-    # Auto detect embedding provider: use OpenAI if key available, else hash
+    # Default to hash embeddings (local, instant) — BM25 hybrid search handles
+    # text matching. OpenAI embeddings add ~15 API calls per session which makes
+    # the benchmark extremely slow. Set EMBEDDING_PROVIDER=openai to override.
     if not embedding_provider:
-        embedding_provider = "openai" if embedding_api_key else "hash"
+        embedding_provider = "hash"
 
     # Detect LLM provider for cognitive ingestion
     cognitive_provider = None
