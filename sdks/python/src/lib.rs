@@ -779,21 +779,19 @@ impl MenteDB {
                 let synth_prompt = format!(
                     "Question: {}\n\n\
                      Evidence from memory:\n{}\n\n\
-                     Analyze the evidence to answer the question. For each distinct candidate item:\n\
-                     1. State what it is\n\
-                     2. Cite the key evidence\n\
-                     3. Determine its CURRENT STATUS based on evidence\n\
-                     4. Is there follow-up evidence confirming or contradicting?\n\
-                     5. Based on the question's criteria, should it be counted?\n\n\
-                     CRITICAL PRINCIPLE: Intentions and plans do NOT change reality.\n\
-                     - \"thinking of selling\" / \"planning to donate\" / \"considering getting rid of\" = STILL POSSESSES\n\
-                     - \"planning to buy\" / \"considering purchasing\" / \"want to get\" = DOES NOT YET POSSESS\n\
-                     - Only COMPLETED actions change status: \"sold\", \"donated\", \"gave away\", \"bought\", \"received\"\n\n\
-                     When genuinely ambiguous, INCLUDE the item — present more evidence rather than silently exclude.\n\
-                     After analysis, state the final count and list all qualifying items with key details.",
+                     Answer the question by listing every qualifying item. Think like a human recalling from memory:\n\
+                     - Read through ALL the evidence\n\
+                     - Identify every distinct item relevant to the question\n\
+                     - For each item, state it clearly with key details (dates, amounts, names)\n\
+                     - Be definitive: state the final count confidently\n\n\
+                     Important distinctions:\n\
+                     - Items the user CURRENTLY HAS (even if planning to sell/donate) = count them\n\
+                     - Items the user is CONSIDERING getting (planning to buy, thinking of trying) = do NOT count\n\
+                     - Items belonging to someone else = do NOT count\n\n\
+                     Format: numbered list of qualifying items, then state the total.",
                     query, evidence
                 );
-                let synth_system = "You are an evidence-based analyst. Evaluate each item's status using only completed actions as proof of state changes. Intentions and plans don't change reality. Completeness is critical — never silently exclude items.";
+                let synth_system = "You recall and organize facts from memory evidence. Be thorough — list every qualifying item. Be precise — don't count items the user only plans to acquire or that belong to others.";
 
                 match rt.block_on(http_provider.call_text_with_retry(&synth_prompt, synth_system)) {
                     Ok(synthesis) => {
