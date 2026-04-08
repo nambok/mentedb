@@ -313,10 +313,17 @@ impl MenteDB {
     }
 
     /// Expanded search: uses the engine's LLM to decompose a query into
-    /// sub-queries, then runs multi-query RRF search with optional time filtering.
+    /// sub-queries, then runs adaptive multi-pass retrieval with escalating K.
     ///
-    /// This is the engine-native way to get broad recall — the LLM call
-    /// happens inside the engine, not in the benchmark or application layer.
+    /// Pass 1 (K=10): LLM query expansion + hybrid vector/BM25 search
+    /// Pass 2 (K=30): Direct text search with original query for keyword coverage
+    /// Pass 3 (K=50): LLM-extracted key nouns for incidental mention recall
+    /// Pass 4 (K=100, counting only): Exhaustive BM25 sweep with LLM-generated
+    ///   category synonyms — catches long-tail mentions that similarity misses
+    ///
+    /// All passes merge via RRF (Reciprocal Rank Fusion), so results that
+    /// appear in multiple strategies rank highest. This mirrors human memory:
+    /// instant recall → active search → deep dig → exhaustive category scan.
     #[pyo3(signature = (query, k=10, provider=None, tags=None, before=None))]
     fn search_expanded(
         &mut self,
@@ -330,19 +337,48 @@ impl MenteDB {
             PyRuntimeError::new_err("database is closed")
         })?;
 
-        // Build LLM config for query expansion
         let config = build_extraction_config_from_env(provider)?;
         let http_provider = HttpExtractionProvider::new(config).map_err(to_pyerr)?;
 
-        // Expand query via LLM
         let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
+
+        let debug = std::env::var("MENTEDB_DEBUG").is_ok();
+
+        // Adaptive K values for escalating retrieval depth
+        let k1 = std::cmp::min(k, 10);  // instant recall
+        let k2 = std::cmp::min(k * 3, 30); // active search
+        let k3 = std::cmp::min(k * 5, 50); // deep dig
+
+        let tag_strs: Option<Vec<&str>> = tags.as_ref().map(|t| t.iter().map(|s| s.as_str()).collect());
+        let tag_refs: Option<&[&str]> = tag_strs.as_deref();
+        let time_range = before.map(|b| (0u64, b));
+
+        // --- Pass 1: LLM query expansion + hybrid search (instant recall) ---
         let sub_queries = rt
             .block_on(http_provider.expand_query(query))
             .unwrap_or_default();
 
-        // Build embedding list: original query + sub-queries
         let mut all_queries = vec![query.to_string()];
-        all_queries.extend(sub_queries);
+        // Detect counting intent and extract category keywords (two-tier)
+        let mut item_keywords: Option<String> = None;
+        let mut broad_keywords: Option<String> = None;
+        let mut is_counting = false;
+        for sq in &sub_queries {
+            if sq.starts_with("ITEM_KEYWORDS:") {
+                item_keywords = Some(sq.trim_start_matches("ITEM_KEYWORDS:").trim().to_string());
+            } else if sq.starts_with("BROAD_KEYWORDS:") {
+                broad_keywords = Some(sq.trim_start_matches("BROAD_KEYWORDS:").trim().to_string());
+            } else if sq.starts_with("KEYWORDS:") {
+                // Legacy fallback — treat all as item keywords
+                item_keywords = Some(sq.trim_start_matches("KEYWORDS:").trim().to_string());
+            } else if sq.eq_ignore_ascii_case("COUNTING") {
+                is_counting = true;
+            } else {
+                all_queries.push(sq.clone());
+            }
+        }
+        if debug { eprintln!("[search_expanded] is_counting={}, item_kw={:?}, broad_kw={:?}",
+            is_counting, item_keywords, broad_keywords); }
 
         let mut embeddings = Vec::with_capacity(all_queries.len());
         for q in &all_queries {
@@ -354,17 +390,443 @@ impl MenteDB {
             embeddings.push(emb);
         }
 
-        let tag_strs: Option<Vec<&str>> = tags.as_ref().map(|t| t.iter().map(|s| s.as_str()).collect());
-        let tag_refs: Option<&[&str]> = tag_strs.as_deref();
-        let time_range = before.map(|b| (0u64, b));
+        let pass1_hits = db.recall_hybrid_multi(
+            &embeddings, Some(&all_queries), k1, tag_refs, time_range
+        ).map_err(to_pyerr)?;
 
-        let hits = db.recall_hybrid_multi(&embeddings, Some(&all_queries), k, tag_refs, time_range).map_err(to_pyerr)?;
-        Ok(hits
+        // --- Pass 2: Direct text search with original query (active search) ---
+        // BM25 keyword matching catches literal terms that semantic search misses
+        let query_emb = if let Some(ref embedder) = self.embedder {
+            embedder.embed(query).map_err(to_pyerr)?
+        } else {
+            hash_embedding(query, 384)
+        };
+        let pass2_hits = db.recall_hybrid_at(
+            &query_emb, Some(query), k2,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64,
+            tag_refs, time_range
+        ).map_err(to_pyerr)?;
+
+        // --- Pass 3: LLM-extracted key nouns for incidental mentions (deep dig) ---
+        let key_nouns_prompt = format!(
+            "Extract the 2-3 most important nouns from this question. \
+             Return ONLY the nouns separated by spaces, nothing else.\n\
+             Question: {}", query
+        );
+        let noun_system = "You extract key nouns from questions. Return only nouns, space-separated.";
+        let nouns = rt
+            .block_on(http_provider.call_text_with_retry(&key_nouns_prompt, noun_system))
+            .unwrap_or_default();
+
+        let pass3_hits = if !nouns.trim().is_empty() {
+            let noun_emb = if let Some(ref embedder) = self.embedder {
+                embedder.embed(nouns.trim()).map_err(to_pyerr)?
+            } else {
+                hash_embedding(nouns.trim(), 384)
+            };
+            db.recall_hybrid_at(
+                &noun_emb, Some(nouns.trim()), k3,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u64,
+                tag_refs, time_range
+            ).map_err(to_pyerr)?
+        } else {
+            Vec::new()
+        };
+
+        // --- Pass 4: Counting sweep (only for counting/aggregation queries) ---
+        // Two-tier individual keyword search. Each keyword gets its own hybrid search
+        // to avoid signal dilution. Item keywords (specific subtypes) get full RRF weight;
+        // broad keywords (category terms) get reduced weight to prevent noise boosting.
+        let mut pass4_item_hits: Vec<(mentedb_core::types::MemoryId, f32)> = Vec::new();
+        let mut pass4_broad_hits: Vec<(mentedb_core::types::MemoryId, f32)> = Vec::new();
+
+        if is_counting {
+            let k4_per = 5; // results per keyword — small but sufficient
+
+            // Search each item keyword individually (specific subtypes)
+            if let Some(ref kw_str) = item_keywords {
+                let terms: Vec<&str> = kw_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                if debug { eprintln!("[pass4] Searching {} item keywords individually", terms.len()); }
+                for term in &terms {
+                    let kw_emb = if let Some(ref embedder) = self.embedder {
+                        embedder.embed(term).map_err(to_pyerr)?
+                    } else {
+                        hash_embedding(term, 384)
+                    };
+                    let hits = db.recall_hybrid_at(
+                        &kw_emb, Some(term), k4_per,
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_micros() as u64,
+                        tag_refs, time_range
+                    ).map_err(to_pyerr)?;
+                    pass4_item_hits.extend(hits);
+                }
+            }
+
+            // Search each broad keyword individually (category terms)
+            if let Some(ref kw_str) = broad_keywords {
+                let terms: Vec<&str> = kw_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                if debug { eprintln!("[pass4] Searching {} broad keywords individually", terms.len()); }
+                for term in &terms {
+                    let kw_emb = if let Some(ref embedder) = self.embedder {
+                        embedder.embed(term).map_err(to_pyerr)?
+                    } else {
+                        hash_embedding(term, 384)
+                    };
+                    let hits = db.recall_hybrid_at(
+                        &kw_emb, Some(term), k4_per,
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_micros() as u64,
+                        tag_refs, time_range
+                    ).map_err(to_pyerr)?;
+                    pass4_broad_hits.extend(hits);
+                }
+            }
+        }
+
+        // --- Merge all passes with RRF ---
+        use std::collections::HashMap;
+        let rrf_k: f32 = 60.0;
+        let mut rrf_scores: HashMap<String, f32> = HashMap::new();
+
+        for (rank, (id, _)) in pass1_hits.iter().enumerate() {
+            *rrf_scores.entry(id.to_string()).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
+        }
+        for (rank, (id, _)) in pass2_hits.iter().enumerate() {
+            *rrf_scores.entry(id.to_string()).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
+        }
+        for (rank, (id, _)) in pass3_hits.iter().enumerate() {
+            *rrf_scores.entry(id.to_string()).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
+        }
+        // Pass 4 item keywords: full weight (specific countable subtypes)
+        for (rank, (id, _)) in pass4_item_hits.iter().enumerate() {
+            *rrf_scores.entry(id.to_string()).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
+        }
+        // Pass 4 broad keywords: reduced weight (noisy category terms)
+        for (rank, (id, _)) in pass4_broad_hits.iter().enumerate() {
+            *rrf_scores.entry(id.to_string()).or_insert(0.0) += 0.4 / (rrf_k + rank as f32);
+        }
+
+        let mut merged: Vec<(String, f32)> = rrf_scores.into_iter().collect();
+        merged.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Counting queries need more results to ensure completeness
+        let final_k = if is_counting { std::cmp::max(k, 80) } else { k };
+        merged.truncate(final_k);
+
+        // --- Entity graph expansion ---
+        // For entity nodes in the results, traverse PartOf edges to include
+        // related attribute memories (e.g., entity MAX → breed: Golden Retriever)
+        let mut expanded: Vec<(String, f32)> = Vec::with_capacity(merged.len() * 2);
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (id_str, score) in &merged {
+            if seen.contains(id_str) { continue; }
+            seen.insert(id_str.clone());
+            expanded.push((id_str.clone(), *score));
+
+            // Check if this is an entity node — if so, traverse graph
+            if let Ok(mem_id) = parse_memory_id(id_str) {
+                if let Ok(node) = db.get_memory(mem_id) {
+                    let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
+                    if is_entity {
+                        // Get subgraph (depth 1) to find PartOf neighbors
+                        let (neighbor_ids, _edges) = db.graph().get_context_subgraph(mem_id, 1);
+                        for nid in neighbor_ids {
+                            let nid_str = nid.to_string();
+                            if !seen.contains(&nid_str) {
+                                seen.insert(nid_str.clone());
+                                // Entity neighbors get a slightly lower score
+                                expanded.push((nid_str, score * 0.9));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Re-sort after expansion and truncate
+        expanded.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        expanded.truncate(final_k);
+
+        // --- Pass 5: Iterative gap analysis (counting queries only) ---
+        // Inspired by Iter-RetGen (2023) and IRCoT (ACL 2023): use Round 1 results
+        // to inform a targeted Round 2 retrieval. The LLM examines what was found
+        // and generates specific keywords for items that might be missing.
+        if is_counting && !expanded.is_empty() {
+            // Collect top-20 memory contents for the LLM to analyze
+            let gap_limit = std::cmp::min(expanded.len(), 20);
+            let mut found_items: Vec<String> = Vec::new();
+            for (id_str, _) in expanded.iter().take(gap_limit) {
+                if let Ok(mem_id) = parse_memory_id(id_str) {
+                    if let Ok(node) = db.get_memory(mem_id) {
+                        found_items.push(node.content.clone());
+                    }
+                }
+            }
+
+            if !found_items.is_empty() {
+                let items_text = found_items.iter().enumerate()
+                    .map(|(i, c)| {
+                        let snip = &c[..std::cmp::min(c.len(), 200)];
+                        format!("[{}] {}", i, snip)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let gap_prompt = format!(
+                    "Question: {}\n\n\
+                     Here are the top memories found so far:\n{}\n\n\
+                     Based on these results, what specific items or instances might be MISSING \
+                     that would be needed for a complete answer?\n\
+                     Return a JSON object with:\n\
+                     - \"found\": brief list of distinct items already found\n\
+                     - \"gap_keywords\": comma-separated specific search terms for items that \
+                       might exist but weren't found yet (be specific — use actual item names/types, \
+                       not categories)\n\n\
+                     If the results look complete, return empty gap_keywords.\n\
+                     Example: {{\"found\": [\"emerald earrings\", \"engagement ring\"], \
+                     \"gap_keywords\": \"necklace, bracelet, pendant, brooch, anklet\"}}",
+                    query, items_text
+                );
+                let gap_system = "You analyze search results for completeness. Identify what specific items might be missing. Return JSON only.";
+
+                match rt.block_on(http_provider.call_with_retry(&gap_prompt, gap_system)) {
+                    Ok(response) => {
+                        let cleaned = response.trim().trim_start_matches("```json").trim_end_matches("```").trim();
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(cleaned) {
+                            if let Some(gap_kw) = json.get("gap_keywords").and_then(|v| v.as_str()) {
+                                let gap_terms: Vec<&str> = gap_kw.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                                if debug {
+                                    let found = json.get("found").map(|v| v.to_string()).unwrap_or_default();
+                                    eprintln!("[pass5-gap] Found: {}", found);
+                                    eprintln!("[pass5-gap] Gap keywords: {:?}", gap_terms);
+                                }
+
+                                if !gap_terms.is_empty() {
+                                    // Round 2: search each gap keyword individually
+                                    let mut pass5_hits: Vec<(String, f32)> = Vec::new();
+                                    let k5_per = 5;
+                                    for term in &gap_terms {
+                                        let kw_emb = if let Some(ref embedder) = self.embedder {
+                                            embedder.embed(term).map_err(to_pyerr)?
+                                        } else {
+                                            hash_embedding(term, 384)
+                                        };
+                                        let hits = db.recall_hybrid_at(
+                                            &kw_emb, Some(term), k5_per,
+                                            std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_micros() as u64,
+                                            tag_refs, time_range
+                                        ).map_err(to_pyerr)?;
+                                        for (id, score) in hits {
+                                            let id_str = id.to_string();
+                                            pass5_hits.push((id_str, score));
+                                        }
+                                    }
+
+                                    if debug { eprintln!("[pass5-gap] Round 2 retrieved {} hits from {} gap keywords", pass5_hits.len(), gap_terms.len()); }
+
+                                    // Merge Round 2 into expanded results with full RRF weight
+                                    // (these are targeted, high-signal searches)
+                                    let mut existing_scores: HashMap<String, f32> = expanded.iter()
+                                        .map(|(id, s)| (id.clone(), *s))
+                                        .collect();
+                                    for (rank, (id_str, _)) in pass5_hits.iter().enumerate() {
+                                        let rrf_contrib = 1.0 / (rrf_k + rank as f32);
+                                        *existing_scores.entry(id_str.clone()).or_insert(0.0) += rrf_contrib;
+                                    }
+
+                                    // Rebuild expanded from merged scores
+                                    expanded = existing_scores.into_iter().collect();
+                                    expanded.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                                    expanded.truncate(final_k);
+                                }
+                            }
+                        } else if debug {
+                            eprintln!("[pass5-gap] Failed to parse gap analysis response: {}", cleaned);
+                        }
+                    }
+                    Err(e) => if debug { eprintln!("[pass5-gap] LLM call failed: {e}"); },
+                }
+            }
+        }
+
+        // --- Cognitive re-ranking + reconstructive synthesis for counting queries ---
+        // Two-phase approach inspired by RankGPT (EMNLP 2023) and Chain-of-Noting:
+        //
+        // Phase 1 (Re-ranking): Score memories for relevance. DOES NOT modify retrieval
+        //   scores — only used to select what goes into synthesis. This avoids the
+        //   "coin flip" problem where LLM non-determinism buries relevant results.
+        //
+        // Phase 2 (Synthesis): Feed a UNION of re-ranker picks + retrieval top-K to
+        //   a synthesis LLM that produces a structured summary. This summary becomes
+        //   position [0] in the results — the reader's primary evidence.
+        //
+        // The original retrieval order is preserved for positions [1..N].
+        if is_counting && !expanded.is_empty() {
+            // --- Phase 1: Score memories for synthesis selection ---
+            if debug { eprintln!("[rerank] Starting cognitive re-ranking for {} results", expanded.len()); }
+            let rerank_limit = std::cmp::min(expanded.len(), 30);
+            let mut memory_contents: Vec<(String, String)> = Vec::new(); // (id, content)
+            for (id_str, _score) in expanded.iter().take(rerank_limit) {
+                if let Ok(mem_id) = parse_memory_id(id_str) {
+                    if let Ok(node) = db.get_memory(mem_id) {
+                        memory_contents.push((id_str.clone(), node.content.clone()));
+                    }
+                }
+            }
+
+            // Collect IDs that the re-ranker considers relevant (score >= 1)
+            let mut reranker_picks: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+            if !memory_contents.is_empty() {
+                let mut memories_text = String::new();
+                for (i, (_id, content)) in memory_contents.iter().enumerate() {
+                    memories_text.push_str(&format!("[{}] {}\n", i, content));
+                }
+
+                let rerank_prompt = format!(
+                    "Question: {}\n\n\
+                     Memories:\n{}\n\
+                     Score each memory 0-10 for how relevant it is to answering the question.\n\
+                     Think broadly — any memory that mentions a countable item, fact, or detail \
+                     that could contribute to the answer should score at least 5.\n\
+                     A score of 10 means this memory directly mentions something that should be counted.\n\
+                     A score of 0 means it is clearly unrelated.\n\n\
+                     Return ONLY a JSON array of scores in order, e.g. [8, 2, 10, 0, ...]",
+                    query, memories_text
+                );
+                let rerank_system = "You are a relevance scorer. Return ONLY a JSON array of integer scores 0-10. No explanation.";
+
+                match rt.block_on(http_provider.call_text_with_retry(&rerank_prompt, rerank_system)) {
+                    Ok(response) => {
+                        if debug { eprintln!("[rerank] LLM response: {}", response.trim()); }
+                        let trimmed = response.trim();
+                        let array_str = if let Some(start) = trimmed.find('[') {
+                            if let Some(end) = trimmed.rfind(']') {
+                                &trimmed[start..=end]
+                            } else { trimmed }
+                        } else { trimmed };
+
+                        match serde_json::from_str::<Vec<f32>>(array_str) {
+                            Ok(scores) => {
+                                if debug { eprintln!("[rerank] Parsed {} scores: {:?}", scores.len(), scores); }
+                                for (i, (id, content)) in memory_contents.iter().enumerate() {
+                                    let relevance = scores.get(i).copied().unwrap_or(0.0);
+                                    let snip = &content[..std::cmp::min(content.len(), 80)];
+                                    if debug { eprintln!("[rerank]   [{}] score={} | {}", i, relevance, snip); }
+                                    if relevance >= 1.0 {
+                                        reranker_picks.insert(id.clone());
+                                    }
+                                }
+                                if debug { eprintln!("[rerank] Selected {} memories for synthesis", reranker_picks.len()); }
+                            }
+                            Err(e) => if debug { eprintln!("[rerank] Failed to parse scores: {e}"); },
+                        }
+                    }
+                    Err(e) => if debug { eprintln!("[rerank] LLM call failed: {e}"); },
+                }
+            }
+
+            // --- Phase 2: Reconstructive synthesis ---
+            // Feed UNION of: (a) re-ranker picks + (b) top-K by original retrieval score.
+            // This ensures nothing is lost even if the re-ranker misscores items.
+            let retrieval_top_k = std::cmp::min(expanded.len(), 20);
+            let mut synth_ids: Vec<String> = Vec::new();
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+            // First: add all re-ranker picks (scored >= 1)
+            for (id_str, _score) in expanded.iter() {
+                if reranker_picks.contains(id_str) && seen.insert(id_str.clone()) {
+                    synth_ids.push(id_str.clone());
+                }
+            }
+            // Then: add top-K by retrieval score as safety net
+            for (id_str, _score) in expanded.iter().take(retrieval_top_k) {
+                if seen.insert(id_str.clone()) {
+                    synth_ids.push(id_str.clone());
+                }
+            }
+
+            if debug { eprintln!("[synthesis] Feeding {} memories ({} from reranker + {} from retrieval top-{})",
+                synth_ids.len(), reranker_picks.len(), synth_ids.len() - reranker_picks.len(), retrieval_top_k); }
+
+            let mut synth_contents: Vec<String> = Vec::new();
+            for id_str in &synth_ids {
+                if let Ok(mem_id) = parse_memory_id(id_str) {
+                    if let Ok(node) = db.get_memory(mem_id) {
+                        synth_contents.push(node.content.clone());
+                    }
+                }
+            }
+
+            if !synth_contents.is_empty() {
+                let evidence = synth_contents.iter().enumerate()
+                    .map(|(i, c)| format!("[{}] {}", i, c))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let synth_prompt = format!(
+                    "Question: {}\n\n\
+                     Evidence from memory:\n{}\n\n\
+                     Analyze the evidence to answer the question. For each distinct candidate item:\n\
+                     1. State what it is\n\
+                     2. Cite the key evidence\n\
+                     3. Determine its CURRENT STATUS based on evidence\n\
+                     4. Is there follow-up evidence confirming or contradicting?\n\
+                     5. Based on the question's criteria, should it be counted?\n\n\
+                     CRITICAL PRINCIPLE: Intentions and plans do NOT change reality.\n\
+                     - \"thinking of selling\" / \"planning to donate\" / \"considering getting rid of\" = STILL POSSESSES\n\
+                     - \"planning to buy\" / \"considering purchasing\" / \"want to get\" = DOES NOT YET POSSESS\n\
+                     - Only COMPLETED actions change status: \"sold\", \"donated\", \"gave away\", \"bought\", \"received\"\n\n\
+                     When genuinely ambiguous, INCLUDE the item — present more evidence rather than silently exclude.\n\
+                     After analysis, state the final count and list all qualifying items with key details.",
+                    query, evidence
+                );
+                let synth_system = "You are an evidence-based analyst. Evaluate each item's status using only completed actions as proof of state changes. Intentions and plans don't change reality. Completeness is critical — never silently exclude items.";
+
+                match rt.block_on(http_provider.call_text_with_retry(&synth_prompt, synth_system)) {
+                    Ok(synthesis) => {
+                        let synthesis_text = synthesis.trim().to_string();
+                        if debug { eprintln!("[synthesis] Generated: {}", &synthesis_text[..std::cmp::min(synthesis_text.len(), 200)]); }
+
+                        let synth_emb = if let Some(ref embedder) = self.embedder {
+                            embedder.embed(&synthesis_text).map_err(to_pyerr)?
+                        } else {
+                            hash_embedding(&synthesis_text, 384)
+                        };
+                        let mut synth_node = MemoryNode::new(
+                            mentedb_core::types::AgentId::new(),
+                            MemoryType::Semantic,
+                            synthesis_text,
+                            synth_emb,
+                        );
+                        synth_node.tags = vec!["synthesis:true".to_string(), "ephemeral:true".to_string()];
+                        let synth_id = synth_node.id;
+                        db.store(synth_node).map_err(to_pyerr)?;
+
+                        // Prepend synthesis as first result — original order preserved after it
+                        let top_score = expanded.first().map(|(_, s)| *s).unwrap_or(1.0);
+                        expanded.insert(0, (synth_id.to_string(), top_score * 1.5));
+                    }
+                    Err(e) => if debug { eprintln!("[synthesis] LLM call failed: {e}"); },
+                }
+            }
+        }
+
+        Ok(expanded
             .into_iter()
-            .map(|(id, score)| SearchResult {
-                id: id.to_string(),
-                score,
-            })
+            .map(|(id, score)| SearchResult { id, score })
             .collect())
     }
 
@@ -462,27 +924,29 @@ impl MenteDB {
             None => AgentId::new(),
         };
 
-        let mut stored_ids = Vec::new();
+        // Collect all texts to embed (extracted memories + user turns)
+        let mut embed_texts: Vec<String> = Vec::new();
+        struct MemEntry {
+            content: String,
+            mt: MemoryType,
+            tags: Vec<String>,
+            salience: f32,
+            confidence: f32,
+        }
+        let mut entries: Vec<MemEntry> = Vec::new();
+
         for memory in &quality_passed {
             let mt = map_extraction_type_to_memory_type(&memory.memory_type);
-            // Fact-augmented embedding: include entities and tags in the vector
-            let embed_text = memory.embedding_key();
-            let emb = if let Some(ref embedder) = self.embedder {
-                embedder.embed(&embed_text).map_err(to_pyerr)?
-            } else {
-                hash_embedding(&embed_text, 384)
-            };
-            let mut node = MemoryNode::new(aid, mt, memory.content.clone(), emb);
-            node.tags = memory.tags.clone();
-            node.salience = memory.confidence;
-            node.confidence = memory.confidence;
-            let id = node.id;
-            db.store(node).map_err(to_pyerr)?;
-            stored_ids.push(id.to_string());
+            embed_texts.push(memory.embedding_key());
+            entries.push(MemEntry {
+                content: memory.content.clone(),
+                mt,
+                tags: memory.tags.clone(),
+                salience: memory.confidence,
+                confidence: memory.confidence,
+            });
         }
 
-        // Turn-level decomposition: store individual user turns as episodic memories
-        // for finer-grained retrieval alongside the LLM-extracted facts.
         for line in conversation.lines() {
             let trimmed = line.trim();
             let user_content = if let Some(rest) = trimmed.strip_prefix("User:") {
@@ -492,27 +956,43 @@ impl MenteDB {
             } else {
                 None
             };
-
             if let Some(content) = user_content {
                 if content.len() > 30 {
-                    let emb = if let Some(ref embedder) = self.embedder {
-                        embedder.embed(content).map_err(to_pyerr)?
-                    } else {
-                        hash_embedding(content, 384)
-                    };
-                    let mut node = MemoryNode::new(
-                        aid,
-                        MemoryType::Episodic,
-                        content.to_string(),
-                        emb,
-                    );
-                    node.tags = vec!["turn".to_string()];
-                    node.salience = 0.4;
-                    let id = node.id;
-                    db.store(node).map_err(to_pyerr)?;
-                    stored_ids.push(id.to_string());
+                    embed_texts.push(content.to_string());
+                    entries.push(MemEntry {
+                        content: content.to_string(),
+                        mt: MemoryType::Episodic,
+                        tags: vec!["turn".to_string()],
+                        salience: 0.4,
+                        confidence: 0.4,
+                    });
                 }
             }
+        }
+
+        // Batch embed in chunks (OpenAI has payload limits)
+        let embed_refs: Vec<&str> = embed_texts.iter().map(|s| s.as_str()).collect();
+        let embeddings = if let Some(ref embedder) = self.embedder {
+            let mut all_embs = Vec::with_capacity(embed_refs.len());
+            for chunk in embed_refs.chunks(100) {
+                let mut batch = embedder.embed_batch(chunk).map_err(to_pyerr)?;
+                all_embs.append(&mut batch);
+            }
+            all_embs
+        } else {
+            embed_refs.iter().map(|k| hash_embedding(k, 384)).collect()
+        };
+
+        // Store all memories with pre-computed embeddings
+        let mut stored_ids = Vec::with_capacity(entries.len());
+        for (entry, emb) in entries.into_iter().zip(embeddings.into_iter()) {
+            let mut node = MemoryNode::new(aid, entry.mt, entry.content, emb);
+            node.tags = entry.tags;
+            node.salience = entry.salience;
+            node.confidence = entry.confidence;
+            let id = node.id;
+            db.store(node).map_err(to_pyerr)?;
+            stored_ids.push(id.to_string());
         }
 
         Python::with_gil(|py| {
@@ -521,6 +1001,319 @@ impl MenteDB {
             dict.set_item("rejected_low_quality", rejected_low_quality)?;
             dict.set_item("rejected_duplicate", 0)?;
             dict.set_item("contradictions", 0)?;
+            dict.set_item("stored_ids", stored_ids)?;
+            Ok(dict.into())
+        })
+    }
+
+    /// Extract memories from a conversation without storing them.
+    /// Returns a list of dicts with content, memory_type, tags, confidence.
+    /// Use with store_extracted() for parallel extraction workflows.
+    #[pyo3(signature = (conversation, provider=None))]
+    fn extract(
+        &self,
+        py: Python<'_>,
+        conversation: String,
+        provider: Option<String>,
+    ) -> PyResult<PyObject> {
+        let config = build_extraction_config_from_env(provider.as_deref())?;
+        let http_provider =
+            HttpExtractionProvider::new(config.clone()).map_err(to_pyerr)?;
+        let pipeline = ExtractionPipeline::new(http_provider, config.clone());
+
+        // Release the GIL during the HTTP call so other threads can run
+        let extraction_result = py.allow_threads(|| {
+            let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
+            let result = rt
+                .block_on(pipeline.extract_full(&conversation))
+                .map_err(to_pyerr)?;
+            Ok::<_, PyErr>(result)
+        })?;
+
+        let quality_passed = pipeline.filter_quality(&extraction_result.memories);
+
+        let results = pyo3::types::PyList::empty(py);
+        for memory in &quality_passed {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("content", &memory.content)?;
+            dict.set_item("memory_type", &memory.memory_type)?;
+            dict.set_item("tags", &memory.tags)?;
+            dict.set_item("confidence", memory.confidence)?;
+            dict.set_item("embedding_key", memory.embedding_key())?;
+            results.append(dict)?;
+        }
+
+        // Include extracted entities as special dicts with _entity marker
+        for entity in &extraction_result.entities {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("content", entity.to_content())?;
+            dict.set_item("memory_type", "entity")?;
+            dict.set_item("tags", vec![
+                format!("entity_type:{}", entity.entity_type),
+                format!("entity_name:{}", entity.name),
+            ])?;
+            dict.set_item("confidence", 0.85)?;
+            dict.set_item("embedding_key", entity.embedding_key())?;
+            // Store entity attributes as a nested dict
+            let attrs = pyo3::types::PyDict::new(py);
+            for (k, v) in &entity.attributes {
+                attrs.set_item(k, v)?;
+            }
+            dict.set_item("entity_attributes", attrs)?;
+            dict.set_item("entity_name", &entity.name)?;
+            dict.set_item("entity_type", &entity.entity_type)?;
+            results.append(dict)?;
+        }
+        // Also include user turns for episodic storage
+        for line in conversation.lines() {
+            let trimmed = line.trim();
+            let user_content = if let Some(rest) = trimmed.strip_prefix("User:") {
+                Some(rest.trim())
+            } else if let Some(rest) = trimmed.strip_prefix("user:") {
+                Some(rest.trim())
+            } else {
+                None
+            };
+            if let Some(content) = user_content {
+                if content.len() > 30 {
+                    let dict = pyo3::types::PyDict::new(py);
+                    dict.set_item("content", content)?;
+                    dict.set_item("memory_type", "episodic")?;
+                    let tags: Vec<String> = vec!["turn".to_string()];
+                    dict.set_item("tags", tags)?;
+                    dict.set_item("confidence", 0.4)?;
+                    dict.set_item("embedding_key", content)?;
+                    results.append(dict)?;
+                }
+            }
+        }
+        Ok(results.into())
+    }
+
+    /// Store pre-extracted memories (from extract()) into the database.
+    /// Uses batch embedding (1 API call for all memories) for speed.
+    #[pyo3(signature = (memories, agent_id=None))]
+    fn store_extracted(
+        &mut self,
+        memories: Vec<Py<pyo3::types::PyDict>>,
+        agent_id: Option<&str>,
+    ) -> PyResult<PyObject> {
+        let db = self
+            .db
+            .as_mut()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+
+        let aid = match agent_id {
+            Some(s) => parse_agent_id(s)?,
+            None => AgentId::new(),
+        };
+
+        // Phase 1: Parse all dicts and collect embed keys
+        struct ParsedMemory {
+            content: String,
+            memory_type: String,
+            tags: Vec<String>,
+            confidence: f32,
+            embed_key: String,
+            // Entity-specific fields (None for regular memories)
+            entity_name: Option<String>,
+            entity_type: Option<String>,
+            entity_attributes: Option<std::collections::HashMap<String, String>>,
+        }
+        let mut parsed = Vec::with_capacity(memories.len());
+
+        Python::with_gil(|py| {
+            for mem_ref in &memories {
+                let mem_dict = mem_ref.bind(py);
+                let content: String = mem_dict.get_item("content")?
+                    .map(|v| v.extract())
+                    .transpose()?
+                    .unwrap_or_default();
+                let memory_type: String = mem_dict.get_item("memory_type")?
+                    .map(|v| v.extract())
+                    .transpose()?
+                    .unwrap_or_else(|| "semantic".to_string());
+                let tags: Vec<String> = mem_dict.get_item("tags")?
+                    .map(|v| v.extract())
+                    .transpose()?
+                    .unwrap_or_default();
+                let confidence: f32 = mem_dict.get_item("confidence")?
+                    .map(|v| v.extract())
+                    .transpose()?
+                    .unwrap_or(0.5);
+                let embed_key: String = mem_dict.get_item("embedding_key")?
+                    .map(|v| v.extract())
+                    .transpose()?
+                    .unwrap_or_else(|| content.clone());
+
+                // Parse entity-specific fields if present
+                let entity_name: Option<String> = mem_dict.get_item("entity_name")?
+                    .map(|v| v.extract())
+                    .transpose()?;
+                let entity_type: Option<String> = mem_dict.get_item("entity_type")?
+                    .map(|v| v.extract())
+                    .transpose()?;
+                let entity_attributes: Option<std::collections::HashMap<String, String>> =
+                    mem_dict.get_item("entity_attributes")?
+                        .map(|v| v.extract())
+                        .transpose()?;
+
+                parsed.push(ParsedMemory {
+                    content, memory_type, tags, confidence, embed_key,
+                    entity_name, entity_type, entity_attributes,
+                });
+            }
+            Ok::<_, PyErr>(())
+        })?;
+
+        if parsed.is_empty() {
+            return Python::with_gil(|py| {
+                let dict = pyo3::types::PyDict::new(py);
+                dict.set_item("stored_ids", Vec::<String>::new())?;
+                Ok(dict.into())
+            });
+        }
+
+        // Phase 2: Batch embed in chunks (OpenAI has payload limits)
+        let embed_keys: Vec<&str> = parsed.iter().map(|p| p.embed_key.as_str()).collect();
+        let embeddings = if let Some(ref embedder) = self.embedder {
+            let mut all_embs = Vec::with_capacity(embed_keys.len());
+            for chunk in embed_keys.chunks(100) {
+                let mut batch = embedder.embed_batch(chunk).map_err(to_pyerr)?;
+                all_embs.append(&mut batch);
+            }
+            all_embs
+        } else {
+            embed_keys.iter().map(|k| hash_embedding(k, 384)).collect()
+        };
+
+        // Phase 3: Store all memories with pre-computed embeddings.
+        // Entity memories get attributes populated and graph edges created.
+        // Entity resolution: merge attributes into existing entity if name+type match.
+        let mut stored_ids = Vec::with_capacity(parsed.len());
+        let mut entity_ids: Vec<(String, String, MemoryId)> = Vec::new(); // (name, type, id)
+
+        // Build an index of existing entity nodes for resolution
+        let mut existing_entities: std::collections::HashMap<String, MemoryId> = std::collections::HashMap::new();
+        for mid in db.memory_ids() {
+            if let Ok(node) = db.get_memory(mid) {
+                if node.tags.iter().any(|t| t.starts_with("entity_name:")) {
+                    let key = node.tags.iter()
+                        .filter(|t| t.starts_with("entity_name:") || t.starts_with("entity_type:"))
+                        .map(|t| t.to_lowercase())
+                        .collect::<Vec<_>>()
+                        .join("|");
+                    existing_entities.insert(key, mid);
+                }
+            }
+        }
+
+        for (mem, emb) in parsed.into_iter().zip(embeddings.into_iter()) {
+            let is_entity = mem.entity_name.is_some() && mem.entity_attributes.is_some();
+
+            // Entity resolution: check if this entity already exists
+            if is_entity {
+                let entity_key = vec![
+                    format!("entity_name:{}", mem.entity_name.as_ref().unwrap().to_lowercase()),
+                    format!("entity_type:{}", mem.entity_type.as_ref().unwrap_or(&"unknown".to_string()).to_lowercase()),
+                ].join("|");
+
+                if let Some(&existing_id) = existing_entities.get(&entity_key) {
+                    // Merge attributes into existing entity
+                    if let Ok(mut existing_node) = db.get_memory(existing_id) {
+                        if let Some(ref attrs) = mem.entity_attributes {
+                            for (k, v) in attrs {
+                                existing_node.attributes.insert(
+                                    k.clone(),
+                                    mentedb_core::memory::AttributeValue::String(v.clone()),
+                                );
+                            }
+                        }
+                        // Re-store the updated node
+                        let _ = db.store(existing_node);
+                        stored_ids.push(existing_id.to_string());
+                        entity_ids.push((
+                            mem.entity_name.unwrap_or_default(),
+                            mem.entity_type.unwrap_or_default(),
+                            existing_id,
+                        ));
+                        continue; // Skip creating a new node
+                    }
+                }
+            }
+
+            let mt = map_extraction_type_to_memory_type(&mem.memory_type);
+            let mut node = MemoryNode::new(aid, mt, mem.content, emb);
+            node.tags = mem.tags;
+            node.salience = mem.confidence;
+            node.confidence = mem.confidence;
+
+            // If this is an entity, populate its attributes
+            if let Some(ref attrs) = mem.entity_attributes {
+                for (k, v) in attrs {
+                    node.attributes.insert(
+                        k.clone(),
+                        mentedb_core::memory::AttributeValue::String(v.clone()),
+                    );
+                }
+                if let Some(ref name) = mem.entity_name {
+                    node.attributes.insert(
+                        "entity_name".to_string(),
+                        mentedb_core::memory::AttributeValue::String(name.clone()),
+                    );
+                }
+                if let Some(ref etype) = mem.entity_type {
+                    node.attributes.insert(
+                        "entity_type".to_string(),
+                        mentedb_core::memory::AttributeValue::String(etype.clone()),
+                    );
+                }
+            }
+
+            let id = node.id;
+            db.store(node).map_err(to_pyerr)?;
+            stored_ids.push(id.to_string());
+
+            // Track entity nodes for graph edge creation
+            if let (Some(name), Some(etype)) = (mem.entity_name, mem.entity_type) {
+                existing_entities.insert(
+                    vec![
+                        format!("entity_name:{}", name.to_lowercase()),
+                        format!("entity_type:{}", etype.to_lowercase()),
+                    ].join("|"),
+                    id,
+                );
+                entity_ids.push((name, etype, id));
+            }
+        }
+
+        // Phase 4: Create PartOf edges linking regular memories to their entities.
+        // For each entity, link all memories that mention it.
+        for (entity_name, _etype, entity_id) in &entity_ids {
+            let entity_name_lower = entity_name.to_lowercase();
+            for sid in &stored_ids {
+                let mem_id = parse_memory_id(sid)?;
+                if mem_id == *entity_id { continue; } // Don't self-link
+                // Check if this memory mentions the entity
+                if let Ok(mem_node) = db.get_memory(mem_id) {
+                    if mem_node.content.to_lowercase().contains(&entity_name_lower) {
+                        let edge = MemoryEdge {
+                            source: mem_id,
+                            target: *entity_id,
+                            edge_type: EdgeType::PartOf,
+                            weight: 0.8,
+                            created_at: now_us(),
+                            valid_from: None,
+                            valid_until: None,
+                        };
+                        let _ = db.relate(edge); // Best effort
+                    }
+                }
+            }
+        }
+
+        Python::with_gil(|py| {
+            let dict = pyo3::types::PyDict::new(py);
             dict.set_item("stored_ids", stored_ids)?;
             Ok(dict.into())
         })

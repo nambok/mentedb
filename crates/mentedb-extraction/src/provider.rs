@@ -51,21 +51,76 @@ impl HttpExtractionProvider {
 
     /// Expand a search query into multiple sub-queries via LLM.
     ///
-    /// Given a natural language question, extracts 2-3 search queries
-    /// targeting key entities, names, places, dates, and topics.
-    /// Returns the sub-queries (does NOT include the original).
+    /// Given a natural language question, identifies the expected answer type
+    /// and extracts 2-3 targeted search queries. The first line of the response
+    /// is the answer type (PLACE, DATE, NUMBER, NAME, PERSON, BRAND, etc.),
+    /// followed by the search queries.
+    ///
+    /// For counting/aggregation/comparison queries, also generates comprehensive
+    /// category synonyms for exhaustive BM25 sweep.
     pub async fn expand_query(&self, query: &str) -> Result<Vec<String>, ExtractionError> {
-        let system_prompt = "You extract search queries from questions. \
-            Return 2-3 short search queries, one per line, no numbering. \
-            Focus on key entities, names, places, dates, and topics.";
+        let system_prompt = "You help search a memory database. Given a question, return a JSON object with:\n\
+            - \"answer_type\": one of PLACE, DATE, TIME, NUMBER, NAME, PERSON, BRAND, ITEM, ACTIVITY, COUNTING, OTHER\n\
+            - \"queries\": array of 2-3 short search queries\n\
+            - For COUNTING only, also include:\n\
+              - \"item_keywords\": comma-separated specific subtypes/instances that would be individually counted\n\
+              - \"broad_keywords\": comma-separated category terms, action verbs, and general synonyms\n\n\
+            Use COUNTING when the question requires COMPLETENESS — counting, listing, aggregating, totaling, \
+            or comparing to find a superlative (most, least, best, worst, first, last, biggest, highest, lowest).\n\n\
+            The distinction matters:\n\
+            - item_keywords: specific things you would COUNT (types of the thing being asked about)\n\
+            - broad_keywords: general terms that help FIND memories but aren't counted themselves\n\n\
+            Examples:\n\
+            Q: \"Where do I take yoga classes?\"\n\
+            {\"answer_type\": \"PLACE\", \"queries\": [\"yoga studio name\", \"yoga class location\"]}\n\n\
+            Q: \"How many doctors did I visit?\"\n\
+            {\"answer_type\": \"COUNTING\", \"queries\": [\"doctor visits appointments\", \"medical specialist visits\"], \
+            \"item_keywords\": \"doctor, Dr., physician, specialist, dermatologist, cardiologist, dentist, surgeon, pediatrician, orthopedist, ophthalmologist\", \
+            \"broad_keywords\": \"medical, clinic, appointment, visit, diagnosed, prescribed, referred, checkup, exam\"}\n\n\
+            Q: \"Which platform did I gain the most followers on?\"\n\
+            {\"answer_type\": \"COUNTING\", \"queries\": [\"social media follower growth\", \"follower count increase\"], \
+            \"item_keywords\": \"TikTok, Instagram, Twitter, YouTube, Facebook, LinkedIn, Snapchat, Reddit, Twitch\", \
+            \"broad_keywords\": \"followers, follower count, gained, growth, platform, social media, increase, jumped, grew\"}";
         let result = self.call_with_retry(query, system_prompt).await?;
-        let queries: Vec<String> = result
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .take(3)
-            .collect();
-        Ok(queries)
+
+        // Parse JSON response (call_openai forces json_object response format)
+        let mut lines: Vec<String> = Vec::new();
+        let cleaned = result.trim().trim_start_matches("```json").trim_end_matches("```").trim();
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(cleaned) {
+            if let Some(answer_type) = json.get("answer_type").and_then(|v| v.as_str()) {
+                lines.push(answer_type.to_string());
+            }
+            if let Some(queries) = json.get("queries").and_then(|v| v.as_array()) {
+                for q in queries {
+                    if let Some(s) = q.as_str() {
+                        lines.push(s.to_string());
+                    }
+                }
+            }
+            if let Some(item_kw) = json.get("item_keywords").and_then(|v| v.as_str()) {
+                lines.push(format!("ITEM_KEYWORDS: {}", item_kw));
+            }
+            if let Some(broad_kw) = json.get("broad_keywords").and_then(|v| v.as_str()) {
+                lines.push(format!("BROAD_KEYWORDS: {}", broad_kw));
+            }
+            // Fallback: old single "keywords" field → treat all as item keywords
+            if let Some(keywords) = json.get("keywords").and_then(|v| v.as_str()) {
+                if json.get("item_keywords").is_none() {
+                    lines.push(format!("ITEM_KEYWORDS: {}", keywords));
+                }
+            }
+        } else {
+            // Fallback: parse as plain text lines
+            lines = result
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+        }
+        if std::env::var("MENTEDB_DEBUG").is_ok() {
+            eprintln!("[expand_query] input={:?} parsed={:?}", query, lines);
+        }
+        Ok(lines)
     }
 
     async fn call_openai(
@@ -76,6 +131,48 @@ impl HttpExtractionProvider {
         let body = serde_json::json!({
             "model": self.config.model,
             "response_format": { "type": "json_object" },
+            "messages": [
+                { "role": "system", "content": system_prompt },
+                { "role": "user", "content": conversation }
+            ]
+        });
+
+        let api_key = self.config.api_key.as_deref().unwrap_or_default();
+
+        let resp = self
+            .client
+            .post(&self.config.api_url)
+            .header("Authorization", format!("Bearer {api_key}"))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let text = resp.text().await?;
+
+        if !status.is_success() {
+            return Err(classify_api_error(status, &text, "OpenAI", &self.config.model));
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&text)?;
+        parsed["choices"][0]["message"]["content"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                ExtractionError::ParseError("Missing content in OpenAI response".to_string())
+            })
+    }
+
+    /// OpenAI call without forced JSON response format.
+    /// Used for plain text outputs (synthesis, re-ranking, key noun extraction).
+    async fn call_openai_text(
+        &self,
+        conversation: &str,
+        system_prompt: &str,
+    ) -> Result<String, ExtractionError> {
+        let body = serde_json::json!({
+            "model": self.config.model,
             "messages": [
                 { "role": "system", "content": system_prompt },
                 { "role": "user", "content": conversation }
@@ -224,10 +321,29 @@ impl HttpExtractionProvider {
 
     /// Execute a request with retry logic for rate limits (HTTP 429).
     /// Uses exponential backoff: 1s, 2s, 4s.
-    async fn call_with_retry(
+    pub async fn call_with_retry(
         &self,
         conversation: &str,
         system_prompt: &str,
+    ) -> Result<String, ExtractionError> {
+        self.call_with_retry_inner(conversation, system_prompt, true).await
+    }
+
+    /// Like call_with_retry but without forcing JSON response format.
+    /// Use for prompts that expect plain text output (synthesis, re-ranking, etc).
+    pub async fn call_text_with_retry(
+        &self,
+        conversation: &str,
+        system_prompt: &str,
+    ) -> Result<String, ExtractionError> {
+        self.call_with_retry_inner(conversation, system_prompt, false).await
+    }
+
+    async fn call_with_retry_inner(
+        &self,
+        conversation: &str,
+        system_prompt: &str,
+        force_json: bool,
     ) -> Result<String, ExtractionError> {
         let max_attempts = 3;
         let mut last_err = None;
@@ -252,7 +368,11 @@ impl HttpExtractionProvider {
 
             let result = match self.config.provider {
                 LlmProvider::OpenAI | LlmProvider::Custom => {
-                    self.call_openai(conversation, system_prompt).await
+                    if force_json {
+                        self.call_openai(conversation, system_prompt).await
+                    } else {
+                        self.call_openai_text(conversation, system_prompt).await
+                    }
                 }
                 LlmProvider::Anthropic => self.call_anthropic(conversation, system_prompt).await,
                 LlmProvider::Ollama => self.call_ollama(conversation, system_prompt).await,

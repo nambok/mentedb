@@ -72,22 +72,31 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
         &self,
         conversation: &str,
     ) -> Result<Vec<ExtractedMemory>, ExtractionError> {
+        let result = self.extract_full(conversation).await?;
+        Ok(result.memories)
+    }
+
+    /// Extract memories AND entities from a conversation.
+    /// Returns the full ExtractionResult including structured entities.
+    pub async fn extract_full(
+        &self,
+        conversation: &str,
+    ) -> Result<ExtractionResult, ExtractionError> {
         let system_prompt = extraction_system_prompt();
         let raw_response = self.provider.extract(conversation, system_prompt).await?;
 
-        let result = self.parse_extraction_response(&raw_response)?;
+        let mut result = self.parse_extraction_response(&raw_response)?;
 
-        let mut memories = result.memories;
-        if memories.len() > self.config.max_extractions_per_conversation {
+        if result.memories.len() > self.config.max_extractions_per_conversation {
             tracing::warn!(
-                extracted = memories.len(),
+                extracted = result.memories.len(),
                 max = self.config.max_extractions_per_conversation,
                 "truncating extractions to configured maximum"
             );
-            memories.truncate(self.config.max_extractions_per_conversation);
+            result.memories.truncate(self.config.max_extractions_per_conversation);
         }
 
-        Ok(memories)
+        Ok(result)
     }
 
     /// Parse the raw JSON response from the LLM into an ExtractionResult.
@@ -97,7 +106,7 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
 
         // Empty response = no memories to extract
         if trimmed.is_empty() {
-            return Ok(ExtractionResult { memories: vec![] });
+            return Ok(ExtractionResult { memories: vec![], entities: vec![] });
         }
 
         // Strip markdown code fences if present
@@ -147,7 +156,7 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
             &candidate[..end]
         } else {
             // No JSON object found — LLM returned plain text (e.g. "No memories to extract")
-            return Ok(ExtractionResult { memories: vec![] });
+            return Ok(ExtractionResult { memories: vec![], entities: vec![] });
         };
 
         // Parse with serde_json::Value first (tolerates duplicate keys — last one wins)

@@ -2,8 +2,17 @@
 """
 LongMemEval Benchmark Runner for MenteDB
 
-Ingests chat sessions into MenteDB, retrieves relevant memories for each question,
-generates answers via LLM, and outputs the standard hypothesis JSONL for evaluation.
+This script is intentionally simple — a thin client that exercises MenteDB's
+engine APIs. ALL retrieval intelligence lives in the engine (search_expanded),
+not here. This script only does:
+
+  1. Ingest: feed chat sessions into MenteDB (parallel extraction for speed)
+  2. Search: ONE call to db.search_expanded() per question
+  3. Read: ONE LLM call to generate an answer from retrieved context
+  4. Output: write hypothesis JSONL for evaluation by evaluate.py
+
+The evaluation script (evaluate.py) is UNTOUCHED and uses the official
+LongMemEval judge (gpt-4o-2024-08-06) with verbatim prompts.
 
 Usage:
     python benchmarks/longmemeval/run_benchmark.py [options]
@@ -11,7 +20,7 @@ Usage:
 Environment:
     OPENAI_API_KEY      For embeddings and/or answer generation
     ANTHROPIC_API_KEY   Alternative for answer generation
-    EMBEDDING_PROVIDER  Provider for embeddings (default: openai)
+    EMBEDDING_PROVIDER  Provider for embeddings (default: openai if key set)
     EMBEDDING_MODEL     Model for embeddings (default: text-embedding-3-small)
     TOP_K               Memories to retrieve per question (default: 20)
     DATASET             Dataset variant: s, m, oracle (default: s)
@@ -42,8 +51,8 @@ DATASET_FILES = {
     "oracle": "longmemeval_oracle.json",
 }
 
+# Simple reader prompt — no coaching, no tricks. Just present context and ask.
 READER_PROMPT = """I will give you several history chats between you and a user. Please answer the question based on the relevant chat history.
-
 
 History Chats:
 
@@ -89,85 +98,126 @@ def date_to_microseconds(date_str):
         return None
 
 
+def _extract_one(db, text, llm_provider, max_retries=5):
+    """Extract memories from one session (GIL released during HTTP call)."""
+    for attempt in range(max_retries):
+        try:
+            return ("ok", db.extract(text, provider=llm_provider))
+        except Exception as e:
+            err = str(e).lower()
+            if "401" in err or "unauthorized" in err or "invalid_api_key" in err:
+                return ("fatal", str(e))
+            if "404" in err or "not found" in err or "does not exist" in err:
+                return ("model_error", str(e))
+            # Retry with exponential backoff (3s, 6s, 12s, 24s)
+            if attempt < max_retries - 1:
+                time.sleep(3 * (2 ** attempt))
+            else:
+                return ("fail", str(e))
+    return ("fail", "max retries exceeded")
+
+
 def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
     """Ingest all chat sessions for a question into MenteDB.
 
-    When use_cognitive=True, each session is processed through MenteDB's
-    LLM extraction pipeline (fact extraction, knowledge updates, etc.).
-    When False, sessions are stored as raw text (baseline mode).
+    When use_cognitive=True, extractions run in parallel (GIL released during
+    HTTP calls), then results are stored sequentially.
     """
-    memory_ids = []
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     sessions = question_data["haystack_sessions"]
     dates = question_data["haystack_dates"]
-
     thread = threading.current_thread().name
     total = len(sessions)
+
+    if not (use_cognitive and llm_provider):
+        # Baseline: raw session storage only
+        memory_ids = []
+        for i, (session, date) in enumerate(zip(sessions, dates)):
+            text = format_session(session, date)
+            ts = date_to_microseconds(date)
+            mid = db.store(text, memory_type="episodic",
+                          tags=[f"date:{date}", f"session:{i}"], created_at=ts)
+            memory_ids.append(mid)
+        return memory_ids
+
+    # Phase 1: Extract all sessions in parallel (GIL released during HTTP)
+    texts = [format_session(s, d) for s, d in zip(sessions, dates)]
+    extracted = [None] * total
     cognitive_ok = 0
     cognitive_fail = 0
     first_error_msg = None
-    for i, (session, date) in enumerate(zip(sessions, dates)):
-        text = format_session(session, date)
-        ts = date_to_microseconds(date)
 
-        if use_cognitive and llm_provider:
-            # Full cognitive pipeline with retry on transient errors
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    result = db.ingest(text, provider=llm_provider)
-                    memory_ids.extend(result.get("stored_ids", []))
-                    cognitive_ok += 1
-                    break
-                except Exception as e:
-                    err = str(e).lower()
-                    if first_error_msg is None:
-                        first_error_msg = str(e)
-                    # Fatal errors: don't retry, surface immediately
-                    if "401" in err or "unauthorized" in err or "invalid_api_key" in err or "api key" in err:
-                        cognitive_fail += 1
-                        if cognitive_fail == 1:
-                            print(f"    [{thread}] ⚠️  FATAL: {first_error_msg[:200]}", flush=True)
-                            print(f"    [{thread}] ⚠️  Check MENTEDB_LLM_API_KEY and MENTEDB_LLM_PROVIDER", flush=True)
-                        break
-                    # Model not found
-                    if "404" in err or "not found" in err or "does not exist" in err:
-                        cognitive_fail += 1
-                        if cognitive_fail == 1:
-                            print(f"    [{thread}] ⚠️  MODEL ERROR: {first_error_msg[:200]}", flush=True)
-                        break
-                    if attempt < max_retries - 1 and ("connection" in err or "rate" in err or "timeout" in err or "overloaded" in err or "529" in err or "503" in err):
-                        time.sleep((attempt + 1) * 5)
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(_extract_one, db, text, llm_provider): i
+                   for i, text in enumerate(texts)}
+        done = 0
+        for f in as_completed(futures):
+            idx = futures[f]
+            status, payload = f.result()
+            done += 1
+
+            if status == "ok":
+                extracted[idx] = payload
+                cognitive_ok += 1
+            else:
+                cognitive_fail += 1
+                if first_error_msg is None:
+                    first_error_msg = payload
+                    if status == "fatal":
+                        print(f"    [{thread}] ⚠️  FATAL: {payload[:200]}", flush=True)
+                        print(f"    [{thread}] ⚠️  Check MENTEDB_LLM_API_KEY and MENTEDB_LLM_PROVIDER", flush=True)
+                    elif status == "model_error":
+                        print(f"    [{thread}] ⚠️  MODEL ERROR: {payload[:200]}", flush=True)
                     else:
-                        cognitive_fail += 1
-                        if cognitive_fail == 1:
-                            print(f"    [{thread}] ⚠️  First extraction error: {first_error_msg[:200]}", flush=True)
-                        break
+                        print(f"    [{thread}] ⚠️  Extraction error: {payload[:200]}", flush=True)
 
-            if (i + 1) % 10 == 0 or i == total - 1:
-                print(f"    [{thread}] progress {i+1}/{total} (cognitive: {cognitive_ok} ok, {cognitive_fail} fallback)", flush=True)
-        else:
-            # Baseline: raw session storage only
-            tags = [f"date:{date}", f"session:{i}"]
-            mid = db.store(text, memory_type="episodic", tags=tags, created_at=ts)
-            memory_ids.append(mid)
+            if done % 10 == 0 or done == total:
+                print(f"    [{thread}] extracted {done}/{total} (ok: {cognitive_ok}, fail: {cognitive_fail})", flush=True)
 
+    # Phase 2: Store all extracted memories sequentially (fast, local only)
+    memory_ids = []
+    for memories in extracted:
+        if memories is not None:
+            result = db.store_extracted(memories)
+            memory_ids.extend(result.get("stored_ids", []))
+
+    # Phase 3: Store raw sessions as episodic memories for keyword coverage.
+    # Extracted facts capture the "gist" but may miss casual details like
+    # place names or numbers. BM25 search on raw text catches those.
+    # Use store_extracted for batch embedding (1 API call instead of 50).
+    raw_memories = []
+    for i, (text, date) in enumerate(zip(texts, dates)):
+        # Cap content to avoid exceeding node size limits (32KB max)
+        content = text[:8000] if len(text) > 8000 else text
+        raw_memories.append({
+            "content": content,
+            "memory_type": "episodic",
+            "tags": [f"date:{date}", f"session:{i}", "raw"],
+            "confidence": 0.3,
+            "embedding_key": text[:500],
+        })
+    result = db.store_extracted(raw_memories)
+    memory_ids.extend(result.get("stored_ids", []))
+
+    print(f"    [{thread}] stored {len(memory_ids)} memories", flush=True)
     return memory_ids
 
 
 def retrieve_and_answer(db, question_data, llm_client, llm_provider, top_k=20, reader_model=None):
     """Search MenteDB for relevant memories and generate an answer.
 
-    Uses the engine's search_expanded() for LLM-powered query decomposition + RRF.
-    All intelligence lives in the engine, not here.
+    Uses a single call to search_expanded() which handles all retrieval
+    intelligence internally (query expansion, multi-pass, adaptive K).
+    This function is intentionally simple — all smarts live in the engine.
     """
     question = question_data["question"]
     question_date = question_data["question_date"]
 
     # Convert question date to microseconds for time-aware filtering.
-    # Only retrieve memories created before the question was asked.
     before_ts = date_to_microseconds(question_date)
 
-    # Use engine-native expanded search (query decomposition + RRF happens inside)
+    # Single engine call — all retrieval intelligence is inside search_expanded()
     results = db.search_expanded(question, k=top_k, before=before_ts)
 
     retrieved_parts = []
@@ -184,15 +234,13 @@ def retrieve_and_answer(db, question_data, llm_client, llm_provider, top_k=20, r
         return "I don't have enough information to answer this question."
 
     retrieved_context = "\n\n---\n\n".join(retrieved_parts)
-
     prompt = READER_PROMPT.format(
         retrieved_context=retrieved_context,
         question_date=question_date,
         question=question,
     )
-
-    answer = llm_chat(llm_client, llm_provider, prompt, temperature=0.0, max_tokens=300, model_override=reader_model)
-    return answer.strip()
+    return llm_chat(llm_client, llm_provider, prompt, temperature=0.0,
+                    max_tokens=300, model_override=reader_model).strip()
 
 
 def process_single_question(question_data, embedding_provider, embedding_api_key,
@@ -230,10 +278,25 @@ def process_single_question(question_data, embedding_provider, embedding_api_key
         print(f"  [{thread}] {qid} — ingested {len(mids)} memories in {ingest_time:.0f}s, searching...", flush=True)
 
         search_start = time.time()
-        hypothesis = retrieve_and_answer(
-            db, question_data, llm_client, llm_provider, top_k=top_k,
-            reader_model=reader_model
-        )
+        # Retry search+answer on transient connection errors (20 attempts)
+        for search_attempt in range(20):
+            try:
+                hypothesis = retrieve_and_answer(
+                    db, question_data, llm_client, llm_provider, top_k=top_k,
+                    reader_model=reader_model
+                )
+                break
+            except Exception as e:
+                err_str = str(e).lower()
+                # Don't retry auth or model-not-found errors
+                if "401" in err_str or "authentication" in err_str:
+                    raise
+                if search_attempt < 19:
+                    wait = min(3 * (2 ** min(search_attempt, 4)), 48)  # cap at 48s
+                    print(f"  [{thread}] {qid} — search error (attempt {search_attempt+1}/20), retrying in {wait}s: {e}", flush=True)
+                    time.sleep(wait)
+                else:
+                    raise
         search_time = time.time() - search_start
         db.close()
 
@@ -250,7 +313,7 @@ def process_single_question(question_data, embedding_provider, embedding_api_key
     return {"question_id": qid, "hypothesis": hypothesis}
 
 
-def run_benchmark(variant="s", top_k=20, limit=None, offset=0, resume_from=None,
+def run_benchmark(variant="s", top_k=60, limit=None, offset=0, resume_from=None,
                   use_cognitive=True, workers=3, reader_model=None):
     """Run the full LongMemEval benchmark."""
     if not has_llm_key():
@@ -261,11 +324,10 @@ def run_benchmark(variant="s", top_k=20, limit=None, offset=0, resume_from=None,
     embedding_api_key = os.environ.get("OPENAI_API_KEY", "")
     embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
 
-    # Default to hash embeddings (local, instant) — BM25 hybrid search handles
-    # text matching. OpenAI embeddings add ~15 API calls per session which makes
-    # the benchmark extremely slow. Set EMBEDDING_PROVIDER=openai to override.
+    # Default to OpenAI embeddings when API key available (much better retrieval
+    # than hash). With parallel extraction, embedding overhead is manageable.
     if not embedding_provider:
-        embedding_provider = "hash"
+        embedding_provider = "openai" if embedding_api_key else "hash"
 
     # Detect LLM provider for cognitive ingestion
     cognitive_provider = None
@@ -387,6 +449,10 @@ def run_benchmark(variant="s", top_k=20, limit=None, offset=0, resume_from=None,
                 existing_ids.add(entry["question_id"])
                 existing_results.append(entry)
         print(f"  Resuming: {len(existing_ids)} questions already completed\n")
+    elif os.path.exists(output_file):
+        # Fresh run: clear previous results
+        os.remove(output_file)
+        print(f"  Cleared previous results: {output_file}\n")
 
     try:
         import mentedb as mentedb_pkg
@@ -470,8 +536,8 @@ def main():
                         choices=["s", "m", "oracle"],
                         help="Dataset variant (default: s)")
     parser.add_argument("--top-k", type=int,
-                        default=int(os.environ.get("TOP_K", "20")),
-                        help="Number of memories to retrieve (default: 20)")
+                        default=int(os.environ.get("TOP_K", "60")),
+                        help="Number of memories to retrieve (default: 60)")
     parser.add_argument("--limit", type=int, default=None,
                         help="Limit to N questions (for testing)")
     parser.add_argument("--offset", type=int, default=0,

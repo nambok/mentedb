@@ -126,6 +126,30 @@ class MenteDB:
         """
         return self._db.ingest(conversation, provider, agent_id)
 
+    def extract(
+        self,
+        conversation: str,
+        provider: str | None = None,
+    ) -> list[dict]:
+        """Extract memories from a conversation without storing them.
+
+        Returns a list of dicts with content, memory_type, tags, confidence,
+        embedding_key. Use with store_extracted() for parallel workflows.
+        The GIL is released during the HTTP call.
+        """
+        return self._db.extract(conversation, provider)
+
+    def store_extracted(
+        self,
+        memories: list[dict],
+        agent_id: str | None = None,
+    ) -> dict:
+        """Store pre-extracted memories (from extract()) into the database.
+
+        Returns a dict with stored_ids.
+        """
+        return self._db.store_extracted(memories, agent_id)
+
     def close(self):
         """Flush and close the database."""
         self._db.close()
