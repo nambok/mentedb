@@ -1054,11 +1054,40 @@ impl MenteDB {
                                                 .collect::<Vec<_>>()
                                                 .join("\n");
 
-                                            // Append the code-counted enumeration to synthesis
-                                            final_synthesis = format!(
-                                                "{}\n\n---\nVerified enumeration ({} items):\n{}",
-                                                final_synthesis, enum_count, item_list
-                                            );
+                                            // Extract count from initial synthesis to detect disagreement
+                                            let synth_count = {
+                                                let re_nums: Vec<usize> = final_synthesis.split_whitespace()
+                                                    .filter_map(|w| w.trim_matches(|c: char| !c.is_numeric()).parse::<usize>().ok())
+                                                    .collect();
+                                                // Also check word numbers
+                                                let word_nums = [("one", 1), ("two", 2), ("three", 3), ("four", 4), ("five", 5),
+                                                    ("six", 6), ("seven", 7), ("eight", 8), ("nine", 9), ("ten", 10)];
+                                                let synth_lower = final_synthesis.to_lowercase();
+                                                let mut found = re_nums;
+                                                for (word, num) in &word_nums {
+                                                    if synth_lower.contains(word) { found.push(*num); }
+                                                }
+                                                found.first().copied()
+                                            };
+
+                                            // If enumeration disagrees with synthesis, REPLACE with enumeration-based answer
+                                            // The code-counted enumeration is more reliable than LLM prose
+                                            let synth_disagrees = synth_count.map(|sc| sc != enum_count).unwrap_or(true);
+
+                                            if synth_disagrees {
+                                                if debug { eprintln!("[chain-enum] Synthesis said {:?} but enumeration found {} — OVERRIDING", synth_count, enum_count); }
+                                                // Replace synthesis entirely with enumeration-based answer
+                                                final_synthesis = format!(
+                                                    "Based on the evidence, the answer is {}.\n\n{}\n\nTotal: {}",
+                                                    enum_count, item_list, enum_count
+                                                );
+                                            } else {
+                                                // Agreement — append enumeration for verification
+                                                final_synthesis = format!(
+                                                    "{}\n\n---\nVerified enumeration ({} items):\n{}",
+                                                    final_synthesis, enum_count, item_list
+                                                );
+                                            }
 
                                             if debug {
                                                 if let Some(gc) = graph_count {
