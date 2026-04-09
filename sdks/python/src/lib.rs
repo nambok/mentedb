@@ -1288,8 +1288,16 @@ impl MenteDB {
 
         // Phase 4: Create PartOf edges linking regular memories to their entities.
         // For each entity, link all memories that mention it.
+        // Use the entity's "relationship" attribute as the edge label.
         for (entity_name, _etype, entity_id) in &entity_ids {
             let entity_name_lower = entity_name.to_lowercase();
+            // Extract the relationship label from the entity node's attributes
+            let edge_label = db.get_memory(*entity_id).ok().and_then(|node| {
+                node.attributes.get("relationship").and_then(|v| match v {
+                    mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+            });
             for sid in &stored_ids {
                 let mem_id = parse_memory_id(sid)?;
                 if mem_id == *entity_id { continue; } // Don't self-link
@@ -1304,11 +1312,48 @@ impl MenteDB {
                             created_at: now_us(),
                             valid_from: None,
                             valid_until: None,
-                            label: None,
+                            label: edge_label.clone(),
                         };
                         let _ = db.relate(edge); // Best effort
                     }
                 }
+            }
+        }
+
+        // Phase 5: Create entity-to-entity edges for entities sharing a category.
+        // This creates the associative connections that make the graph mind-like.
+        {
+            // Build category → entity_id index
+            let mut category_index: std::collections::HashMap<String, Vec<MemoryId>> = std::collections::HashMap::new();
+            for (_name, _etype, eid) in &entity_ids {
+                if let Ok(node) = db.get_memory(*eid) {
+                    if let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
+                        if !cat.is_empty() {
+                            category_index.entry(cat.to_lowercase()).or_default().push(*eid);
+                        }
+                    }
+                }
+            }
+            // Connect entities within the same category
+            for (category, ids) in &category_index {
+                if ids.len() < 2 { continue; }
+                let label = format!("same_category:{}", category);
+                for i in 0..ids.len() {
+                    for j in (i+1)..ids.len() {
+                        let edge = MemoryEdge {
+                            source: ids[i],
+                            target: ids[j],
+                            edge_type: EdgeType::Related,
+                            weight: 0.7,
+                            created_at: now_us(),
+                            valid_from: None,
+                            valid_until: None,
+                            label: Some(label.clone()),
+                        };
+                        let _ = db.relate(edge);
+                    }
+                }
+                if debug { eprintln!("[store_extracted] Connected {} entities in category '{}'", ids.len(), category); }
             }
         }
 
