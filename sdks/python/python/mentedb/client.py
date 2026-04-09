@@ -150,6 +150,15 @@ class MenteDB:
         """
         return self._db.store_extracted(memories, agent_id)
 
+    def build_communities(self) -> list[str]:
+        """Build community summaries for entity clusters.
+
+        Groups entities by shared categories and generates LLM summaries
+        for each cluster (e.g., "User's health devices: Fitbit, hearing aids...").
+        Returns a list of stored community summary memory IDs.
+        """
+        return self._db.build_communities()
+
     def close(self):
         """Flush and close the database."""
         self._db.close()
