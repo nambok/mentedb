@@ -1570,6 +1570,110 @@ impl MenteDB {
         })
     }
 
+    /// Run consolidation: gist extraction for entities with many connected memories.
+    /// Creates Derived summary nodes linked to entities via Derived edges.
+    fn consolidate(&mut self, min_memories: usize) -> PyResult<Vec<String>> {
+        let db = self.db.as_mut().ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let debug = std::env::var("MENTEDB_DEBUG").is_ok();
+        let rt = tokio::runtime::Runtime::new().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+
+        // Set up LLM provider for gist generation
+        let config = mentedb_extraction::ExtractionConfig::from_env();
+        let http_provider = mentedb_extraction::provider::HttpExtractionProvider::new(config.clone())
+            .map_err(to_pyerr)?;
+
+        let min_memories = if min_memories == 0 { 5 } else { min_memories };
+        let mut gist_ids = Vec::new();
+
+        // Find all entity nodes by scanning graph node IDs
+        let all_node_ids: Vec<MemoryId> = db.graph().graph().node_ids().to_vec();
+        let entity_nodes: Vec<MemoryNode> = all_node_ids.iter()
+            .filter_map(|id| db.get_memory(*id).ok())
+            .filter(|m| m.tags.iter().any(|t| t.starts_with("entity_name:")))
+            .filter(|m| !m.tags.iter().any(|t| t == "gist"))
+            .collect();
+
+        if debug { eprintln!("[consolidate] Found {} entity nodes", entity_nodes.len()); }
+
+        for entity in &entity_nodes {
+            let entity_name = entity.attributes.get("entity_name")
+                .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                .unwrap_or_default();
+
+            // Get connected memories via PartOf edges
+            let (neighbor_ids, _edges) = db.graph().get_context_subgraph(entity.id, 1);
+            let connected_memories: Vec<String> = neighbor_ids.iter()
+                .filter(|nid| **nid != entity.id)
+                .filter_map(|nid| db.get_memory(*nid).ok())
+                .filter(|m| !m.tags.iter().any(|t| t.starts_with("entity_name:")))
+                .map(|m| m.content.clone())
+                .collect();
+
+            if connected_memories.len() < min_memories { continue; }
+
+            // Check if gist already exists for this entity
+            let has_gist = neighbor_ids.iter().any(|nid| {
+                db.get_memory(*nid).ok().map(|m| m.tags.iter().any(|t| t == "gist")).unwrap_or(false)
+            });
+            if has_gist { continue; }
+
+            if debug { eprintln!("[consolidate] Creating gist for '{}' ({} memories)", entity_name, connected_memories.len()); }
+
+            let gist_prompt = format!(
+                "Summarize everything known about '{}' based on these memories. Be factual and complete. \
+                 Include all specific details (names, dates, amounts, relationships).\n\n{}",
+                entity_name,
+                connected_memories.iter().enumerate()
+                    .map(|(i, c)| format!("[{}] {}", i, c))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            let gist_system = "You create factual summaries from memory evidence. Be comprehensive — include every detail. One to three sentences.";
+
+            match rt.block_on(http_provider.call_text_with_retry(&gist_prompt, gist_system)) {
+                Ok(gist_text) => {
+                    let gist_content = gist_text.trim().to_string();
+                    if debug { eprintln!("[consolidate] Gist: {}", &gist_content[..std::cmp::min(gist_content.len(), 100)]); }
+
+                    let gist_emb = if let Some(ref embedder) = self.embedder {
+                        embedder.embed(&gist_content).map_err(to_pyerr)?
+                    } else {
+                        hash_embedding(&gist_content, 384)
+                    };
+
+                    let mut gist_node = MemoryNode::new(
+                        entity.agent_id,
+                        MemoryType::Semantic,
+                        gist_content,
+                        gist_emb,
+                    );
+                    gist_node.tags = vec!["gist".to_string(), format!("gist_for:{}", entity_name.to_lowercase())];
+                    gist_node.confidence = 0.9;
+                    let gist_id = gist_node.id;
+                    db.store(gist_node).map_err(to_pyerr)?;
+
+                    // Link gist → entity via Derived edge
+                    let edge = MemoryEdge {
+                        source: gist_id,
+                        target: entity.id,
+                        edge_type: EdgeType::Derived,
+                        weight: 0.9,
+                        created_at: now_us(),
+                        valid_from: None,
+                        valid_until: None,
+                        label: Some("gist_summary".to_string()),
+                    };
+                    let _ = db.relate(edge);
+                    gist_ids.push(gist_id.to_string());
+                }
+                Err(e) => if debug { eprintln!("[consolidate] LLM call failed for '{}': {e}", entity_name); },
+            }
+        }
+
+        if debug { eprintln!("[consolidate] Created {} gist nodes", gist_ids.len()); }
+        Ok(gist_ids)
+    }
+
     /// Flush and close the database.
     fn close(&mut self) -> PyResult<()> {
         if let Some(mut db) = self.db.take() {
