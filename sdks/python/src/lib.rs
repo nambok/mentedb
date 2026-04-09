@@ -1633,14 +1633,19 @@ impl MenteDB {
 
         // Phase 5: Create entity-to-entity edges for entities sharing a category.
         // This creates the associative connections that make the graph mind-like.
+        // Categories can be comma-separated (e.g., "health_device, wearable, fitness_tracker")
+        // so we split and index each category individually.
         {
-            // Build category → entity_id index
+            // Build category → entity_id index (split comma-separated categories)
             let mut category_index: std::collections::HashMap<String, Vec<MemoryId>> = std::collections::HashMap::new();
             for (_name, _etype, eid) in &entity_ids {
                 if let Ok(node) = db.get_memory(*eid) {
                     if let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
-                        if !cat.is_empty() {
-                            category_index.entry(cat.to_lowercase()).or_default().push(*eid);
+                        for single_cat in cat.split(',') {
+                            let trimmed = single_cat.trim().to_lowercase();
+                            if !trimmed.is_empty() {
+                                category_index.entry(trimmed).or_default().push(*eid);
+                            }
                         }
                     }
                 }

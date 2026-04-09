@@ -90,15 +90,16 @@ For EACH entity mentioned (even incidentally), extract:
 
 REQUIRED ATTRIBUTES (include these when determinable from context):
 - "relationship": How the user relates to this entity. Use one of: owns, uses, attends, visits, plays, wants, considering, previously_owned, someone_else_owns, manages, works_at, knows, member_of. If the relationship is unclear, omit this attribute.
-- "category": The broader group this entity belongs to. Let the category emerge naturally from context — don't use predefined lists. Examples: "musical_instrument", "fitness_activity", "health_device", "programming_language", "pet", "restaurant". Omit if no obvious category.
+- "category": The broader groups this entity belongs to. List ALL applicable categories as a comma-separated string — entities often belong to multiple categories. Examples: "musical_instrument, hobby_equipment", "health_device, wearable, fitness_tracker", "restaurant, date_spot". Think about what general search terms someone might use to find this entity. Omit if no obvious categories.
 - "relationship_owner": If the entity belongs to someone other than the user, specify who (e.g., "niece", "friend Sarah"). Omit if the user is the owner/primary person.
 
 Examples:
-- "a collar for my Golden Retriever like Max" → entity: {name: "Max", type: "pet", attributes: {breed: "Golden Retriever", owner: "user", relationship: "owns", category: "pet"}}
-- "brunch spots near Serenity Yoga" → entity: {name: "Serenity Yoga", type: "place", attributes: {activity: "yoga classes", relationship: "attends", category: "fitness_activity"}}
+- "a collar for my Golden Retriever like Max" → entity: {name: "Max", type: "pet", attributes: {breed: "Golden Retriever", owner: "user", relationship: "owns", category: "pet, family_member"}}
+- "brunch spots near Serenity Yoga" → entity: {name: "Serenity Yoga", type: "place", attributes: {activity: "yoga classes", relationship: "attends", category: "fitness_activity, health_activity, yoga_studio"}}
 - "the Love is in the Air dinner I volunteered at on Valentine's Day" → entity: {name: "Love is in the Air", type: "event", attributes: {event_type: "fundraising dinner", date: "February 14th (Valentine's Day)", role: "volunteer", relationship: "attends"}}
-- "I've been thinking about selling my Pearl Export drum set" → entity: {name: "Pearl Export", type: "item", attributes: {instrument_type: "drum set", relationship: "owns", category: "musical_instrument", status: "considering selling"}}
+- "I've been thinking about selling my Pearl Export drum set" → entity: {name: "Pearl Export", type: "item", attributes: {instrument_type: "drum set", relationship: "owns", category: "musical_instrument, hobby_equipment", status: "considering selling"}}
 - "my niece plays violin" → entity: {name: "violin", type: "item", attributes: {category: "musical_instrument", relationship: "someone_else_owns", relationship_owner: "niece"}}
+- "I've been wearing my Fitbit Versa 3 non-stop" → entity: {name: "Fitbit Versa 3", type: "item", attributes: {relationship: "uses", category: "health_device, fitness_tracker, wearable"}}
 
 CRITICAL: Resolve holidays and relative dates to specific dates in entity attributes.
 
