@@ -109,6 +109,10 @@ pub struct ExtractedMemory {
     /// Categorization tags.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Life-context categories this memory belongs to (e.g., ["health_device", "shopping"]).
+    /// Used for categorical retrieval — stored as context: tags on the memory node.
+    #[serde(default)]
+    pub context: Vec<String>,
     /// Why this memory was extracted (for debugging and auditing).
     #[serde(default)]
     pub reasoning: String,
@@ -129,6 +133,11 @@ impl ExtractedMemory {
         if !self.tags.is_empty() {
             key.push_str(" [topics: ");
             key.push_str(&self.tags.join(", "));
+            key.push(']');
+        }
+        if !self.context.is_empty() {
+            key.push_str(" [context: ");
+            key.push_str(&self.context.join(", "));
             key.push(']');
         }
         key

@@ -494,6 +494,74 @@ impl MenteDB {
             }
         }
 
+        // --- Pass 4.5: Categorical retrieval (counting queries) ---
+        // Like a human activating a mental category: "health devices" → find everything
+        // tagged context:health_device. Searches both entity nodes (by category attribute)
+        // and facts (by context: tags propagated from entities).
+        let mut categorical_hits: Vec<(MemoryId, f32)> = Vec::new();
+        if is_counting {
+            // Normalize broad keywords into category-style terms
+            let mut category_terms: Vec<String> = Vec::new();
+            if let Some(ref kw_str) = broad_keywords {
+                for term in kw_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                    let normalized = term.to_lowercase()
+                        .replace(' ', "_")
+                        .trim_end_matches('s')
+                        .to_string();
+                    category_terms.push(normalized);
+                    category_terms.push(term.to_lowercase().replace(' ', "_"));
+                }
+            }
+            if let Some(ref kw_str) = item_keywords {
+                for term in kw_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                    let normalized = term.to_lowercase()
+                        .replace(' ', "_")
+                        .trim_end_matches('s')
+                        .to_string();
+                    category_terms.push(normalized);
+                }
+            }
+            category_terms.sort();
+            category_terms.dedup();
+
+            if !category_terms.is_empty() {
+                // Search ALL memories (not just graph nodes) for context tags
+                let all_mem_ids: Vec<MemoryId> = db.memory_ids().to_vec();
+                let mut found_entities = 0;
+                let mut found_facts = 0;
+                for mid in &all_mem_ids {
+                    if let Ok(node) = db.get_memory(*mid) {
+                        // Check entity nodes by category attribute
+                        if node.tags.iter().any(|t| t.starts_with("entity_name:")) {
+                            if let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
+                                let cat_lower = cat.to_lowercase();
+                                let cat_parts: Vec<&str> = cat_lower.split(',').map(|s| s.trim()).collect();
+                                for ct in &category_terms {
+                                    if cat_parts.iter().any(|cp| *cp == ct.as_str()) {
+                                        categorical_hits.push((*mid, 1.0));
+                                        found_entities += 1;
+                                        break;
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        // Check facts by context: tags
+                        for ct in &category_terms {
+                            let ctx_tag = format!("context:{}", ct);
+                            if node.tags.iter().any(|t| *t == ctx_tag) {
+                                categorical_hits.push((*mid, 1.2)); // Higher weight for direct fact match
+                                found_facts += 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if debug { eprintln!("[pass4.5-categorical] Found {} entities + {} facts matching categories {:?}",
+                    found_entities, found_facts, category_terms); }
+            }
+        }
+
         // --- Spreading activation: BFS from seed entities ---
         // Find entity nodes matching query concepts, BFS depth 2, decay 0.85/hop
         let mut activation_hits: Vec<(MemoryId, f32)> = Vec::new();
@@ -583,6 +651,10 @@ impl MenteDB {
         // Spreading activation: graph-discovered nodes weighted by activation level
         for (rank, (id, _activation)) in activation_hits.iter().enumerate() {
             *rrf_scores.entry(id.to_string()).or_insert(0.0) += 0.6 / (rrf_k + rank as f32);
+        }
+        // Pass 4.5 categorical: high weight — direct category match bypasses embedding
+        for (rank, (id, _)) in categorical_hits.iter().enumerate() {
+            *rrf_scores.entry(id.to_string()).or_insert(0.0) += 1.5 / (rrf_k + rank as f32);
         }
 
         let mut merged: Vec<(String, f32)> = rrf_scores.into_iter().collect();
@@ -1146,16 +1218,15 @@ impl MenteDB {
             }
         }
 
-        // Filter entity nodes and community summaries from final results.
-        // They served their purpose in retrieval (spreading activation, graph traversal)
-        // but their content duplicates what facts already say and confuses the reader.
+        // Filter entity nodes from final results — they duplicate facts.
+        // Keep community summaries — they're unique aggregated indexes that bridge
+        // semantic gaps (e.g., "Health Device Summary" links hearing aids to health).
         let mut filtered_results: Vec<(String, f32)> = Vec::new();
         for (id_str, score) in expanded {
             if let Ok(mem_id) = parse_memory_id(&id_str) {
                 if let Ok(node) = db.get_memory(mem_id) {
                     let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
-                    let is_community = node.tags.iter().any(|t| t == "community_summary");
-                    if is_entity || is_community { continue; }
+                    if is_entity { continue; }
                 }
             }
             filtered_results.push((id_str, score));
@@ -1311,10 +1382,18 @@ impl MenteDB {
             }
 
             embed_texts.push(embed_key);
+            // Merge context categories as context: tags for categorical retrieval
+            let mut tags = memory.tags.clone();
+            for ctx in &memory.context {
+                let ctx_tag = format!("context:{}", ctx.to_lowercase().replace(' ', "_"));
+                if !tags.contains(&ctx_tag) {
+                    tags.push(ctx_tag);
+                }
+            }
             entries.push(MemEntry {
                 content: memory.content.clone(),
                 mt,
-                tags: memory.tags.clone(),
+                tags,
                 salience: memory.confidence,
                 confidence: memory.confidence,
             });
@@ -1411,6 +1490,7 @@ impl MenteDB {
             dict.set_item("content", &memory.content)?;
             dict.set_item("memory_type", &memory.memory_type)?;
             dict.set_item("tags", &memory.tags)?;
+            dict.set_item("context", &memory.context)?;
             dict.set_item("confidence", memory.confidence)?;
             dict.set_item("embedding_key", memory.embedding_key())?;
             results.append(dict)?;
@@ -1507,10 +1587,21 @@ impl MenteDB {
                     .map(|v| v.extract())
                     .transpose()?
                     .unwrap_or_else(|| "semantic".to_string());
-                let tags: Vec<String> = mem_dict.get_item("tags")?
+                let mut tags: Vec<String> = mem_dict.get_item("tags")?
                     .map(|v| v.extract())
                     .transpose()?
                     .unwrap_or_default();
+                // Parse context categories and merge as context: tags
+                let context: Vec<String> = mem_dict.get_item("context")?
+                    .map(|v| v.extract())
+                    .transpose()?
+                    .unwrap_or_default();
+                for ctx in &context {
+                    let ctx_tag = format!("context:{}", ctx.to_lowercase().replace(' ', "_"));
+                    if !tags.contains(&ctx_tag) {
+                        tags.push(ctx_tag);
+                    }
+                }
                 let confidence: f32 = mem_dict.get_item("confidence")?
                     .map(|v| v.extract())
                     .transpose()?
@@ -1694,22 +1785,55 @@ impl MenteDB {
 
         // Phase 4: Create PartOf edges linking regular memories to their entities.
         // For each entity, link all memories that mention it.
+        // Also propagate entity categories as context tags to linked facts,
+        // enabling direct tag-based retrieval (e.g., context:health_device).
         // Use the entity's "relationship" attribute as the edge label.
+
+        // Pre-load entity categories for tag propagation
+        let mut entity_categories: std::collections::HashMap<MemoryId, Vec<String>> = std::collections::HashMap::new();
+        for (_name, _etype, entity_id) in &entity_ids {
+            if let Ok(node) = db.get_memory(*entity_id) {
+                if let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
+                    let cats: Vec<String> = cat.split(',')
+                        .map(|s| s.trim().to_lowercase().replace(' ', "_"))
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    entity_categories.insert(*entity_id, cats);
+                }
+            }
+        }
+
         for (entity_name, _etype, entity_id) in &entity_ids {
             let entity_name_lower = entity_name.to_lowercase();
-            // Extract the relationship label from the entity node's attributes
+            // Build name variants for flexible matching:
+            // "Phonak BTE hearing aids" → also try "hearing aids", individual significant words
+            let name_words: Vec<&str> = entity_name_lower.split_whitespace().collect();
+            let mut match_patterns: Vec<String> = vec![entity_name_lower.clone()];
+            // Add last N words as a pattern (e.g., "hearing aids" from "Phonak BTE hearing aids")
+            if name_words.len() > 2 {
+                for start in 1..name_words.len().saturating_sub(1) {
+                    match_patterns.push(name_words[start..].join(" "));
+                }
+            }
+
             let edge_label = db.get_memory(*entity_id).ok().and_then(|node| {
                 node.attributes.get("relationship").and_then(|v| match v {
                     mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()),
                     _ => None,
                 })
             });
+            let cats = entity_categories.get(entity_id).cloned().unwrap_or_default();
+
             for sid in &stored_ids {
                 let mem_id = parse_memory_id(sid)?;
-                if mem_id == *entity_id { continue; } // Don't self-link
-                // Check if this memory mentions the entity
-                if let Ok(mem_node) = db.get_memory(mem_id) {
-                    if mem_node.content.to_lowercase().contains(&entity_name_lower) {
+                if mem_id == *entity_id { continue; }
+                if let Ok(mut mem_node) = db.get_memory(mem_id) {
+                    // Skip other entity nodes
+                    if mem_node.tags.iter().any(|t| t.starts_with("entity_name:")) { continue; }
+
+                    let content_lower = mem_node.content.to_lowercase();
+                    let mentions = match_patterns.iter().any(|p| content_lower.contains(p.as_str()));
+                    if mentions {
                         let edge = MemoryEdge {
                             source: mem_id,
                             target: *entity_id,
@@ -1720,7 +1844,20 @@ impl MenteDB {
                             valid_until: None,
                             label: edge_label.clone(),
                         };
-                        let _ = db.relate(edge); // Best effort
+                        let _ = db.relate(edge);
+
+                        // Propagate entity categories as context tags
+                        let mut tags_changed = false;
+                        for cat in &cats {
+                            let ctx_tag = format!("context:{}", cat);
+                            if !mem_node.tags.contains(&ctx_tag) {
+                                mem_node.tags.push(ctx_tag);
+                                tags_changed = true;
+                            }
+                        }
+                        if tags_changed {
+                            let _ = db.store(mem_node);
+                        }
                     }
                 }
             }

@@ -78,6 +78,19 @@ RULES:
 - Provide a one-sentence reasoning for why each memory is worth keeping
 - PREFER extracting too many facts over too few — missing a detail is worse than storing an extra one
 
+CONTEXT TAGS FOR FACTS:
+Every fact memory MUST include a "context" field — an array of life-domain categories this fact belongs to. Use the SAME category vocabulary as entity categories. This is how facts become discoverable by category searches.
+
+Examples:
+- "User orders hearing aid batteries from Amazon" → context: ["health_device", "shopping"]
+- "User tracks 10,000 steps daily with Fitbit" → context: ["health_device", "fitness_tracker", "daily_routine"]
+- "User spent $120 on bike helmet" → context: ["cycling", "bike_gear", "recent_purchase"]
+- "User visited Dr. Lee for a mole biopsy" → context: ["medical_appointment", "health_activity"]
+- "User's niece plays violin at school" → context: ["family", "music", "education"]
+
+The KEY test: If someone searches "health devices", will this fact show up? If YES, include "health_device" in context.
+Think broadly — a fact about ordering hearing aid BATTERIES is still about a health_device.
+
 ENTITY EXTRACTION:
 In addition to flat memories, extract structured ENTITIES — the people, pets, places, events, and items mentioned. Each entity has a name, type, and key-value attributes.
 
@@ -134,6 +147,7 @@ OUTPUT FORMAT (strict JSON, no markdown fences):
       "confidence": 0.9,
       "entities": ["PostgreSQL"],
       "tags": ["database", "infrastructure"],
+      "context": ["tech_stack", "backend_infrastructure"],
       "reasoning": "Explicitly confirmed tech stack choice"
     }
   ],
