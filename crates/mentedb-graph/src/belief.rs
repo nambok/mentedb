@@ -130,6 +130,7 @@ mod tests {
             created_at: 1000,
             valid_from: None,
             valid_until: None,
+            label: None,
         }
     }
 

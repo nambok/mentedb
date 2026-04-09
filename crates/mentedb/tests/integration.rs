@@ -83,6 +83,7 @@ fn test_relate_memories() {
         created_at: 0,
         valid_from: None,
         valid_until: None,
+        label: None,
     };
     db.relate(edge).unwrap();
 
@@ -174,6 +175,7 @@ fn test_db_persistence_graph_survives_close() {
             created_at: 1000,
             valid_from: None,
             valid_until: None,
+            label: None,
         })
         .unwrap();
         db.close().unwrap();

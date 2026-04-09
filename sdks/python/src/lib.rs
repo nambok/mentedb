@@ -837,6 +837,7 @@ impl MenteDB {
         weight: f32,
         valid_from: Option<u64>,
         valid_until: Option<u64>,
+        label: None,
     ) -> PyResult<()> {
         let db = self.db.as_mut().ok_or_else(|| {
             PyRuntimeError::new_err("database is closed")
@@ -1303,6 +1304,7 @@ impl MenteDB {
                             created_at: now_us(),
                             valid_from: None,
                             valid_until: None,
+                            label: None,
                         };
                         let _ = db.relate(edge); // Best effort
                     }

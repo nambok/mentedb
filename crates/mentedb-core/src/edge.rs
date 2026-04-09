@@ -47,6 +47,10 @@ pub struct MemoryEdge {
     /// None means still valid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub valid_until: Option<Timestamp>,
+    /// Semantic label describing the relationship (e.g. "owns", "attends", "uses daily").
+    /// None for edges without a specific semantic meaning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl MemoryEdge {
@@ -84,6 +88,7 @@ mod tests {
             created_at: 1000,
             valid_from: None,
             valid_until: None,
+            label: None,
         }
     }
 
@@ -167,6 +172,17 @@ mod tests {
         let edge: MemoryEdge = serde_json::from_str(json).unwrap();
         assert_eq!(edge.valid_from, None);
         assert_eq!(edge.valid_until, None);
+        assert_eq!(edge.label, None);
         assert!(edge.is_valid_at(5000));
+    }
+
+    #[test]
+    fn edge_with_label() {
+        let mut edge = make_edge();
+        edge.label = Some("owns".to_string());
+        let json = serde_json::to_string(&edge).unwrap();
+        assert!(json.contains("\"label\":\"owns\""));
+        let deserialized: MemoryEdge = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.label, Some("owns".to_string()));
     }
 }
