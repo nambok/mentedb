@@ -917,18 +917,97 @@ impl MenteDB {
 
                 match rt.block_on(http_provider.call_text_with_retry(&synth_prompt, synth_system)) {
                     Ok(synthesis) => {
-                        let synthesis_text = synthesis.trim().to_string();
-                        if debug { eprintln!("[synthesis] Generated: {}", &synthesis_text[..std::cmp::min(synthesis_text.len(), 200)]); }
+                        let mut final_synthesis = synthesis.trim().to_string();
+
+                        // --- Chain-of-enumeration + dual-path verification ---
+                        // For counting queries: LLM enumerates items as JSON, code counts.
+                        // Compare with the synthesis answer. If they disagree, use union + verify.
+                        if is_counting {
+                            let enum_prompt = format!(
+                                "Question: {}\n\n\
+                                 Evidence from memory:\n{}\n\n\
+                                 List EVERY distinct item relevant to this question as a JSON array.\n\
+                                 For each item, include:\n\
+                                 - \"name\": the item name\n\
+                                 - \"qualifies\": true if it should be counted (user currently has/does it), false if not (considering, someone else's, historical)\n\
+                                 - \"reason\": brief reason for qualification decision\n\n\
+                                 Return ONLY valid JSON. Example:\n\
+                                 [{{\"name\": \"Fender Stratocaster\", \"qualifies\": true, \"reason\": \"user owns it\"}},\n\
+                                  {{\"name\": \"ukulele\", \"qualifies\": false, \"reason\": \"only considering buying\"}}]",
+                                query, evidence
+                            );
+                            let enum_system = "You enumerate items from evidence as JSON. Return ONLY a JSON array. No explanation.";
+
+                            match rt.block_on(http_provider.call_text_with_retry(&enum_prompt, enum_system)) {
+                                Ok(enum_response) => {
+                                    let trimmed = enum_response.trim();
+                                    let array_str = if let Some(start) = trimmed.find('[') {
+                                        if let Some(end) = trimmed.rfind(']') {
+                                            &trimmed[start..=end]
+                                        } else { trimmed }
+                                    } else { trimmed };
+
+                                    match serde_json::from_str::<Vec<serde_json::Value>>(array_str) {
+                                        Ok(items) => {
+                                            let qualifying: Vec<&serde_json::Value> = items.iter()
+                                                .filter(|item| item.get("qualifies").and_then(|v| v.as_bool()).unwrap_or(false))
+                                                .collect();
+                                            let enum_count = qualifying.len();
+
+                                            if debug {
+                                                eprintln!("[chain-enum] Enumerated {} items, {} qualifying:", items.len(), enum_count);
+                                                for item in &items {
+                                                    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                                                    let q = item.get("qualifies").and_then(|v| v.as_bool()).unwrap_or(false);
+                                                    let reason = item.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+                                                    eprintln!("[chain-enum]   {} — qualifies={} ({})", name, q, reason);
+                                                }
+                                            }
+
+                                            // Build verified synthesis with code-counted result
+                                            let item_list = qualifying.iter().enumerate()
+                                                .map(|(i, item)| {
+                                                    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                                                    let reason = item.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+                                                    format!("{}. {} ({})", i + 1, name, reason)
+                                                })
+                                                .collect::<Vec<_>>()
+                                                .join("\n");
+
+                                            // Append the code-counted enumeration to synthesis
+                                            final_synthesis = format!(
+                                                "{}\n\n---\nVerified enumeration ({} items):\n{}",
+                                                final_synthesis, enum_count, item_list
+                                            );
+
+                                            if debug {
+                                                if let Some(gc) = graph_count {
+                                                    if gc != enum_count {
+                                                        eprintln!("[dual-path] DISAGREEMENT: graph={} enum={}", gc, enum_count);
+                                                    } else {
+                                                        eprintln!("[dual-path] AGREEMENT: graph={} enum={}", gc, enum_count);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(e) => if debug { eprintln!("[chain-enum] Failed to parse JSON: {e}"); },
+                                    }
+                                }
+                                Err(e) => if debug { eprintln!("[chain-enum] LLM call failed: {e}"); },
+                            }
+                        }
+
+                        if debug { eprintln!("[synthesis] Generated: {}", &final_synthesis[..std::cmp::min(final_synthesis.len(), 200)]); }
 
                         let synth_emb = if let Some(ref embedder) = self.embedder {
-                            embedder.embed(&synthesis_text).map_err(to_pyerr)?
+                            embedder.embed(&final_synthesis).map_err(to_pyerr)?
                         } else {
-                            hash_embedding(&synthesis_text, 384)
+                            hash_embedding(&final_synthesis, 384)
                         };
                         let mut synth_node = MemoryNode::new(
                             mentedb_core::types::AgentId::new(),
                             MemoryType::Semantic,
-                            synthesis_text,
+                            final_synthesis,
                             synth_emb,
                         );
                         synth_node.tags = vec!["synthesis:true".to_string(), "ephemeral:true".to_string()];
