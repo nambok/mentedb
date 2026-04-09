@@ -108,6 +108,7 @@ REQUIRED ATTRIBUTES (include these when determinable from context):
   List ALL applicable life-context categories as a comma-separated string. Think broadly — what questions might someone ask that should find this entity?
 
 - "relationship_owner": If the entity belongs to someone other than the user, specify who (e.g., "niece", "friend Sarah"). Omit if the user is the owner/primary person.
+- "acquisition": How the user came to have this entity, when determinable. Use one of: bought, gifted, inherited, found, borrowed, won, built, subscribed. Include source if known (e.g., "gifted by grandmother", "bought on Amazon"). Omit if not mentioned or not applicable.
 
 Examples:
 - "a collar for my Golden Retriever like Max" → entity: {name: "Max", type: "pet", attributes: {breed: "Golden Retriever", owner: "user", relationship: "owns", category: "pet, family_member"}}
@@ -118,7 +119,9 @@ Examples:
 - "I've been wearing my Fitbit Versa 3 non-stop" → entity: {name: "Fitbit Versa 3", type: "item", attributes: {relationship: "uses", category: "health_device, fitness_tracker, wearable, daily_use_device"}}
 - "ordering replacement batteries for my hearing aids" → entity: {name: "hearing aids", type: "item", attributes: {brand: "Phonak", style: "BTE", relationship: "uses", category: "health_device, daily_use_device, medical_device"}}
 - "checking my business account balance" → entity: {name: "business account", type: "account", attributes: {relationship: "manages", category: "business_finance, financial_account"}}
-- "I bought an engagement ring last month" → entity: {name: "engagement ring", type: "item", attributes: {relationship: "owns", category: "jewelry, relationship_milestone, recent_purchase"}}
+- "I bought an engagement ring last month" → entity: {name: "engagement ring", type: "item", attributes: {relationship: "owns", acquisition: "bought", category: "jewelry, relationship_milestone, recent_purchase"}}
+- "my grandmother gave me her kitchen knife" → entity: {name: "kitchen knife", type: "item", attributes: {relationship: "owns", acquisition: "gifted by grandmother", category: "kitchen_equipment, cooking_tool, family_heirloom"}}
+- "I got a survival knife for my camping trips" → entity: {name: "survival knife", type: "item", attributes: {relationship: "owns", acquisition: "bought", category: "outdoor_gear, camping_equipment, safety_tool"}}
 
 CRITICAL: Resolve holidays and relative dates to specific dates in entity attributes.
 
