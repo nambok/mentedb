@@ -494,6 +494,70 @@ impl MenteDB {
             }
         }
 
+        // --- Spreading activation: BFS from seed entities ---
+        // Find entity nodes matching query concepts, BFS depth 2, decay 0.85/hop
+        let mut activation_hits: Vec<(MemoryId, f32)> = Vec::new();
+        {
+            let seed_embedding = if let Some(ref embedder) = self.embedder {
+                embedder.embed(query).ok()
+            } else {
+                None
+            };
+            if let Some(ref seed_emb) = seed_embedding {
+                // Find top entity nodes by embedding similarity
+                let all_node_ids: Vec<MemoryId> = db.graph().graph().node_ids().to_vec();
+                let mut entity_sims: Vec<(MemoryId, f32)> = Vec::new();
+                for nid in &all_node_ids {
+                    if let Ok(node) = db.get_memory(*nid) {
+                        if node.tags.iter().any(|t| t.starts_with("entity_name:")) {
+                            let sim = cosine_similarity(seed_emb, &node.embedding);
+                            if sim > 0.3 {
+                                entity_sims.push((*nid, sim));
+                            }
+                        }
+                    }
+                }
+                entity_sims.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                entity_sims.truncate(5); // Top 5 seed entities
+
+                // BFS depth 2 with activation decay
+                let decay = 0.85f32;
+                let threshold = 0.3f32;
+                let mut visited: std::collections::HashSet<MemoryId> = std::collections::HashSet::new();
+                let mut frontier: Vec<(MemoryId, f32)> = entity_sims.iter()
+                    .map(|(id, sim)| (*id, *sim))
+                    .collect();
+
+                for _depth in 0..2 {
+                    let mut next_frontier: Vec<(MemoryId, f32)> = Vec::new();
+                    for (nid, activation) in &frontier {
+                        if !visited.insert(*nid) { continue; }
+                        let propagated = activation * decay;
+                        if propagated < threshold { continue; }
+                        activation_hits.push((*nid, *activation));
+
+                        let neighbors = db.graph().graph().outgoing(*nid);
+                        for (target, _data) in neighbors {
+                            if !visited.contains(&target) {
+                                next_frontier.push((target, propagated));
+                            }
+                        }
+                        let in_neighbors = db.graph().graph().incoming(*nid);
+                        for (source, _data) in in_neighbors {
+                            if !visited.contains(&source) {
+                                next_frontier.push((source, propagated));
+                            }
+                        }
+                    }
+                    frontier = next_frontier;
+                }
+
+                if debug && !activation_hits.is_empty() {
+                    eprintln!("[search] Spreading activation found {} nodes", activation_hits.len());
+                }
+            }
+        }
+
         // --- Merge all passes with RRF ---
         use std::collections::HashMap;
         let rrf_k: f32 = 60.0;
@@ -515,6 +579,10 @@ impl MenteDB {
         // Pass 4 broad keywords: reduced weight (noisy category terms)
         for (rank, (id, _)) in pass4_broad_hits.iter().enumerate() {
             *rrf_scores.entry(id.to_string()).or_insert(0.0) += 0.4 / (rrf_k + rank as f32);
+        }
+        // Spreading activation: graph-discovered nodes weighted by activation level
+        for (rank, (id, _activation)) in activation_hits.iter().enumerate() {
+            *rrf_scores.entry(id.to_string()).or_insert(0.0) += 0.6 / (rrf_k + rank as f32);
         }
 
         let mut merged: Vec<(String, f32)> = rrf_scores.into_iter().collect();
@@ -1674,6 +1742,169 @@ impl MenteDB {
         Ok(gist_ids)
     }
 
+    /// State resolution: for entities with conflicting edge labels, keep latest and mark older edges.
+    /// E.g., if user moved from NYC to SF, the "lives_in:NYC" edge gets valid_until set.
+    fn resolve_states(&mut self) -> PyResult<usize> {
+        let db = self.db.as_mut().ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let debug = std::env::var("MENTEDB_DEBUG").is_ok();
+        let mut resolved_count = 0usize;
+
+        let all_node_ids: Vec<MemoryId> = db.graph().graph().node_ids().to_vec();
+        let entity_nodes: Vec<MemoryNode> = all_node_ids.iter()
+            .filter_map(|id| db.get_memory(*id).ok())
+            .filter(|m| m.tags.iter().any(|t| t.starts_with("entity_name:")))
+            .collect();
+
+        for entity in &entity_nodes {
+            // Get all outgoing edges from this entity
+            let outgoing = db.graph().graph().outgoing(entity.id);
+            
+            // Group edges by their relationship label prefix (e.g., "lives_in", "works_at")
+            let mut label_groups: std::collections::HashMap<String, Vec<(MemoryId, u64, f32)>> = std::collections::HashMap::new();
+            for (target_id, data) in &outgoing {
+                if let Some(ref label) = data.label {
+                    // Extract relationship type (before the colon or full label)
+                    let rel_type = if let Some(pos) = label.find(':') {
+                        &label[..pos]
+                    } else {
+                        label.as_str()
+                    };
+                    // Only resolve state-like relationships
+                    let stateful = matches!(rel_type,
+                        "lives_in" | "works_at" | "has_role" | "married_to" | "dating" |
+                        "owns" | "uses" | "drives" | "studies_at" | "located_in" |
+                        "employed_by" | "salary" | "title" | "status"
+                    );
+                    if stateful {
+                        label_groups.entry(rel_type.to_string()).or_default()
+                            .push((*target_id, data.created_at, data.weight));
+                    }
+                }
+            }
+
+            // For each relationship type with multiple edges, keep latest
+            for (rel_type, mut edges) in label_groups {
+                if edges.len() < 2 { continue; }
+                edges.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by created_at descending
+                let latest_time = edges[0].1;
+
+                // Mark all but the latest with valid_until
+                for &(target_id, created_at, _weight) in &edges[1..] {
+                    // Create a superseding edge with valid_until set
+                    let superseded = MemoryEdge {
+                        source: entity.id,
+                        target: target_id,
+                        edge_type: EdgeType::PartOf,
+                        weight: 0.1, // Downweight superseded edges
+                        created_at,
+                        valid_from: None,
+                        valid_until: Some(latest_time),
+                        label: Some(format!("{}:superseded", rel_type)),
+                    };
+                    let _ = db.relate(superseded);
+                    resolved_count += 1;
+                    if debug {
+                        let entity_name = entity.attributes.get("entity_name")
+                            .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                            .unwrap_or_default();
+                        eprintln!("[resolve_states] Superseded '{}' edge for '{}'", rel_type, entity_name);
+                    }
+                }
+            }
+        }
+
+        if debug { eprintln!("[resolve_states] Resolved {} conflicting states", resolved_count); }
+        Ok(resolved_count)
+    }
+
+    /// Embedding-based entity resolution: merge near-duplicate entities.
+    /// Cosine >0.85 auto-merge, 0.7-0.85 merge if same entity_type, <0.7 keep separate.
+    fn resolve_entities(&mut self) -> PyResult<usize> {
+        let db = self.db.as_mut().ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let debug = std::env::var("MENTEDB_DEBUG").is_ok();
+        let mut merge_count = 0usize;
+
+        let all_node_ids: Vec<MemoryId> = db.graph().graph().node_ids().to_vec();
+        let entity_nodes: Vec<MemoryNode> = all_node_ids.iter()
+            .filter_map(|id| db.get_memory(*id).ok())
+            .filter(|m| m.tags.iter().any(|t| t.starts_with("entity_name:")))
+            .collect();
+
+        if entity_nodes.len() < 2 { return Ok(0); }
+
+        // Build list of (id, name, type, embedding)
+        let entities: Vec<(MemoryId, String, String, Vec<f32>)> = entity_nodes.iter()
+            .map(|m| {
+                let name = m.attributes.get("entity_name")
+                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                    .unwrap_or_default();
+                let etype = m.attributes.get("entity_type")
+                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                    .unwrap_or_default();
+                (m.id, name, etype, m.embedding.clone())
+            })
+            .collect();
+
+        let mut merged_into: std::collections::HashMap<MemoryId, MemoryId> = std::collections::HashMap::new();
+
+        for i in 0..entities.len() {
+            if merged_into.contains_key(&entities[i].0) { continue; }
+            for j in (i+1)..entities.len() {
+                if merged_into.contains_key(&entities[j].0) { continue; }
+
+                let sim = cosine_similarity(&entities[i].3, &entities[j].3);
+                let should_merge = sim > 0.85
+                    || (sim > 0.7 && entities[i].2.eq_ignore_ascii_case(&entities[j].2));
+
+                if should_merge {
+                    // Merge j into i: redirect j's edges to i
+                    let j_outgoing = db.graph().graph().outgoing(entities[j].0);
+                    for (target, data) in j_outgoing {
+                        if target == entities[i].0 { continue; }
+                        let edge = MemoryEdge {
+                            source: entities[i].0,
+                            target,
+                            edge_type: data.edge_type,
+                            weight: data.weight,
+                            created_at: data.created_at,
+                            valid_from: data.valid_from,
+                            valid_until: data.valid_until,
+                            label: data.label.clone(),
+                        };
+                        let _ = db.relate(edge);
+                    }
+                    let j_incoming = db.graph().graph().incoming(entities[j].0);
+                    for (source, data) in j_incoming {
+                        if source == entities[i].0 { continue; }
+                        let edge = MemoryEdge {
+                            source,
+                            target: entities[i].0,
+                            edge_type: data.edge_type,
+                            weight: data.weight,
+                            created_at: data.created_at,
+                            valid_from: data.valid_from,
+                            valid_until: data.valid_until,
+                            label: data.label.clone(),
+                        };
+                        let _ = db.relate(edge);
+                    }
+
+                    // Mark merged entity with tag
+                    merged_into.insert(entities[j].0, entities[i].0);
+                    merge_count += 1;
+
+                    if debug {
+                        eprintln!("[resolve_entities] Merged '{}' into '{}' (sim={:.3})",
+                            entities[j].1, entities[i].1, sim);
+                    }
+                }
+            }
+        }
+
+        if debug { eprintln!("[resolve_entities] Merged {} duplicate entities", merge_count); }
+        Ok(merge_count)
+    }
+
     /// Flush and close the database.
     fn close(&mut self) -> PyResult<()> {
         if let Some(mut db) = self.db.take() {
@@ -1969,6 +2200,14 @@ fn hash_embedding(text: &str, dims: usize) -> Vec<f32> {
         }
     }
     emb
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() { return 0.0; }
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na == 0.0 || nb == 0.0 { 0.0 } else { dot / (na * nb) }
 }
 
 // ---------------------------------------------------------------------------
