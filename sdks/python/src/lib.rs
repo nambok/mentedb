@@ -776,21 +776,143 @@ impl MenteDB {
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                let synth_prompt = format!(
-                    "Question: {}\n\n\
-                     Evidence from memory:\n{}\n\n\
-                     Answer the question by listing every qualifying item. Think like a human recalling from memory:\n\
-                     - Read through ALL the evidence\n\
-                     - Identify every distinct item relevant to the question\n\
-                     - For each item, state it clearly with key details (dates, amounts, names)\n\
-                     - Be definitive: state the final count confidently\n\n\
-                     Important distinctions:\n\
-                     - Items the user CURRENTLY HAS (even if planning to sell/donate) = count them\n\
-                     - Items the user is CONSIDERING getting (planning to buy, thinking of trying) = do NOT count\n\
-                     - Items belonging to someone else = do NOT count\n\n\
-                     Format: numbered list of qualifying items, then state the total.",
-                    query, evidence
-                );
+                // --- Graph-informed synthesis for counting queries ---
+                // Query entity nodes to build structured context: entity names, relationships, categories.
+                // If graph has entities with category/relationship data, use structured context.
+                // Otherwise fall back to flat evidence.
+                let mut graph_entities: Vec<(String, String, String)> = Vec::new(); // (name, relationship, details)
+                let mut graph_count: Option<usize> = None;
+
+                if is_counting {
+                    // Scan entity nodes in our result set for structured attributes
+                    for id_str in &synth_ids {
+                        if let Ok(mem_id) = parse_memory_id(id_str) {
+                            if let Ok(node) = db.get_memory(mem_id) {
+                                let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
+                                if !is_entity { continue; }
+
+                                let name = node.attributes.get("entity_name")
+                                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                                    .unwrap_or_default();
+                                let relationship = node.attributes.get("relationship")
+                                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                                    .unwrap_or_else(|| "unknown".to_string());
+                                let etype = node.attributes.get("entity_type")
+                                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                                    .unwrap_or_default();
+
+                                // Build details from other attributes
+                                let mut details = Vec::new();
+                                for (k, v) in &node.attributes {
+                                    if k == "entity_name" || k == "entity_type" || k == "relationship" || k == "category" || k == "relationship_owner" { continue; }
+                                    if let mentedb_core::memory::AttributeValue::String(s) = v {
+                                        details.push(format!("{}: {}", k, s));
+                                    }
+                                }
+                                let owner_info = node.attributes.get("relationship_owner")
+                                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None });
+
+                                let detail_str = if details.is_empty() { etype } else { format!("{}, {}", etype, details.join(", ")) };
+                                let rel_str = if let Some(owner) = owner_info {
+                                    format!("{} ({})", relationship, owner)
+                                } else {
+                                    relationship.clone()
+                                };
+
+                                if !name.is_empty() {
+                                    graph_entities.push((name, rel_str, detail_str));
+                                }
+                            }
+                        }
+                    }
+
+                    // Also scan the full graph for entity nodes we might have missed
+                    // by looking at entity nodes connected to found memories via PartOf edges
+                    let already_found: std::collections::HashSet<String> = graph_entities.iter().map(|(n, _, _)| n.to_lowercase()).collect();
+                    for id_str in &synth_ids {
+                        if let Ok(mem_id) = parse_memory_id(id_str) {
+                            // Check outgoing edges for PartOf connections to entity nodes
+                            let neighbors = db.graph().graph().outgoing(mem_id);
+                            for (neighbor_id, stored_edge) in neighbors {
+                                if stored_edge.edge_type != EdgeType::PartOf { continue; }
+                                if let Ok(neighbor_node) = db.get_memory(neighbor_id) {
+                                    let is_entity = neighbor_node.tags.iter().any(|t| t.starts_with("entity_name:"));
+                                    if !is_entity { continue; }
+                                    let name = neighbor_node.attributes.get("entity_name")
+                                        .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                                        .unwrap_or_default();
+                                    if name.is_empty() || already_found.contains(&name.to_lowercase()) { continue; }
+                                    let relationship = neighbor_node.attributes.get("relationship")
+                                        .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                                        .unwrap_or_else(|| "unknown".to_string());
+                                    let etype = neighbor_node.attributes.get("entity_type")
+                                        .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                                        .unwrap_or_default();
+                                    graph_entities.push((name, relationship, etype));
+                                }
+                            }
+                        }
+                    }
+
+                    if !graph_entities.is_empty() {
+                        // Compute graph-based count: items where user directly owns/uses/attends
+                        let user_owned: Vec<&(String, String, String)> = graph_entities.iter()
+                            .filter(|(_, rel, _)| {
+                                let r = rel.to_lowercase();
+                                !r.contains("someone_else") && !r.contains("considering") &&
+                                !r.contains("wants") && !r.contains("previously") &&
+                                (r.contains("owns") || r.contains("uses") || r.contains("attends") ||
+                                 r.contains("plays") || r.contains("member") || r == "unknown")
+                            })
+                            .collect();
+                        graph_count = Some(user_owned.len());
+                        if debug {
+                            eprintln!("[graph-synthesis] Found {} entities, {} user-owned:", graph_entities.len(), user_owned.len());
+                            for (name, rel, det) in &graph_entities {
+                                eprintln!("[graph-synthesis]   {} — {} ({})", name, rel, det);
+                            }
+                        }
+                    }
+                }
+
+                // Build the synthesis prompt — use graph structure if available
+                let synth_prompt = if let Some(count) = graph_count {
+                    // Graph-informed: structured entity list + evidence for verification
+                    let entity_list = graph_entities.iter().enumerate()
+                        .map(|(i, (name, rel, det))| format!("{}. {} ({}) — {}", i + 1, name, det, rel))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    format!(
+                        "Question: {}\n\n\
+                         Entities found in memory graph:\n{}\n\n\
+                         Evidence from memory (for verification):\n{}\n\n\
+                         The graph found {} entities. Using the evidence, verify this is correct.\n\
+                         For counting questions:\n\
+                         - Items the user CURRENTLY HAS (even if planning to sell/donate) = count them\n\
+                         - Items the user is CONSIDERING getting (planning to buy, thinking of trying) = do NOT count\n\
+                         - Items belonging to someone else = do NOT count\n\n\
+                         List each qualifying item, then state the total count.",
+                        query, entity_list, evidence, count
+                    )
+                } else {
+                    // Fallback: flat evidence (no graph structure available)
+                    format!(
+                        "Question: {}\n\n\
+                         Evidence from memory:\n{}\n\n\
+                         Answer the question by listing every qualifying item. Think like a human recalling from memory:\n\
+                         - Read through ALL the evidence\n\
+                         - Identify every distinct item relevant to the question\n\
+                         - For each item, state it clearly with key details (dates, amounts, names)\n\
+                         - Be definitive: state the final count confidently\n\n\
+                         Important distinctions:\n\
+                         - Items the user CURRENTLY HAS (even if planning to sell/donate) = count them\n\
+                         - Items the user is CONSIDERING getting (planning to buy, thinking of trying) = do NOT count\n\
+                         - Items belonging to someone else = do NOT count\n\n\
+                         Format: numbered list of qualifying items, then state the total.",
+                        query, evidence
+                    )
+                };
                 let synth_system = "You recall and organize facts from memory evidence. Be thorough — list every qualifying item. Be precise — don't count items the user only plans to acquire or that belong to others.";
 
                 match rt.block_on(http_provider.call_text_with_retry(&synth_prompt, synth_system)) {
