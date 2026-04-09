@@ -176,6 +176,26 @@ impl CsrGraph {
         });
     }
 
+    /// Strengthen an edge by incrementing its weight (Hebbian learning).
+    /// Adds a delta edge with the new weight; compaction will merge it.
+    pub fn strengthen_edge(&mut self, source: MemoryId, target: MemoryId, delta: f32) {
+        // Find the existing edge to get its current data
+        if let Some(existing) = self.outgoing(source).into_iter().find(|(id, _)| *id == target) {
+            let (_, stored) = existing;
+            let new_weight = (stored.weight + delta).min(1.0);
+            let source_idx = self.add_node(source);
+            let target_idx = self.add_node(target);
+            self.delta_edges.push(DeltaEdge {
+                source_idx,
+                target_idx,
+                data: StoredEdge {
+                    weight: new_weight,
+                    ..stored
+                },
+            });
+        }
+    }
+
     /// Mark an edge for removal.
     pub fn remove_edge(&mut self, source: MemoryId, target: MemoryId) {
         let (Some(&src_idx), Some(&tgt_idx)) =

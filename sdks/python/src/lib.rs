@@ -539,7 +539,11 @@ impl MenteDB {
                     let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
                     if is_entity {
                         // Get subgraph (depth 1) to find PartOf neighbors
-                        let (neighbor_ids, _edges) = db.graph().get_context_subgraph(mem_id, 1);
+                        let (neighbor_ids, edges) = db.graph().get_context_subgraph(mem_id, 1);
+                        // Hebbian learning: strengthen traversed edges
+                        for edge in &edges {
+                            db.graph_mut().strengthen_edge(edge.source, edge.target, 0.02);
+                        }
                         for nid in neighbor_ids {
                             let nid_str = nid.to_string();
                             if !seen.contains(&nid_str) {
