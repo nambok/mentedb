@@ -959,7 +959,6 @@ impl MenteDB {
         weight: f32,
         valid_from: Option<u64>,
         valid_until: Option<u64>,
-        label: None,
     ) -> PyResult<()> {
         let db = self.db.as_mut().ok_or_else(|| {
             PyRuntimeError::new_err("database is closed")
@@ -973,6 +972,7 @@ impl MenteDB {
             created_at: now_us(),
             valid_from,
             valid_until,
+            label: None,
         };
 
         db.relate(edge).map_err(to_pyerr)
@@ -1223,6 +1223,7 @@ impl MenteDB {
             .db
             .as_mut()
             .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let debug = std::env::var("MENTEDB_DEBUG").is_ok();
 
         let aid = match agent_id {
             Some(s) => parse_agent_id(s)?,
