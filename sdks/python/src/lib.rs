@@ -959,12 +959,15 @@ impl MenteDB {
                         "Question: {}\n\n\
                          Entities found in memory graph:\n{}\n\n\
                          Evidence from memory (for verification):\n{}\n\n\
-                         The graph found {} entities. Using the evidence, verify this is correct.\n\
-                         For counting questions:\n\
+                         The graph found {} distinct entities. Using the evidence, verify and answer.\n\n\
+                         IMPORTANT counting rules:\n\
+                         - If the question asks about frequency (e.g., \"how many X per week/month\"), count OCCURRENCES not unique items.\n\
+                           Example: \"Zumba on Tuesdays and Thursdays\" = 2 classes per week, not 1.\n\
+                         - If the question asks about distinct items (e.g., \"how many pets\"), count unique items.\n\
                          - Items the user CURRENTLY HAS (even if planning to sell/donate) = count them\n\
                          - Items the user is CONSIDERING getting (planning to buy, thinking of trying) = do NOT count\n\
                          - Items belonging to someone else = do NOT count\n\n\
-                         List each qualifying item, then state the total count.",
+                         List each qualifying item/occurrence with details, then state the total count.",
                         query, entity_list, evidence, count
                     )
                 } else {
@@ -977,11 +980,14 @@ impl MenteDB {
                          - Identify every distinct item relevant to the question\n\
                          - For each item, state it clearly with key details (dates, amounts, names)\n\
                          - Be definitive: state the final count confidently\n\n\
-                         Important distinctions:\n\
+                         IMPORTANT counting rules:\n\
+                         - If the question asks about frequency (e.g., \"how many X per week/month\"), count OCCURRENCES not unique items.\n\
+                           Example: \"Zumba on Tuesdays and Thursdays\" = 2 classes per week, not 1.\n\
+                         - If the question asks about distinct items (e.g., \"how many pets\"), count unique items.\n\
                          - Items the user CURRENTLY HAS (even if planning to sell/donate) = count them\n\
                          - Items the user is CONSIDERING getting (planning to buy, thinking of trying) = do NOT count\n\
                          - Items belonging to someone else = do NOT count\n\n\
-                         Format: numbered list of qualifying items, then state the total.",
+                         Format: numbered list of qualifying items/occurrences, then state the total.",
                         query, evidence
                     )
                 };
@@ -998,17 +1004,19 @@ impl MenteDB {
                             let enum_prompt = format!(
                                 "Question: {}\n\n\
                                  Evidence from memory:\n{}\n\n\
-                                 List EVERY distinct item relevant to this question as a JSON array.\n\
+                                 List EVERY item/occurrence relevant to this question as a JSON array.\n\
+                                 IMPORTANT: If the question asks about frequency (per week/month), list each OCCURRENCE separately.\n\
+                                 Example: \"Zumba on Tuesdays and Thursdays\" = two entries (one for Tuesday, one for Thursday).\n\
                                  For each item, include:\n\
-                                 - \"name\": the item name\n\
+                                 - \"name\": the item name (include day/time if frequency question)\n\
                                  - \"qualifies\": true if it should be counted (user currently has/does it), false if not (considering, someone else's, historical)\n\
                                  - \"reason\": brief reason for qualification decision\n\n\
                                  Return ONLY valid JSON. Example:\n\
-                                 [{{\"name\": \"Fender Stratocaster\", \"qualifies\": true, \"reason\": \"user owns it\"}},\n\
-                                  {{\"name\": \"ukulele\", \"qualifies\": false, \"reason\": \"only considering buying\"}}]",
+                                 [{{\"name\": \"Zumba - Tuesday 7pm\", \"qualifies\": true, \"reason\": \"user attends weekly\"}},\n\
+                                  {{\"name\": \"Zumba - Thursday 7pm\", \"qualifies\": true, \"reason\": \"user attends weekly\"}}]",
                                 query, evidence
                             );
-                            let enum_system = "You enumerate items from evidence as JSON. Return ONLY a JSON array. No explanation.";
+                            let enum_system = "You enumerate items/occurrences from evidence as JSON. For frequency questions, list each occurrence separately. Return ONLY a JSON array. No explanation.";
 
                             match rt.block_on(http_provider.call_text_with_retry(&enum_prompt, enum_system)) {
                                 Ok(enum_response) => {
