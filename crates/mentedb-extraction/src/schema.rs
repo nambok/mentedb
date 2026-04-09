@@ -47,24 +47,47 @@ pub struct ExtractedEntity {
 
 impl ExtractedEntity {
     /// Build a searchable text representation of this entity and its attributes.
+    /// Includes categories for discoverability by abstract searches.
     pub fn embedding_key(&self) -> String {
         let mut key = format!("{} ({})", self.name, self.entity_type);
+        // Prioritize category in embedding for abstract query matching
+        if let Some(cat) = self.attributes.get("category") {
+            if !cat.is_empty() {
+                key.push_str(&format!(" [categories: {}]", cat));
+            }
+        }
         for (attr_name, attr_value) in &self.attributes {
+            if attr_name == "category" { continue; } // already included above
             key.push_str(&format!(" {}: {}", attr_name, attr_value));
         }
         key
     }
 
     /// Build a rich content string for storage as a memory node.
+    /// Includes category for searchability by abstract queries.
     pub fn to_content(&self) -> String {
-        let mut content = format!("{} is a {}", self.name, self.entity_type);
+        let mut content = String::new();
+        // Prepend categories for semantic enrichment (makes entities findable by category search)
+        if let Some(cat) = self.attributes.get("category") {
+            if !cat.is_empty() {
+                let cats: Vec<&str> = cat.split(',').map(|c| c.trim()).filter(|c| !c.is_empty()).collect();
+                if !cats.is_empty() {
+                    let readable: Vec<String> = cats.iter().map(|c| c.replace('_', " ")).collect();
+                    content.push_str(&format!("{} — ", readable.join(", ")));
+                }
+            }
+        }
+        content.push_str(&format!("{} is a {}", self.name, self.entity_type));
         if !self.attributes.is_empty() {
             let attrs: Vec<String> = self
                 .attributes
                 .iter()
+                .filter(|(k, _)| k.as_str() != "category") // already in prefix
                 .map(|(k, v)| format!("{}: {}", k, v))
                 .collect();
-            content.push_str(&format!(". Attributes: {}", attrs.join(", ")));
+            if !attrs.is_empty() {
+                content.push_str(&format!(". Attributes: {}", attrs.join(", ")));
+            }
         }
         content
     }

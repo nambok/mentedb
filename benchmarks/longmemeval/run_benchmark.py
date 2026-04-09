@@ -200,6 +200,16 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
     result = db.store_extracted(raw_memories)
     memory_ids.extend(result.get("stored_ids", []))
 
+    # Build community summaries for entity clusters (e.g., "health devices", "musical instruments")
+    # These summaries make entities discoverable by abstract category queries.
+    if use_cognitive and llm_provider:
+        try:
+            community_ids = db.build_communities()
+            if community_ids:
+                print(f"    [{thread}] built {len(community_ids)} community summaries", flush=True)
+        except Exception as e:
+            print(f"    [{thread}] community build failed: {e}", flush=True)
+
     print(f"    [{thread}] stored {len(memory_ids)} memories", flush=True)
     return memory_ids
 

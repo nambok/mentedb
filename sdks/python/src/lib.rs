@@ -1220,9 +1220,11 @@ impl MenteDB {
         let pipeline = ExtractionPipeline::new(http_provider, config.clone());
 
         let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
-        let all_memories = rt
-            .block_on(pipeline.extract_from_conversation(conversation))
+        let extraction_result = rt
+            .block_on(pipeline.extract_full(conversation))
             .map_err(to_pyerr)?;
+        let all_memories = extraction_result.memories;
+        let extracted_entities = extraction_result.entities;
 
         let total = all_memories.len();
         let quality_passed = pipeline.filter_quality(&all_memories);
@@ -1244,9 +1246,42 @@ impl MenteDB {
         }
         let mut entries: Vec<MemEntry> = Vec::new();
 
+        // Build entity name → categories map for semantic enrichment of fact embeddings
+        let mut entity_categories: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for entity in &extracted_entities {
+            if let Some(cat) = entity.attributes.get("category") {
+                let cats: Vec<String> = cat.split(',')
+                    .map(|c| c.trim().to_lowercase().replace('_', " "))
+                    .filter(|c| !c.is_empty())
+                    .collect();
+                if !cats.is_empty() {
+                    entity_categories.insert(entity.name.to_lowercase(), cats);
+                }
+            }
+        }
+
         for memory in &quality_passed {
             let mt = map_extraction_type_to_memory_type(&memory.memory_type);
-            embed_texts.push(memory.embedding_key());
+            let mut embed_key = memory.embedding_key();
+
+            // Enrich fact embeddings with categories from mentioned entities
+            // "User has Phonak hearing aids" + entity has category "health_device"
+            // → embed key becomes "User has Phonak hearing aids [context: health device]"
+            if !entity_categories.is_empty() {
+                let mut injected_cats: Vec<String> = Vec::new();
+                for entity_name in &memory.entities {
+                    if let Some(cats) = entity_categories.get(&entity_name.to_lowercase()) {
+                        injected_cats.extend(cats.iter().cloned());
+                    }
+                }
+                if !injected_cats.is_empty() {
+                    injected_cats.sort();
+                    injected_cats.dedup();
+                    embed_key.push_str(&format!(" [context: {}]", injected_cats.join(", ")));
+                }
+            }
+
+            embed_texts.push(embed_key);
             entries.push(MemEntry {
                 content: memory.content.clone(),
                 mt,
@@ -1482,6 +1517,37 @@ impl MenteDB {
                 dict.set_item("stored_ids", Vec::<String>::new())?;
                 Ok(dict.into())
             });
+        }
+
+        // Phase 1.5: Enrich embed keys with entity categories for semantic discoverability.
+        // Build entity name → categories map from entity entries in this batch.
+        {
+            let mut entity_cats: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            for mem in &parsed {
+                if let (Some(name), Some(attrs)) = (&mem.entity_name, &mem.entity_attributes) {
+                    if let Some(cat) = attrs.get("category") {
+                        let cats: Vec<String> = cat.split(',')
+                            .map(|c| c.trim().to_lowercase().replace('_', " "))
+                            .filter(|c| !c.is_empty())
+                            .collect();
+                        if !cats.is_empty() {
+                            entity_cats.insert(name.to_lowercase(), cats);
+                        }
+                    }
+                }
+            }
+            // For entity entries, ensure their embed_key includes categories
+            if !entity_cats.is_empty() {
+                for mem in &mut parsed {
+                    if let Some(ref name) = mem.entity_name {
+                        if let Some(cats) = entity_cats.get(&name.to_lowercase()) {
+                            if !mem.embed_key.contains("[categories:") {
+                                mem.embed_key.push_str(&format!(" [categories: {}]", cats.join(", ")));
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Phase 2: Batch embed in chunks (OpenAI has payload limits)
@@ -1945,6 +2011,108 @@ impl MenteDB {
 
         if debug { eprintln!("[resolve_entities] Merged {} duplicate entities", merge_count); }
         Ok(merge_count)
+    }
+
+    /// Generate community summaries for clusters of related entities.
+    /// Groups entities by shared categories, creates a summary node per cluster.
+    /// These summaries are searchable at a higher level of abstraction.
+    fn build_communities(&mut self) -> PyResult<Vec<String>> {
+        let db = self.db.as_mut().ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let debug = std::env::var("MENTEDB_DEBUG").is_ok();
+        let rt = tokio::runtime::Runtime::new().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let config = build_extraction_config_from_env(None)?;
+        let http_provider = mentedb_extraction::provider::HttpExtractionProvider::new(config.clone())
+            .map_err(to_pyerr)?;
+
+        // Build category → entity list index
+        let all_node_ids: Vec<MemoryId> = db.graph().graph().node_ids().to_vec();
+        let mut category_entities: std::collections::HashMap<String, Vec<(String, String, String)>> = std::collections::HashMap::new();
+
+        for nid in &all_node_ids {
+            if let Ok(node) = db.get_memory(*nid) {
+                if !node.tags.iter().any(|t| t.starts_with("entity_name:")) { continue; }
+                if node.tags.iter().any(|t| t == "community_summary") { continue; }
+
+                let name = node.attributes.get("entity_name")
+                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                    .unwrap_or_default();
+                let relationship = node.attributes.get("relationship")
+                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                    .unwrap_or_else(|| "unknown".to_string());
+                let etype = node.attributes.get("entity_type")
+                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                    .unwrap_or_default();
+
+                if let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
+                    for single_cat in cat.split(',') {
+                        let trimmed = single_cat.trim().to_lowercase();
+                        if !trimmed.is_empty() {
+                            category_entities.entry(trimmed).or_default()
+                                .push((name.clone(), relationship.clone(), etype.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut community_ids = Vec::new();
+
+        for (category, entities) in &category_entities {
+            if entities.len() < 2 { continue; }
+
+            // Check if community summary already exists for this category
+            let community_tag = format!("community:{}", category);
+            let already_exists = all_node_ids.iter().any(|nid| {
+                db.get_memory(*nid).ok()
+                    .map(|m| m.tags.iter().any(|t| t == &community_tag))
+                    .unwrap_or(false)
+            });
+            if already_exists { continue; }
+
+            let entity_list = entities.iter()
+                .map(|(name, rel, etype)| format!("- {} ({}) — user relationship: {}", name, etype, rel))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let readable_cat = category.replace('_', " ");
+
+            let prompt = format!(
+                "Create a brief summary of the user's {} based on these entities:\n{}\n\n\
+                 Write 1-2 sentences listing ALL items and the user's relationship to each. \
+                 Be specific — include every entity name. This summary should be findable \
+                 when someone searches for '{}'.",
+                readable_cat, entity_list, readable_cat
+            );
+            let system = "You create concise factual summaries. List every item mentioned. Be complete.";
+
+            match rt.block_on(http_provider.call_text_with_retry(&prompt, system)) {
+                Ok(summary) => {
+                    let summary_text = summary.trim().to_string();
+                    if debug { eprintln!("[community] {}: {}", category, &summary_text[..std::cmp::min(summary_text.len(), 120)]); }
+
+                    let emb = if let Some(ref embedder) = self.embedder {
+                        embedder.embed(&summary_text).map_err(to_pyerr)?
+                    } else {
+                        hash_embedding(&summary_text, 384)
+                    };
+
+                    let mut node = MemoryNode::new(
+                        mentedb_core::types::AgentId::new(),
+                        MemoryType::Semantic,
+                        summary_text,
+                        emb,
+                    );
+                    node.tags = vec!["community_summary".to_string(), community_tag];
+                    node.confidence = 0.95;
+                    let node_id = node.id;
+                    db.store(node).map_err(to_pyerr)?;
+                    community_ids.push(node_id.to_string());
+                }
+                Err(e) => if debug { eprintln!("[community] LLM failed for '{}': {e}", category); },
+            }
+        }
+
+        if debug { eprintln!("[community] Created {} community summaries", community_ids.len()); }
+        Ok(community_ids)
     }
 
     /// Flush and close the database.
