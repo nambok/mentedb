@@ -1646,7 +1646,7 @@ impl MenteDB {
         let rt = tokio::runtime::Runtime::new().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         // Set up LLM provider for gist generation
-        let config = mentedb_extraction::ExtractionConfig::from_env();
+        let config = build_extraction_config_from_env(None)?;
         let http_provider = mentedb_extraction::provider::HttpExtractionProvider::new(config.clone())
             .map_err(to_pyerr)?;
 
