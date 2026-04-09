@@ -639,6 +639,9 @@ impl MenteDB {
             for (id_str, _) in expanded.iter().take(gap_limit) {
                 if let Ok(mem_id) = parse_memory_id(id_str) {
                     if let Ok(node) = db.get_memory(mem_id) {
+                        let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
+                        let is_community = node.tags.iter().any(|t| t == "community_summary");
+                        if is_entity || is_community { continue; }
                         found_items.push(node.content.clone());
                     }
                 }
@@ -753,6 +756,10 @@ impl MenteDB {
             for (id_str, _score) in expanded.iter().take(rerank_limit) {
                 if let Ok(mem_id) = parse_memory_id(id_str) {
                     if let Ok(node) = db.get_memory(mem_id) {
+                        // Skip entity/community nodes from reranker — they duplicate facts
+                        let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
+                        let is_community = node.tags.iter().any(|t| t == "community_summary");
+                        if is_entity || is_community { continue; }
                         memory_contents.push((id_str.clone(), node.content.clone()));
                     }
                 }
@@ -837,6 +844,13 @@ impl MenteDB {
             for id_str in &synth_ids {
                 if let Ok(mem_id) = parse_memory_id(id_str) {
                     if let Ok(node) = db.get_memory(mem_id) {
+                        // Skip entity nodes and community summaries from synthesis evidence.
+                        // They duplicate what facts already say and confuse the LLM into
+                        // counting the same item multiple times. Entity structure is still
+                        // used via the graph_entities path above.
+                        let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
+                        let is_community = node.tags.iter().any(|t| t == "community_summary");
+                        if is_entity || is_community { continue; }
                         synth_contents.push(node.content.clone());
                     }
                 }
@@ -1132,7 +1146,22 @@ impl MenteDB {
             }
         }
 
-        Ok(expanded
+        // Filter entity nodes and community summaries from final results.
+        // They served their purpose in retrieval (spreading activation, graph traversal)
+        // but their content duplicates what facts already say and confuses the reader.
+        let mut filtered_results: Vec<(String, f32)> = Vec::new();
+        for (id_str, score) in expanded {
+            if let Ok(mem_id) = parse_memory_id(&id_str) {
+                if let Ok(node) = db.get_memory(mem_id) {
+                    let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
+                    let is_community = node.tags.iter().any(|t| t == "community_summary");
+                    if is_entity || is_community { continue; }
+                }
+            }
+            filtered_results.push((id_str, score));
+        }
+
+        Ok(filtered_results
             .into_iter()
             .map(|(id, score)| SearchResult { id, score })
             .collect())
