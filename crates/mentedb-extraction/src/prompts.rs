@@ -16,6 +16,7 @@ WHAT TO EXTRACT (extract ALL of these, not just "important" ones):
 - Specifics: names, locations, dates, prices, quantities, brands, addresses, durations
 - Places: stores, venues, studios, restaurants, parks — ANY named location
 - Numbers: amounts, counts, measurements, distances, ages, durations, scores
+- Assistant outputs: recommendations, schedules, plans, tables, or lists the assistant provided — extract the KEY DATA POINTS (names, assignments, values) as individual facts
 
 CRITICAL RULES FOR COMPLETENESS:
 
@@ -30,11 +31,23 @@ CRITICAL RULES FOR COMPLETENESS:
    - "on Christmas Eve" → "on December 24th"
    - "last Thanksgiving" → include the specific date if inferrable from context
 
+   CRITICAL: The conversation begins with [Date: YYYY/MM/DD ...]. This is WHEN the conversation happened. Include this date in EVERY extracted fact so temporal context is never lost:
+   ✗ "User visited the Museum of Modern Art" (WHEN?)
+   ✓ "User visited the Museum of Modern Art on January 8, 2023"
+   ✗ "User received a crystal chandelier from aunt" (WHEN?)
+   ✓ "User received a crystal chandelier from aunt on March 4, 2023"
+
 3. ONE FACT PER MEMORY: Each memory should contain exactly ONE distinct fact. Do NOT combine multiple facts into a single memory. Instead of:
    ✗ "User takes yoga at Serenity Yoga and uses Down Dog app at home"
    Do this:
    ✓ "User takes yoga classes at Serenity Yoga" (one memory)
    ✓ "User uses the Down Dog app for home yoga practice" (separate memory)
+
+4. CONVERSATIONAL CONTEXT: When extracting a fact, include implied context from the surrounding conversation. If the user is discussing a specific store, place, or person, and then mentions an action, include the store/place/person even if it is not repeated in that sentence:
+   ✗ "User redeemed a $5 coupon on coffee creamer" (WHERE? The conversation is about Target)
+   ✓ "User redeemed a $5 coupon on coffee creamer at Target on May 28, 2023"
+   ✗ "User bought a new pair of running shoes" (WHERE? The user was discussing their trip to Nike outlet)
+   ✓ "User bought a new pair of running shoes at the Nike outlet"
 
 4. DISTINGUISH SIMILAR FACTS: When the conversation mentions similar but different things (e.g., two different locations, two different activities), make sure each gets its own memory with enough detail to tell them apart.
 
@@ -72,7 +85,7 @@ RULES:
 - Do NOT extract greetings, pleasantries, thank-yous, or filler
 - Do NOT extract intermediate reasoning steps, only final conclusions
 - Do NOT duplicate information, say it once in the most complete form
-- Each memory should be self-contained and understandable without the original conversation
+- Each memory should be self-contained and understandable without the original conversation. ALWAYS include WHO, WHAT, WHERE, WHEN from the conversation context — even if the user didn't repeat it in every sentence. If the conversation is about Target and the user mentions redeeming a coupon, write "redeemed a coupon AT TARGET" not just "redeemed a coupon."
 - Keep content concise but complete, one to two sentences maximum
 - Include ALL relevant entities for each memory
 - Provide a one-sentence reasoning for why each memory is worth keeping

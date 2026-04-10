@@ -43,6 +43,26 @@ fn parse_memory_id(s: &str) -> PyResult<MemoryId> {
     Ok(MemoryId(parse_uuid(s)?))
 }
 
+/// Format a microsecond timestamp as "YYYY-MM-DD" for human-readable evidence.
+fn format_timestamp_date(us: u64) -> Option<String> {
+    if us == 0 { return None; }
+    let secs = (us / 1_000_000) as i64;
+    // Manual date calculation from unix timestamp (no chrono dependency)
+    let days = secs / 86400;
+    // Civil date from days since epoch (algorithm from Howard Hinnant)
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    Some(format!("{:04}-{:02}-{:02}", y, m, d))
+}
+
 fn parse_memory_type(s: &str) -> PyResult<MemoryType> {
     match s {
         "episodic" => Ok(MemoryType::Episodic),
@@ -338,11 +358,22 @@ impl MenteDB {
         })?;
 
         let config = build_extraction_config_from_env(provider)?;
-        let http_provider = HttpExtractionProvider::new(config).map_err(to_pyerr)?;
+        let http_provider = HttpExtractionProvider::new(config.clone()).map_err(to_pyerr)?;
+
+        // Synthesis model — configurable via MENTEDB_SYNTHESIS_MODEL, defaults to same as extraction
+        let synth_model = std::env::var("MENTEDB_SYNTHESIS_MODEL").unwrap_or_else(|_| {
+            config.model.clone()
+        });
+        let mut synth_config = config.clone();
+        synth_config.model = synth_model.clone();
+        let synth_provider = HttpExtractionProvider::new(synth_config).map_err(to_pyerr)?;
 
         let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
 
         let debug = std::env::var("MENTEDB_DEBUG").is_ok();
+        if debug {
+            eprintln!("[search_expanded] synthesis model: {}", synth_model);
+        }
 
         // Adaptive K values for escalating retrieval depth
         let k1 = std::cmp::min(k, 10);  // instant recall
@@ -917,13 +948,16 @@ impl MenteDB {
                 if let Ok(mem_id) = parse_memory_id(id_str) {
                     if let Ok(node) = db.get_memory(mem_id) {
                         // Skip entity nodes and community summaries from synthesis evidence.
-                        // They duplicate what facts already say and confuse the LLM into
-                        // counting the same item multiple times. Entity structure is still
-                        // used via the graph_entities path above.
                         let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
                         let is_community = node.tags.iter().any(|t| t == "community_summary");
                         if is_entity || is_community { continue; }
-                        synth_contents.push(node.content.clone());
+                        // Prepend date if the memory has a meaningful timestamp
+                        let content = if let Some(date_str) = format_timestamp_date(node.created_at) {
+                            format!("[{}] {}", date_str, node.content)
+                        } else {
+                            node.content.clone()
+                        };
+                        synth_contents.push(content);
                     }
                 }
             }
@@ -1044,26 +1078,24 @@ impl MenteDB {
                     format!(
                         "Question: {}\n\n\
                          Entities found in memory graph:\n{}\n\n\
-                         Evidence from memory (for verification):\n{}\n\n\
+                         Evidence from memory:\n{}\n\n\
                          The graph found {} distinct entities. Using the evidence, verify and answer.\n\n\
-                         GROUNDING RULES (critical):\n\
-                         - ONLY use facts explicitly stated in the evidence above\n\
-                         - Quote individual numbers, prices, and amounts EXACTLY as written in evidence\n\
-                         - Do NOT change individual amounts (if evidence says $120, it is $120)\n\
-                         - You CAN and SHOULD add up amounts when the question asks for a total\n\
-                         - Dates must come from evidence — if evidence says February, do NOT say December\n\
-                         - If the question asks about a time period and no evidence falls in that period, say so\n\
-                         - Always give the best answer you can with the available evidence\n\n\
-                         COUNTING RULES:\n\
-                         - If the question asks about frequency (e.g., \"how many X per week/month\"), count OCCURRENCES not unique items.\n\
-                           Example: \"Zumba on Tuesdays and Thursdays\" = 2 classes per week, not 1.\n\
-                         - If the question asks about distinct items (e.g., \"how many pets\"), count unique items.\n\
-                         - Items the user CURRENTLY HAS (even if planning to sell/donate) = count them\n\
-                         - Items the user is CONSIDERING getting (planning to buy, thinking of trying) = do NOT count\n\
-                         - Items belonging to someone else = do NOT count\n\
-                         - \"Plan to\" or \"looking to\" do something = count it if the question asks about plans\n\n\
-                         VERIFICATION STEP: After listing items, re-check each one against the evidence.\n\
-                         For each item, cite which evidence entry [N] supports it. Remove any item you cannot cite.",
+                         RULES:\n\
+                         - ONLY use facts from the evidence above — do not invent items\n\
+                         - Quote numbers and prices EXACTLY as stated. Add them up when the question asks for a total.\n\
+                         - Dates must come from evidence — do not confuse months\n\
+                         - If no evidence matches the question's time period, say so\n\
+                         - When counting: include every item the user HAS or USES, even occasionally\n\
+                         - When counting: exclude items belonging to others, or items only being considered/planned\n\
+                         - When in doubt about whether to include an item, INCLUDE it\n\n\
+                         TEMPORAL REASONING (for time-related questions):\n\
+                         - Look for dates mentioned in the evidence (e.g., 'on January 8', 'March 4', 'February 14th')\n\
+                         - For 'how many days/weeks/months between X and Y': find the exact date of EACH event, then calculate the difference\n\
+                         - For 'which happened first/most recently': find dates for each event, then compare\n\
+                         - For 'how many weeks/months ago': calculate from the question's context date to the event date\n\
+                         - SHOW YOUR DATE MATH: state each event's date, then compute the answer\n\
+                         - Each piece of evidence may come from a DIFFERENT date — do not assume events in the same evidence list happened on the same day\n\n\
+                         List each item with a citation [N] to the evidence entry that supports it, then state the total.",
                         query, entity_list, evidence, count
                     )
                 } else {
@@ -1072,31 +1104,28 @@ impl MenteDB {
                         "Question: {}\n\n\
                          Evidence from memory:\n{}\n\n\
                          Answer the question using ONLY the evidence above.\n\n\
-                         GROUNDING RULES (critical):\n\
-                         - ONLY use facts explicitly stated in the evidence\n\
-                         - Quote individual numbers, prices, and amounts EXACTLY as written in evidence\n\
-                         - Do NOT change individual amounts (if evidence says $120, it is $120)\n\
-                         - You CAN and SHOULD add up amounts when the question asks for a total\n\
-                         - Dates must come from evidence — if evidence says February, do NOT say December\n\
-                         - If the question asks about a time period and no evidence falls in that period, say so\n\
-                         - Always give the best answer you can with the available evidence\n\n\
-                         COUNTING RULES:\n\
-                         - If the question asks about frequency (e.g., \"how many X per week/month\"), count OCCURRENCES not unique items.\n\
-                           Example: \"Zumba on Tuesdays and Thursdays\" = 2 classes per week, not 1.\n\
-                         - If the question asks about distinct items (e.g., \"how many pets\"), count unique items.\n\
-                         - Items the user CURRENTLY HAS (even if planning to sell/donate) = count them\n\
-                         - Items the user is CONSIDERING getting (planning to buy, thinking of trying) = do NOT count\n\
-                         - Items belonging to someone else = do NOT count\n\
-                         - \"Plan to\" or \"looking to\" do something = count it if the question asks about plans\n\n\
-                         VERIFICATION STEP: After listing items, re-check each one against the evidence.\n\
-                         For each item, cite which evidence entry [N] supports it. Remove any item you cannot cite.\n\
-                         Format: numbered list of qualifying items/occurrences with citations, then state the total.",
+                         RULES:\n\
+                         - ONLY use facts from the evidence — do not invent items\n\
+                         - Quote numbers and prices EXACTLY as stated. Add them up when the question asks for a total.\n\
+                         - Dates must come from evidence — do not confuse months\n\
+                         - If no evidence matches the question's time period, say so\n\
+                         - When counting: include every item the user HAS or USES, even occasionally\n\
+                         - When counting: exclude items belonging to others, or items only being considered/planned\n\
+                         - When in doubt about whether to include an item, INCLUDE it\n\n\
+                         TEMPORAL REASONING (for time-related questions):\n\
+                         - Look for dates mentioned in the evidence (e.g., 'on January 8', 'March 4', 'February 14th')\n\
+                         - For 'how many days/weeks/months between X and Y': find the exact date of EACH event, then calculate the difference\n\
+                         - For 'which happened first/most recently': find dates for each event, then compare\n\
+                         - For 'how many weeks/months ago': calculate from the question's context date to the event date\n\
+                         - SHOW YOUR DATE MATH: state each event's date, then compute the answer\n\
+                         - Each piece of evidence may come from a DIFFERENT date — do not assume events in the same evidence list happened on the same day\n\n\
+                         List each item with a citation [N] to the evidence entry that supports it, then state the total.",
                         query, evidence
                     )
                 };
-                let synth_system = "You recall and organize facts from memory evidence. Be thorough — list every qualifying item. Be precise — don't count items the user only plans to acquire or that belong to others. NEVER invent facts not in the evidence. Quote individual numbers exactly as stated, but DO add them up when the question asks for a total.";
+                let synth_system = "You recall facts from memory evidence. Be thorough — list every relevant item. When in doubt, include it. NEVER invent facts not in the evidence. Quote numbers exactly, add them up for totals. For temporal questions: find the date of each event in the evidence, show your calculation, then answer.";
 
-                match rt.block_on(http_provider.call_text_with_retry(&synth_prompt, synth_system)) {
+                match rt.block_on(synth_provider.call_text_with_retry(&synth_prompt, synth_system)) {
                     Ok(synthesis) => {
                         let mut final_synthesis = synthesis.trim().to_string();
 
@@ -1125,7 +1154,7 @@ impl MenteDB {
                             );
                             let enum_system = "You enumerate items from evidence as JSON. ONLY include items with explicit evidence support. Quote all numbers exactly. Return ONLY a JSON array.";
 
-                            match rt.block_on(http_provider.call_text_with_retry(&enum_prompt, enum_system)) {
+                            match rt.block_on(synth_provider.call_text_with_retry(&enum_prompt, enum_system)) {
                                 Ok(enum_response) => {
                                     let trimmed = enum_response.trim();
                                     let array_str = if let Some(start) = trimmed.find('[') {
@@ -1600,6 +1629,8 @@ impl MenteDB {
             tags: Vec<String>,
             confidence: f32,
             embed_key: String,
+            // Optional timestamp override (microseconds since epoch)
+            created_at: Option<u64>,
             // Entity-specific fields (None for regular memories)
             entity_name: Option<String>,
             entity_type: Option<String>,
@@ -1654,8 +1685,13 @@ impl MenteDB {
                         .map(|v| v.extract())
                         .transpose()?;
 
+                // Optional timestamp override (microseconds since epoch)
+                let created_at: Option<u64> = mem_dict.get_item("created_at")?
+                    .and_then(|v| v.extract().ok());
+
                 parsed.push(ParsedMemory {
                     content, memory_type, tags, confidence, embed_key,
+                    created_at,
                     entity_name, entity_type, entity_attributes,
                 });
             }
@@ -1774,6 +1810,11 @@ impl MenteDB {
             node.tags = mem.tags;
             node.salience = mem.confidence;
             node.confidence = mem.confidence;
+            // Override timestamp if caller provided one (e.g., session date)
+            if let Some(ts) = mem.created_at {
+                node.created_at = ts;
+                node.accessed_at = ts;
+            }
 
             // If this is an entity, populate its attributes
             if let Some(ref attrs) = mem.entity_attributes {

@@ -45,7 +45,11 @@ impl HttpExtractionProvider {
                 "API key is required for this provider".to_string(),
             ));
         }
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| ExtractionError::ConfigError(format!("HTTP client error: {}", e)))?;
         Ok(Self { client, config })
     }
 
