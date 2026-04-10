@@ -1046,14 +1046,24 @@ impl MenteDB {
                          Entities found in memory graph:\n{}\n\n\
                          Evidence from memory (for verification):\n{}\n\n\
                          The graph found {} distinct entities. Using the evidence, verify and answer.\n\n\
-                         IMPORTANT counting rules:\n\
+                         GROUNDING RULES (critical):\n\
+                         - ONLY use facts explicitly stated in the evidence above\n\
+                         - Quote individual numbers, prices, and amounts EXACTLY as written in evidence\n\
+                         - Do NOT change individual amounts (if evidence says $120, it is $120)\n\
+                         - You CAN and SHOULD add up amounts when the question asks for a total\n\
+                         - Dates must come from evidence — if evidence says February, do NOT say December\n\
+                         - If the question asks about a time period and no evidence falls in that period, say so\n\
+                         - Always give the best answer you can with the available evidence\n\n\
+                         COUNTING RULES:\n\
                          - If the question asks about frequency (e.g., \"how many X per week/month\"), count OCCURRENCES not unique items.\n\
                            Example: \"Zumba on Tuesdays and Thursdays\" = 2 classes per week, not 1.\n\
                          - If the question asks about distinct items (e.g., \"how many pets\"), count unique items.\n\
                          - Items the user CURRENTLY HAS (even if planning to sell/donate) = count them\n\
                          - Items the user is CONSIDERING getting (planning to buy, thinking of trying) = do NOT count\n\
-                         - Items belonging to someone else = do NOT count\n\n\
-                         List each qualifying item/occurrence with details, then state the total count.",
+                         - Items belonging to someone else = do NOT count\n\
+                         - \"Plan to\" or \"looking to\" do something = count it if the question asks about plans\n\n\
+                         VERIFICATION STEP: After listing items, re-check each one against the evidence.\n\
+                         For each item, cite which evidence entry [N] supports it. Remove any item you cannot cite.",
                         query, entity_list, evidence, count
                     )
                 } else {
@@ -1061,23 +1071,30 @@ impl MenteDB {
                     format!(
                         "Question: {}\n\n\
                          Evidence from memory:\n{}\n\n\
-                         Answer the question by listing every qualifying item. Think like a human recalling from memory:\n\
-                         - Read through ALL the evidence\n\
-                         - Identify every distinct item relevant to the question\n\
-                         - For each item, state it clearly with key details (dates, amounts, names)\n\
-                         - Be definitive: state the final count confidently\n\n\
-                         IMPORTANT counting rules:\n\
+                         Answer the question using ONLY the evidence above.\n\n\
+                         GROUNDING RULES (critical):\n\
+                         - ONLY use facts explicitly stated in the evidence\n\
+                         - Quote individual numbers, prices, and amounts EXACTLY as written in evidence\n\
+                         - Do NOT change individual amounts (if evidence says $120, it is $120)\n\
+                         - You CAN and SHOULD add up amounts when the question asks for a total\n\
+                         - Dates must come from evidence — if evidence says February, do NOT say December\n\
+                         - If the question asks about a time period and no evidence falls in that period, say so\n\
+                         - Always give the best answer you can with the available evidence\n\n\
+                         COUNTING RULES:\n\
                          - If the question asks about frequency (e.g., \"how many X per week/month\"), count OCCURRENCES not unique items.\n\
                            Example: \"Zumba on Tuesdays and Thursdays\" = 2 classes per week, not 1.\n\
                          - If the question asks about distinct items (e.g., \"how many pets\"), count unique items.\n\
                          - Items the user CURRENTLY HAS (even if planning to sell/donate) = count them\n\
                          - Items the user is CONSIDERING getting (planning to buy, thinking of trying) = do NOT count\n\
-                         - Items belonging to someone else = do NOT count\n\n\
-                         Format: numbered list of qualifying items/occurrences, then state the total.",
+                         - Items belonging to someone else = do NOT count\n\
+                         - \"Plan to\" or \"looking to\" do something = count it if the question asks about plans\n\n\
+                         VERIFICATION STEP: After listing items, re-check each one against the evidence.\n\
+                         For each item, cite which evidence entry [N] supports it. Remove any item you cannot cite.\n\
+                         Format: numbered list of qualifying items/occurrences with citations, then state the total.",
                         query, evidence
                     )
                 };
-                let synth_system = "You recall and organize facts from memory evidence. Be thorough — list every qualifying item. Be precise — don't count items the user only plans to acquire or that belong to others.";
+                let synth_system = "You recall and organize facts from memory evidence. Be thorough — list every qualifying item. Be precise — don't count items the user only plans to acquire or that belong to others. NEVER invent facts not in the evidence. Quote individual numbers exactly as stated, but DO add them up when the question asks for a total.";
 
                 match rt.block_on(http_provider.call_text_with_retry(&synth_prompt, synth_system)) {
                     Ok(synthesis) => {
@@ -1091,18 +1108,22 @@ impl MenteDB {
                                 "Question: {}\n\n\
                                  Evidence from memory:\n{}\n\n\
                                  List EVERY item/occurrence relevant to this question as a JSON array.\n\
-                                 IMPORTANT: If the question asks about frequency (per week/month), list each OCCURRENCE separately.\n\
-                                 Example: \"Zumba on Tuesdays and Thursdays\" = two entries (one for Tuesday, one for Thursday).\n\
+                                 IMPORTANT RULES:\n\
+                                 - ONLY include items explicitly mentioned in the evidence — never infer or invent items\n\
+                                 - Quote amounts/numbers EXACTLY as stated in evidence\n\
+                                 - If the question asks about a specific time period, only include items from that period\n\
+                                 - If the question asks about frequency (per week/month), list each OCCURRENCE separately\n\
+                                 - \"Plan to\" or \"looking to\" = include if question asks about plans\n\
                                  For each item, include:\n\
-                                 - \"name\": the item name (include day/time if frequency question)\n\
-                                 - \"qualifies\": true if it should be counted (user currently has/does it), false if not (considering, someone else's, historical)\n\
-                                 - \"reason\": brief reason for qualification decision\n\n\
+                                 - \"name\": the item name\n\
+                                 - \"qualifies\": true if it should be counted, false if not\n\
+                                 - \"reason\": cite which evidence entry [N] supports this item\n\
+                                 - \"amount\": if the question involves money, quote the EXACT amount from evidence\n\n\
                                  Return ONLY valid JSON. Example:\n\
-                                 [{{\"name\": \"Zumba - Tuesday 7pm\", \"qualifies\": true, \"reason\": \"user attends weekly\"}},\n\
-                                  {{\"name\": \"Zumba - Thursday 7pm\", \"qualifies\": true, \"reason\": \"user attends weekly\"}}]",
+                                 [{{\"name\": \"Zumba - Tuesday\", \"qualifies\": true, \"reason\": \"Evidence [3] states user attends Tuesdays\"}}]",
                                 query, evidence
                             );
-                            let enum_system = "You enumerate items/occurrences from evidence as JSON. For frequency questions, list each occurrence separately. Return ONLY a JSON array. No explanation.";
+                            let enum_system = "You enumerate items from evidence as JSON. ONLY include items with explicit evidence support. Quote all numbers exactly. Return ONLY a JSON array.";
 
                             match rt.block_on(http_provider.call_text_with_retry(&enum_prompt, enum_system)) {
                                 Ok(enum_response) => {
@@ -1158,15 +1179,25 @@ impl MenteDB {
 
                                             // If enumeration disagrees with synthesis, REPLACE with enumeration-based answer
                                             // The code-counted enumeration is more reliable than LLM prose
-                                            let synth_disagrees = synth_count.map(|sc| sc != enum_count).unwrap_or(true);
+                                            // If enumeration disagrees with synthesis, use the LOWER count
+                                            // The initial synthesis sees the full context; enumeration can hallucinate
+                                            // when evidence is large. Lower count = more conservative = fewer hallucinations.
+                                            let synth_disagrees = synth_count.map(|sc| sc != enum_count).unwrap_or(false);
 
                                             if synth_disagrees {
-                                                if debug { eprintln!("[chain-enum] Synthesis said {:?} but enumeration found {} — OVERRIDING", synth_count, enum_count); }
-                                                // Replace synthesis entirely with enumeration-based answer
-                                                final_synthesis = format!(
-                                                    "Based on the evidence, the answer is {}.\n\n{}\n\nTotal: {}",
-                                                    enum_count, item_list, enum_count
-                                                );
+                                                let sc = synth_count.unwrap_or(enum_count);
+                                                if enum_count < sc {
+                                                    // Enumeration found FEWER — trust it (more precise)
+                                                    if debug { eprintln!("[chain-enum] Synthesis said {} but enumeration found fewer ({}) — using enumeration", sc, enum_count); }
+                                                    final_synthesis = format!(
+                                                        "Based on the evidence, the answer is {}.\n\n{}\n\nTotal: {}",
+                                                        enum_count, item_list, enum_count
+                                                    );
+                                                } else {
+                                                    // Enumeration found MORE — likely hallucinating, keep original synthesis
+                                                    if debug { eprintln!("[chain-enum] Synthesis said {} but enumeration found more ({}) — keeping synthesis (conservative)", sc, enum_count); }
+                                                    // Don't override — keep final_synthesis as is
+                                                }
                                             } else {
                                                 // Agreement — append enumeration for verification
                                                 final_synthesis = format!(
