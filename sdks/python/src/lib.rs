@@ -1564,7 +1564,7 @@ impl MenteDB {
                 } else {
                     continue;
                 };
-            if content.len() > 30 {
+            if content.len() > 15 {
                 embed_texts.push(content.to_string());
                 entries.push(MemEntry {
                     content: content.to_string(),
@@ -1682,7 +1682,7 @@ impl MenteDB {
                 } else {
                     continue;
                 };
-            if content.len() > 30 {
+            if content.len() > 15 {
                 let dict = pyo3::types::PyDict::new(py);
                 dict.set_item("content", content)?;
                 dict.set_item("memory_type", "episodic")?;
