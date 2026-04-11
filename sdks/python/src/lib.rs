@@ -1267,6 +1267,20 @@ impl MenteDB {
                                                 }
                                             }
 
+                                            // If enumeration found 0 items AND no items at all were extracted,
+                                            // this is likely an abstention case (topic never discussed)
+                                            if enum_count == 0 && items.is_empty() {
+                                                if debug { eprintln!("[chain-enum] Zero items found — abstaining instead of reporting 0"); }
+                                                let query_topic = query.to_lowercase()
+                                                    .replace("how many", "").replace("how much", "")
+                                                    .replace("do i", "").replace("did i", "")
+                                                    .replace("have i", "").replace("?", "").trim().to_string();
+                                                final_synthesis = format!(
+                                                    "I don't have information about {} in our conversations.",
+                                                    if query_topic.is_empty() { "that topic".to_string() } else { query_topic }
+                                                );
+                                            } else {
+
                                             // Build verified synthesis with code-counted result
                                             let item_list = qualifying.iter().enumerate()
                                                 .map(|(i, item)| {
@@ -1324,6 +1338,7 @@ impl MenteDB {
                                                     }
                                                 }
                                             }
+                                            } // close the else branch of enum_count == 0 check
                                         }
                                         Err(e) => if debug { eprintln!("[chain-enum] Failed to parse JSON: {e}"); },
                                     }
