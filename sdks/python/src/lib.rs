@@ -943,23 +943,92 @@ impl MenteDB {
             if debug { eprintln!("[synthesis] Feeding {} memories ({} from reranker + {} from retrieval top-{})",
                 synth_ids.len(), reranker_picks.len(), synth_ids.len() - reranker_picks.len(), retrieval_top_k); }
 
-            let mut synth_contents: Vec<String> = Vec::new();
+            // --- Detect multi-session and question category ---
+            let mut session_set: std::collections::HashSet<String> = std::collections::HashSet::new();
             for id_str in &synth_ids {
                 if let Ok(mem_id) = parse_memory_id(id_str) {
                     if let Ok(node) = db.get_memory(mem_id) {
-                        // Skip entity nodes and community summaries from synthesis evidence.
+                        for t in &node.tags {
+                            if let Some(s) = t.strip_prefix("session:") {
+                                session_set.insert(s.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            let is_multi_session = session_set.len() > 3;
+
+            // Detect temporal/knowledge-update from query patterns
+            let query_lower = query.to_lowercase();
+            let is_temporal = query_lower.contains("when") || query_lower.contains("how long")
+                || query_lower.contains("before") || query_lower.contains("after")
+                || query_lower.contains("first") || query_lower.contains("most recent")
+                || query_lower.contains("days") || query_lower.contains("weeks")
+                || query_lower.contains("months ago") || query_lower.contains("order");
+            let is_knowledge_update = query_lower.contains("current") || query_lower.contains("latest")
+                || query_lower.contains("now") || query_lower.contains("updated")
+                || query_lower.contains("changed") || query_lower.contains("still");
+
+            // Per-category evidence budget (max items to feed to reader)
+            let evidence_budget: usize = if is_multi_session { 40 } else if is_temporal { 30 } else if is_knowledge_update { 25 } else { 20 };
+
+            if debug { eprintln!("[synthesis] multi_session={}, temporal={}, ku={}, budget={}",
+                is_multi_session, is_temporal, is_knowledge_update, evidence_budget); }
+
+            // Build evidence with session date labels and assistant filtering
+            #[allow(dead_code)]
+            struct EvidenceItem {
+                session: String,
+                date: String,
+                content: String,
+                is_assistant_turn: bool,
+            }
+            let mut evidence_items: Vec<EvidenceItem> = Vec::new();
+            for id_str in &synth_ids {
+                if let Ok(mem_id) = parse_memory_id(id_str) {
+                    if let Ok(node) = db.get_memory(mem_id) {
                         let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
                         let is_community = node.tags.iter().any(|t| t == "community_summary");
                         if is_entity || is_community { continue; }
-                        // Prepend date if the memory has a meaningful timestamp
-                        let content = if let Some(date_str) = format_timestamp_date(node.created_at) {
-                            format!("[{}] {}", date_str, node.content)
-                        } else {
-                            node.content.clone()
-                        };
-                        synth_contents.push(content);
+
+                        let is_assistant_turn = node.tags.iter().any(|t| t == "turn:assistant");
+
+                        // For multi-session: filter out assistant turns (they drown out user facts)
+                        if is_multi_session && is_assistant_turn { continue; }
+
+                        let session = node.tags.iter()
+                            .find_map(|t| t.strip_prefix("session:").map(|s| s.to_string()))
+                            .unwrap_or_default();
+                        let date = node.tags.iter()
+                            .find_map(|t| t.strip_prefix("date:").map(|s| s.to_string()))
+                            .or_else(|| format_timestamp_date(node.created_at))
+                            .unwrap_or_default();
+
+                        evidence_items.push(EvidenceItem {
+                            session,
+                            date,
+                            content: node.content.clone(),
+                            is_assistant_turn,
+                        });
                     }
                 }
+            }
+
+            // Apply evidence budget
+            evidence_items.truncate(evidence_budget);
+
+            // Group by session and inject session date headers
+            let mut synth_contents: Vec<String> = Vec::new();
+            let mut current_session = String::new();
+            for item in &evidence_items {
+                if !item.session.is_empty() && item.session != current_session {
+                    current_session = item.session.clone();
+                    if !item.date.is_empty() {
+                        synth_contents.push(format!("--- [Session: {}] ---", item.date));
+                    }
+                }
+                let prefix = if !item.date.is_empty() { format!("[{}] ", item.date) } else { String::new() };
+                synth_contents.push(format!("{}{}", prefix, item.content));
             }
 
             if !synth_contents.is_empty() {
@@ -1088,13 +1157,22 @@ impl MenteDB {
                          - When counting: include every item the user HAS or USES, even occasionally\n\
                          - When counting: exclude items belonging to others, or items only being considered/planned\n\
                          - When in doubt about whether to include an item, INCLUDE it\n\n\
-                         TEMPORAL REASONING (for time-related questions):\n\
+                          TEMPORAL REASONING (for time-related questions):\n\
                          - Look for dates mentioned in the evidence (e.g., 'on January 8', 'March 4', 'February 14th')\n\
                          - For 'how many days/weeks/months between X and Y': find the exact date of EACH event, then calculate the difference\n\
                          - For 'which happened first/most recently': find dates for each event, then compare\n\
                          - For 'how many weeks/months ago': calculate from the question's context date to the event date\n\
                          - SHOW YOUR DATE MATH: state each event's date, then compute the answer\n\
                          - Each piece of evidence may come from a DIFFERENT date — do not assume events in the same evidence list happened on the same day\n\n\
+                         KNOWLEDGE UPDATES:\n\
+                         - For questions about current/latest values: report the MOST RECENT value from evidence (latest date overrides earlier ones)\n\
+                         - If you see the same fact with different values at different dates, use the newest one\n\n\
+                         ABSTENTION RULES:\n\
+                         - If the topic is NEVER mentioned in evidence, say 'I don't have information about [topic] in our conversations'\n\
+                         - Absence of evidence is NOT evidence of zero — do NOT say 'Total: 0' if the topic simply wasn't discussed\n\
+                         - 'Planning to' or 'thinking about' acquiring X does NOT mean they have X\n\
+                         - If evidence mentions someone ELSE doing X, that does NOT answer whether the USER did X\n\
+                         - For ordering/sequence questions: if you can find dates for all items, you CAN answer even if uncertain about other things\n\n\
                          List each item with a citation [N] to the evidence entry that supports it, then state the total.",
                         query, entity_list, evidence, count
                     )
@@ -1119,11 +1197,20 @@ impl MenteDB {
                          - For 'how many weeks/months ago': calculate from the question's context date to the event date\n\
                          - SHOW YOUR DATE MATH: state each event's date, then compute the answer\n\
                          - Each piece of evidence may come from a DIFFERENT date — do not assume events in the same evidence list happened on the same day\n\n\
+                         KNOWLEDGE UPDATES:\n\
+                         - For questions about current/latest values: report the MOST RECENT value from evidence (latest date overrides earlier ones)\n\
+                         - If you see the same fact with different values at different dates, use the newest one\n\n\
+                         ABSTENTION RULES:\n\
+                         - If the topic is NEVER mentioned in evidence, say 'I don't have information about [topic] in our conversations'\n\
+                         - Absence of evidence is NOT evidence of zero — do NOT say 'Total: 0' if the topic simply wasn't discussed\n\
+                         - 'Planning to' or 'thinking about' acquiring X does NOT mean they have X\n\
+                         - If evidence mentions someone ELSE doing X, that does NOT answer whether the USER did X\n\
+                         - For ordering/sequence questions: if you can find dates for all items, you CAN answer even if uncertain about other things\n\n\
                          List each item with a citation [N] to the evidence entry that supports it, then state the total.",
                         query, evidence
                     )
                 };
-                let synth_system = "You recall facts from memory evidence. Be thorough — list every relevant item. When in doubt, include it. NEVER invent facts not in the evidence. Quote numbers exactly, add them up for totals. For temporal questions: find the date of each event in the evidence, show your calculation, then answer.";
+                let synth_system = "You recall facts from memory evidence. Be thorough — list every relevant item. When in doubt, include it. NEVER invent facts not in the evidence. Quote numbers exactly, add them up for totals. For temporal questions: find the date of each event in the evidence, show your calculation, then answer. For knowledge-update questions: report the MOST RECENT value. If the topic was never discussed, say so — do not guess.";
 
                 match rt.block_on(synth_provider.call_text_with_retry(&synth_prompt, synth_system)) {
                     Ok(synthesis) => {
@@ -1206,27 +1293,20 @@ impl MenteDB {
                                                 found.first().copied()
                                             };
 
-                                            // If enumeration disagrees with synthesis, REPLACE with enumeration-based answer
-                                            // The code-counted enumeration is more reliable than LLM prose
-                                            // If enumeration disagrees with synthesis, use the LOWER count
-                                            // The initial synthesis sees the full context; enumeration can hallucinate
-                                            // when evidence is large. Lower count = more conservative = fewer hallucinations.
-                                            let synth_disagrees = synth_count.map(|sc| sc != enum_count).unwrap_or(false);
+                                            // If enumeration disagrees with synthesis, use enumeration.
+                                            // The code-counted enumeration is more reliable than LLM prose counting.
+                                            // AgentMemory's key insight: enumerate first, count from enumeration.
+                                            let synth_disagrees = synth_count.map(|sc| sc != enum_count).unwrap_or(true);
 
-                                            if synth_disagrees {
-                                                let sc = synth_count.unwrap_or(enum_count);
-                                                if enum_count < sc {
-                                                    // Enumeration found FEWER — trust it (more precise)
-                                                    if debug { eprintln!("[chain-enum] Synthesis said {} but enumeration found fewer ({}) — using enumeration", sc, enum_count); }
-                                                    final_synthesis = format!(
-                                                        "Based on the evidence, the answer is {}.\n\n{}\n\nTotal: {}",
-                                                        enum_count, item_list, enum_count
-                                                    );
-                                                } else {
-                                                    // Enumeration found MORE — likely hallucinating, keep original synthesis
-                                                    if debug { eprintln!("[chain-enum] Synthesis said {} but enumeration found more ({}) — keeping synthesis (conservative)", sc, enum_count); }
-                                                    // Don't override — keep final_synthesis as is
+                                            if synth_disagrees || synth_count.is_none() {
+                                                if debug {
+                                                    eprintln!("[chain-enum] Synthesis={:?} vs Enumeration={} — using enumeration",
+                                                        synth_count, enum_count);
                                                 }
+                                                final_synthesis = format!(
+                                                    "Based on the evidence, the answer is {}.\n\n{}\n\nTotal: {}",
+                                                    enum_count, item_list, enum_count
+                                                );
                                             } else {
                                                 // Agreement — append enumeration for verification
                                                 final_synthesis = format!(
