@@ -401,6 +401,9 @@ impl MenteDB {
             || query_lower.contains("days") || query_lower.contains("weeks")
             || query_lower.contains("months ago") || query_lower.contains("order");
         let is_temporal_ordering = is_temporal && (query_lower.contains("order") || query_lower.contains("earliest") || query_lower.contains("latest") || query_lower.contains("first") || query_lower.contains("most recent"));
+        let is_preference = query_lower.contains("suggest") || query_lower.contains("recommend")
+            || query_lower.contains("any tips") || query_lower.contains("any advice")
+            || query_lower.contains("what should") || query_lower.contains("do you think");
         for sq in &sub_queries {
             if sq.starts_with("ITEM_KEYWORDS:") {
                 item_keywords = Some(sq.trim_start_matches("ITEM_KEYWORDS:").trim().to_string());
@@ -930,7 +933,7 @@ impl MenteDB {
             // --- Phase 2: Reconstructive synthesis ---
             // Feed UNION of: (a) re-ranker picks + (b) top-K by original retrieval score.
             // This ensures nothing is lost even if the re-ranker misscores items.
-            let retrieval_top_k = if is_temporal { std::cmp::min(expanded.len(), 35) } else if is_counting { std::cmp::min(expanded.len(), 40) } else { std::cmp::min(expanded.len(), 20) };
+            let retrieval_top_k = if is_temporal { std::cmp::min(expanded.len(), 35) } else if is_counting { std::cmp::min(expanded.len(), 40) } else if is_preference { std::cmp::min(expanded.len(), 35) } else { std::cmp::min(expanded.len(), 20) };
             let mut synth_ids: Vec<String> = Vec::new();
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -971,7 +974,7 @@ impl MenteDB {
                 || query_lower.contains("changed") || query_lower.contains("still");
 
             // Per-category evidence budget (max items to feed to reader)
-            let evidence_budget: usize = if is_multi_session { 40 } else if is_temporal { 40 } else if is_knowledge_update { 25 } else { 20 };
+            let evidence_budget: usize = if is_multi_session { 40 } else if is_temporal { 40 } else if is_preference { 35 } else if is_knowledge_update { 25 } else { 20 };
 
             if debug { eprintln!("[synthesis] multi_session={}, temporal={}, ku={}, budget={}",
                 is_multi_session, is_temporal, is_knowledge_update, evidence_budget); }
