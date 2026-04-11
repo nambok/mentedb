@@ -485,7 +485,7 @@ impl MenteDB {
         let mut pass4_broad_hits: Vec<(mentedb_core::types::MemoryId, f32)> = Vec::new();
 
         if is_counting {
-            let k4_per = 5; // results per keyword — small but sufficient
+            let k4_per = 8; // results per keyword
 
             // Search each item keyword individually (specific subtypes)
             if let Some(ref kw_str) = item_keywords {
@@ -744,7 +744,7 @@ impl MenteDB {
         // and generates specific keywords for items that might be missing.
         if (is_counting || is_temporal_ordering) && !expanded.is_empty() {
             // Collect top-20 memory contents for the LLM to analyze
-            let gap_limit = std::cmp::min(expanded.len(), 20);
+            let gap_limit = std::cmp::min(expanded.len(), 30);
             let mut found_items: Vec<String> = Vec::new();
             for (id_str, _) in expanded.iter().take(gap_limit) {
                 if let Ok(mem_id) = parse_memory_id(id_str) {
@@ -798,7 +798,7 @@ impl MenteDB {
                                 if !gap_terms.is_empty() {
                                     // Round 2: search each gap keyword individually
                                     let mut pass5_hits: Vec<(String, f32)> = Vec::new();
-                                    let k5_per = 5;
+                                    let k5_per = 8;
                                     for term in &gap_terms {
                                         let kw_emb = if let Some(ref embedder) = self.embedder {
                                             embedder.embed(term).map_err(to_pyerr)?
@@ -930,7 +930,7 @@ impl MenteDB {
             // --- Phase 2: Reconstructive synthesis ---
             // Feed UNION of: (a) re-ranker picks + (b) top-K by original retrieval score.
             // This ensures nothing is lost even if the re-ranker misscores items.
-            let retrieval_top_k = if is_temporal { std::cmp::min(expanded.len(), 35) } else { std::cmp::min(expanded.len(), 20) };
+            let retrieval_top_k = if is_temporal { std::cmp::min(expanded.len(), 35) } else if is_counting { std::cmp::min(expanded.len(), 40) } else { std::cmp::min(expanded.len(), 20) };
             let mut synth_ids: Vec<String> = Vec::new();
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -1172,8 +1172,8 @@ impl MenteDB {
                          - For ordering questions: list ALL events of the requested type found in evidence, do NOT skip any\n\
                          - SHOW YOUR DATE MATH: state each date, compute the difference, then VERIFY your arithmetic\n\
                          - If your calculation contradicts your stated answer, TRUST THE CALCULATION\n\
+                         - For 'last Saturday/Sunday/etc': resolve the relative day using the session dates in the evidence\n\
                          - Each piece of evidence may come from a DIFFERENT date — do not assume they happened on the same day\n\n\
-                         KNOWLEDGE UPDATES:\n\
                          - For questions about current/latest values: report the MOST RECENT value from evidence (latest date overrides earlier ones)\n\
                          - If you see the same fact with different values at different dates, use the newest one\n\n\
                          ABSTENTION RULES:\n\
@@ -1182,6 +1182,10 @@ impl MenteDB {
                          - 'Planning to' or 'thinking about' acquiring X does NOT mean they have X\n\
                          - If evidence mentions someone ELSE doing X, that does NOT answer whether the USER did X\n\
                          - For ordering/sequence questions: if you can find dates for all items, you CAN answer even if uncertain about other things\n\n\
+                         PREFERENCE / RECOMMENDATION QUESTIONS:\n\
+                         - For 'suggest/recommend' questions: use the user's stated preferences, interests, and habits from evidence to give a personalized answer\n\
+                         - Do NOT abstain on recommendation questions — instead use whatever preferences and context you find in evidence\n\
+                         - Combine multiple preference signals (e.g., likes outdoor activities + prefers mornings → suggest morning hike)\n\n\
                          List each item with a citation [N] to the evidence entry that supports it, then state the total.",
                         query, entity_list, evidence, count
                     )
@@ -1208,6 +1212,7 @@ impl MenteDB {
                          - For ordering questions: list ALL events of the requested type found in evidence, do NOT skip any\n\
                          - SHOW YOUR DATE MATH: state each date, compute the difference, then VERIFY your arithmetic\n\
                          - If your calculation contradicts your stated answer, TRUST THE CALCULATION\n\
+                         - For 'last Saturday/Sunday/etc': resolve the relative day using the session dates in the evidence\n\
                          - Each piece of evidence may come from a DIFFERENT date — do not assume they happened on the same day\n\n\
                          KNOWLEDGE UPDATES:\n\
                          - For questions about current/latest values: report the MOST RECENT value from evidence (latest date overrides earlier ones)\n\
@@ -1218,6 +1223,10 @@ impl MenteDB {
                          - 'Planning to' or 'thinking about' acquiring X does NOT mean they have X\n\
                          - If evidence mentions someone ELSE doing X, that does NOT answer whether the USER did X\n\
                          - For ordering/sequence questions: if you can find dates for all items, you CAN answer even if uncertain about other things\n\n\
+                         PREFERENCE / RECOMMENDATION QUESTIONS:\n\
+                         - For 'suggest/recommend' questions: use the user's stated preferences, interests, and habits from evidence to give a personalized answer\n\
+                         - Do NOT abstain on recommendation questions — instead use whatever preferences and context you find in evidence\n\
+                         - Combine multiple preference signals (e.g., likes outdoor activities + prefers mornings → suggest morning hike)\n\n\
                          List each item with a citation [N] to the evidence entry that supports it, then state the total.",
                         query, evidence
                     )
