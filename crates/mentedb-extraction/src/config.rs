@@ -62,6 +62,8 @@ pub struct ExtractionConfig {
     pub enable_contradiction_check: bool,
     /// Whether to check new memories against existing ones for duplicates.
     pub enable_deduplication: bool,
+    /// Number of extraction passes (1 = single pass, 2 = first pass + verification).
+    pub extraction_passes: usize,
 }
 
 impl ExtractionConfig {
@@ -111,6 +113,7 @@ impl Default for ExtractionConfig {
             deduplication_threshold: 0.85,
             enable_contradiction_check: true,
             enable_deduplication: true,
+            extraction_passes: 1,
         }
     }
 }

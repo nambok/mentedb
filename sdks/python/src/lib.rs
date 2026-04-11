@@ -1461,24 +1461,23 @@ impl MenteDB {
 
         for line in conversation.lines() {
             let trimmed = line.trim();
-            let user_content = if let Some(rest) = trimmed.strip_prefix("User:") {
-                Some(rest.trim())
-            } else if let Some(rest) = trimmed.strip_prefix("user:") {
-                Some(rest.trim())
-            } else {
-                None
-            };
-            if let Some(content) = user_content {
-                if content.len() > 30 {
-                    embed_texts.push(content.to_string());
-                    entries.push(MemEntry {
-                        content: content.to_string(),
-                        mt: MemoryType::Episodic,
-                        tags: vec!["turn".to_string()],
-                        salience: 0.4,
-                        confidence: 0.4,
-                    });
-                }
+            let (content, role_tag) =
+                if let Some(rest) = trimmed.strip_prefix("User:").or_else(|| trimmed.strip_prefix("user:")) {
+                    (rest.trim(), "turn:user")
+                } else if let Some(rest) = trimmed.strip_prefix("Assistant:").or_else(|| trimmed.strip_prefix("assistant:")) {
+                    (rest.trim(), "turn:assistant")
+                } else {
+                    continue;
+                };
+            if content.len() > 30 {
+                embed_texts.push(content.to_string());
+                entries.push(MemEntry {
+                    content: content.to_string(),
+                    mt: MemoryType::Episodic,
+                    tags: vec!["turn".to_string(), role_tag.to_string()],
+                    salience: 0.75,
+                    confidence: 0.8,
+                });
             }
         }
 
@@ -1577,27 +1576,26 @@ impl MenteDB {
             dict.set_item("entity_type", &entity.entity_type)?;
             results.append(dict)?;
         }
-        // Also include user turns for episodic storage
+        // Also include user AND assistant turns for episodic storage
         for line in conversation.lines() {
             let trimmed = line.trim();
-            let user_content = if let Some(rest) = trimmed.strip_prefix("User:") {
-                Some(rest.trim())
-            } else if let Some(rest) = trimmed.strip_prefix("user:") {
-                Some(rest.trim())
-            } else {
-                None
-            };
-            if let Some(content) = user_content {
-                if content.len() > 30 {
-                    let dict = pyo3::types::PyDict::new(py);
-                    dict.set_item("content", content)?;
-                    dict.set_item("memory_type", "episodic")?;
-                    let tags: Vec<String> = vec!["turn".to_string()];
-                    dict.set_item("tags", tags)?;
-                    dict.set_item("confidence", 0.4)?;
-                    dict.set_item("embedding_key", content)?;
-                    results.append(dict)?;
-                }
+            let (content, role_tag) =
+                if let Some(rest) = trimmed.strip_prefix("User:").or_else(|| trimmed.strip_prefix("user:")) {
+                    (rest.trim(), "turn:user")
+                } else if let Some(rest) = trimmed.strip_prefix("Assistant:").or_else(|| trimmed.strip_prefix("assistant:")) {
+                    (rest.trim(), "turn:assistant")
+                } else {
+                    continue;
+                };
+            if content.len() > 30 {
+                let dict = pyo3::types::PyDict::new(py);
+                dict.set_item("content", content)?;
+                dict.set_item("memory_type", "episodic")?;
+                let tags: Vec<String> = vec!["turn".to_string(), role_tag.to_string()];
+                dict.set_item("tags", tags)?;
+                dict.set_item("confidence", 0.8)?;
+                dict.set_item("embedding_key", content)?;
+                results.append(dict)?;
             }
         }
         Ok(results.into())
@@ -2255,6 +2253,10 @@ impl MenteDB {
     /// Groups entities by shared categories, creates a summary node per cluster.
     /// These summaries are searchable at a higher level of abstraction.
     fn build_communities(&mut self) -> PyResult<Vec<String>> {
+        // Allow skipping via env var for benchmarking
+        if std::env::var("MENTEDB_SKIP_COMMUNITIES").is_ok() {
+            return Ok(vec![]);
+        }
         let db = self.db.as_mut().ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
         let debug = std::env::var("MENTEDB_DEBUG").is_ok();
         let rt = tokio::runtime::Runtime::new().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
@@ -2688,6 +2690,10 @@ fn build_extraction_config_from_env(provider_override: Option<&str>) -> PyResult
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(0.7);
+    let extraction_passes = std::env::var("MENTEDB_EXTRACTION_PASSES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1usize);
 
     Ok(ExtractionConfig {
         provider,
@@ -2699,6 +2705,7 @@ fn build_extraction_config_from_env(provider_override: Option<&str>) -> PyResult
         deduplication_threshold: 0.85,
         enable_contradiction_check: true,
         enable_deduplication: true,
+        extraction_passes,
     })
 }
 

@@ -179,3 +179,47 @@ OUTPUT FORMAT (strict JSON, no markdown fences):
 
 If the conversation contains nothing worth remembering, return: {"memories": [], "entities": []}"#
 }
+
+/// Returns a verification prompt for the second extraction pass.
+/// Given the first pass results, asks the LLM to find what was missed.
+pub fn extraction_verification_prompt(first_pass_facts: &str) -> String {
+    format!(r#"You are a memory extraction VERIFIER. A first-pass extractor already processed a conversation and found these facts:
+
+--- FIRST PASS RESULTS ---
+{first_pass_facts}
+--- END FIRST PASS ---
+
+Your job: Re-read the conversation and find ANYTHING the first pass MISSED. Focus on:
+1. Assistant-provided information (schedules, recommendations, calculations, plans, lists)
+2. Incidental details mentioned as context (pet names, store names, locations visited)
+3. Specific numbers, amounts, dates, durations, counts
+4. Preferences stated indirectly ("I always go to X" = preference for X)
+5. Temporal facts: when things happened, how long things took, sequences of events
+6. Relationships between people, places, and activities
+
+IMPORTANT: Do NOT re-extract facts already in the first pass. Only extract NEW facts that were missed.
+
+If the first pass was thorough and nothing was missed, return: {{"memories": [], "entities": []}}
+
+Use the SAME output format as the first pass:
+{{
+  "memories": [
+    {{
+      "content": "...",
+      "memory_type": "fact|decision|preference|correction|anti_pattern",
+      "confidence": 0.7,
+      "entities": [],
+      "tags": [],
+      "context": [],
+      "reasoning": "Missed by first pass because..."
+    }}
+  ],
+  "entities": [
+    {{
+      "name": "...",
+      "entity_type": "person|pet|place|event|item|organization|account",
+      "attributes": {{}}
+    }}
+  ]
+}}"#)
+}

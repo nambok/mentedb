@@ -5,7 +5,6 @@ use mentedb_embedding::provider::EmbeddingProvider;
 
 use crate::config::ExtractionConfig;
 use crate::error::ExtractionError;
-use crate::prompts::extraction_system_prompt;
 use crate::provider::ExtractionProvider;
 use crate::schema::{ExtractedMemory, ExtractionResult};
 
@@ -82,10 +81,42 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
         &self,
         conversation: &str,
     ) -> Result<ExtractionResult, ExtractionError> {
+        use crate::prompts::{extraction_system_prompt, extraction_verification_prompt};
+
         let system_prompt = extraction_system_prompt();
         let raw_response = self.provider.extract(conversation, system_prompt).await?;
 
         let mut result = self.parse_extraction_response(&raw_response)?;
+
+        // Verification pass: re-read conversation to find what the first pass missed
+        if self.config.extraction_passes >= 2 && !result.memories.is_empty() {
+            let first_pass_facts: String = result.memories
+                .iter()
+                .map(|m| format!("- {}", m.content))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let verify_prompt = extraction_verification_prompt(&first_pass_facts);
+            match self.provider.extract(conversation, &verify_prompt).await {
+                Ok(verify_response) => {
+                    if let Ok(verify_result) = self.parse_extraction_response(&verify_response) {
+                        let new_memories = verify_result.memories.len();
+                        let new_entities = verify_result.entities.len();
+                        result.memories.extend(verify_result.memories);
+                        result.entities.extend(verify_result.entities);
+                        if new_memories > 0 || new_entities > 0 {
+                            tracing::info!(
+                                new_memories,
+                                new_entities,
+                                "verification pass found additional extractions"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("verification pass failed, using first pass only: {}", e);
+                }
+            }
+        }
 
         if result.memories.len() > self.config.max_extractions_per_conversation {
             tracing::warn!(
