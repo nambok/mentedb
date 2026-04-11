@@ -394,6 +394,13 @@ impl MenteDB {
         let mut item_keywords: Option<String> = None;
         let mut broad_keywords: Option<String> = None;
         let mut is_counting = false;
+        let query_lower = query.to_lowercase();
+        let is_temporal = query_lower.contains("when") || query_lower.contains("how long")
+            || query_lower.contains("before") || query_lower.contains("after")
+            || query_lower.contains("first") || query_lower.contains("most recent")
+            || query_lower.contains("days") || query_lower.contains("weeks")
+            || query_lower.contains("months ago") || query_lower.contains("order");
+        let is_temporal_ordering = is_temporal && (query_lower.contains("order") || query_lower.contains("earliest") || query_lower.contains("latest") || query_lower.contains("first") || query_lower.contains("most recent"));
         for sq in &sub_queries {
             if sq.starts_with("ITEM_KEYWORDS:") {
                 item_keywords = Some(sq.trim_start_matches("ITEM_KEYWORDS:").trim().to_string());
@@ -735,7 +742,7 @@ impl MenteDB {
         // Inspired by Iter-RetGen (2023) and IRCoT (ACL 2023): use Round 1 results
         // to inform a targeted Round 2 retrieval. The LLM examines what was found
         // and generates specific keywords for items that might be missing.
-        if is_counting && !expanded.is_empty() {
+        if (is_counting || is_temporal_ordering) && !expanded.is_empty() {
             // Collect top-20 memory contents for the LLM to analyze
             let gap_limit = std::cmp::min(expanded.len(), 20);
             let mut found_items: Vec<String> = Vec::new();
@@ -923,7 +930,7 @@ impl MenteDB {
             // --- Phase 2: Reconstructive synthesis ---
             // Feed UNION of: (a) re-ranker picks + (b) top-K by original retrieval score.
             // This ensures nothing is lost even if the re-ranker misscores items.
-            let retrieval_top_k = std::cmp::min(expanded.len(), 20);
+            let retrieval_top_k = if is_temporal { std::cmp::min(expanded.len(), 35) } else { std::cmp::min(expanded.len(), 20) };
             let mut synth_ids: Vec<String> = Vec::new();
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -958,19 +965,13 @@ impl MenteDB {
             }
             let is_multi_session = session_set.len() > 3;
 
-            // Detect temporal/knowledge-update from query patterns
-            let query_lower = query.to_lowercase();
-            let is_temporal = query_lower.contains("when") || query_lower.contains("how long")
-                || query_lower.contains("before") || query_lower.contains("after")
-                || query_lower.contains("first") || query_lower.contains("most recent")
-                || query_lower.contains("days") || query_lower.contains("weeks")
-                || query_lower.contains("months ago") || query_lower.contains("order");
+            // Detect knowledge-update from query patterns
             let is_knowledge_update = query_lower.contains("current") || query_lower.contains("latest")
                 || query_lower.contains("now") || query_lower.contains("updated")
                 || query_lower.contains("changed") || query_lower.contains("still");
 
             // Per-category evidence budget (max items to feed to reader)
-            let evidence_budget: usize = if is_multi_session { 40 } else if is_temporal { 30 } else if is_knowledge_update { 25 } else { 20 };
+            let evidence_budget: usize = if is_multi_session { 40 } else if is_temporal { 40 } else if is_knowledge_update { 25 } else { 20 };
 
             if debug { eprintln!("[synthesis] multi_session={}, temporal={}, ku={}, budget={}",
                 is_multi_session, is_temporal, is_knowledge_update, evidence_budget); }
@@ -1012,6 +1013,11 @@ impl MenteDB {
                         });
                     }
                 }
+            }
+
+            // Sort chronologically for temporal queries so the LLM sees events in time order
+            if is_temporal {
+                evidence_items.sort_by(|a, b| a.date.cmp(&b.date));
             }
 
             // Apply evidence budget
@@ -1158,12 +1164,15 @@ impl MenteDB {
                          - When counting: exclude items belonging to others, or items only being considered/planned\n\
                          - When in doubt about whether to include an item, INCLUDE it\n\n\
                           TEMPORAL REASONING (for time-related questions):\n\
-                         - Look for dates mentioned in the evidence (e.g., 'on January 8', 'March 4', 'February 14th')\n\
-                         - For 'how many days/weeks/months between X and Y': find the exact date of EACH event, then calculate the difference\n\
-                         - For 'which happened first/most recently': find dates for each event, then compare\n\
+                         - Evidence is sorted CHRONOLOGICALLY — earlier events appear first\n\
+                         - Extract the EXACT date for each relevant event, citing [N] for each\n\
+                         - For 'how many days/weeks/months between X and Y': find the exact date of EACH event, then COUNT step by step\n\
+                         - For 'which happened first/most recently': compare the extracted dates directly\n\
                          - For 'how many weeks/months ago': calculate from the question's context date to the event date\n\
-                         - SHOW YOUR DATE MATH: state each event's date, then compute the answer\n\
-                         - Each piece of evidence may come from a DIFFERENT date — do not assume events in the same evidence list happened on the same day\n\n\
+                         - For ordering questions: list ALL events of the requested type found in evidence, do NOT skip any\n\
+                         - SHOW YOUR DATE MATH: state each date, compute the difference, then VERIFY your arithmetic\n\
+                         - If your calculation contradicts your stated answer, TRUST THE CALCULATION\n\
+                         - Each piece of evidence may come from a DIFFERENT date — do not assume they happened on the same day\n\n\
                          KNOWLEDGE UPDATES:\n\
                          - For questions about current/latest values: report the MOST RECENT value from evidence (latest date overrides earlier ones)\n\
                          - If you see the same fact with different values at different dates, use the newest one\n\n\
@@ -1191,12 +1200,15 @@ impl MenteDB {
                          - When counting: exclude items belonging to others, or items only being considered/planned\n\
                          - When in doubt about whether to include an item, INCLUDE it\n\n\
                          TEMPORAL REASONING (for time-related questions):\n\
-                         - Look for dates mentioned in the evidence (e.g., 'on January 8', 'March 4', 'February 14th')\n\
-                         - For 'how many days/weeks/months between X and Y': find the exact date of EACH event, then calculate the difference\n\
-                         - For 'which happened first/most recently': find dates for each event, then compare\n\
+                         - Evidence is sorted CHRONOLOGICALLY — earlier events appear first\n\
+                         - Extract the EXACT date for each relevant event, citing [N] for each\n\
+                         - For 'how many days/weeks/months between X and Y': find the exact date of EACH event, then COUNT step by step\n\
+                         - For 'which happened first/most recently': compare the extracted dates directly\n\
                          - For 'how many weeks/months ago': calculate from the question's context date to the event date\n\
-                         - SHOW YOUR DATE MATH: state each event's date, then compute the answer\n\
-                         - Each piece of evidence may come from a DIFFERENT date — do not assume events in the same evidence list happened on the same day\n\n\
+                         - For ordering questions: list ALL events of the requested type found in evidence, do NOT skip any\n\
+                         - SHOW YOUR DATE MATH: state each date, compute the difference, then VERIFY your arithmetic\n\
+                         - If your calculation contradicts your stated answer, TRUST THE CALCULATION\n\
+                         - Each piece of evidence may come from a DIFFERENT date — do not assume they happened on the same day\n\n\
                          KNOWLEDGE UPDATES:\n\
                          - For questions about current/latest values: report the MOST RECENT value from evidence (latest date overrides earlier ones)\n\
                          - If you see the same fact with different values at different dates, use the newest one\n\n\
