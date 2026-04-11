@@ -851,7 +851,7 @@ impl MenteDB {
         //   position [0] in the results — the reader's primary evidence.
         //
         // The original retrieval order is preserved for positions [1..N].
-        if is_counting && !expanded.is_empty() {
+        if !expanded.is_empty() {
             // --- Phase 1: Score memories for synthesis selection ---
             if debug { eprintln!("[rerank] Starting cognitive re-ranking for {} results", expanded.len()); }
             let rerank_limit = std::cmp::min(expanded.len(), 30);
