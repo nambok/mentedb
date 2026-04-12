@@ -387,13 +387,18 @@ impl HttpExtractionProvider {
                     tracing::info!(response_len = text.len(), "LLM extraction complete");
                     return Ok(text);
                 }
-                Err(ExtractionError::ProviderError(ref msg)) if msg.contains("429") => {
-                    tracing::warn!(attempt = attempt + 1, "rate limited by provider");
+                Err(ExtractionError::ProviderError(ref msg))
+                    if msg.contains("429") || msg.contains("500")
+                        || msg.contains("502") || msg.contains("503")
+                        || msg.contains("529") || msg.contains("timeout")
+                        || msg.contains("connection") || msg.contains("overloaded") =>
+                {
+                    tracing::warn!(attempt = attempt + 1, error = %msg, "retrying transient LLM error");
                     last_err = Some(result.unwrap_err());
                     continue;
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "LLM extraction failed");
+                    tracing::error!(error = %e, "LLM extraction failed (non-retryable)");
                     return Err(e);
                 }
             }

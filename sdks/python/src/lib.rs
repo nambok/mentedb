@@ -404,6 +404,12 @@ impl MenteDB {
         let is_preference = query_lower.contains("suggest") || query_lower.contains("recommend")
             || query_lower.contains("any tips") || query_lower.contains("any advice")
             || query_lower.contains("what should") || query_lower.contains("do you think");
+        // Knowledge-update detection (moved early for recency boosting)
+        let is_knowledge_update = query_lower.contains("current") || query_lower.contains("latest")
+            || query_lower.contains("now") || query_lower.contains("updated")
+            || query_lower.contains("changed") || query_lower.contains("still")
+            || query_lower.contains("most recent") || query_lower.contains("switch")
+            || query_lower.contains("new");
         for sq in &sub_queries {
             if sq.starts_with("ITEM_KEYWORDS:") {
                 item_keywords = Some(sq.trim_start_matches("ITEM_KEYWORDS:").trim().to_string());
@@ -700,6 +706,37 @@ impl MenteDB {
 
         let mut merged: Vec<(String, f32)> = rrf_scores.into_iter().collect();
         merged.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // --- Recency boost for knowledge-update and temporal queries ---
+        // More recent memories get a score bonus so the latest version of a fact
+        // ranks above older versions. Also helps temporal queries find the right event.
+        if is_knowledge_update || is_temporal {
+            let before_us = time_range.map(|(_, b)| b).unwrap_or(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u64
+            );
+            // Boost factor: knowledge-update gets stronger recency preference
+            let recency_weight: f32 = if is_knowledge_update { 0.015 } else { 0.005 };
+            for (id_str, score) in merged.iter_mut() {
+                if let Ok(mem_id) = parse_memory_id(id_str) {
+                    if let Ok(node) = db.get_memory(mem_id) {
+                        // Recency = fraction of time range elapsed (0.0 = oldest, 1.0 = most recent)
+                        let recency = if before_us > 0 {
+                            (node.created_at as f64 / before_us as f64).min(1.0) as f32
+                        } else {
+                            0.0
+                        };
+                        *score += recency * recency_weight;
+                    }
+                }
+            }
+            // Re-sort after recency boost
+            merged.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            if debug { eprintln!("[recency] Applied recency boost (weight={})", recency_weight); }
+        }
+
         // Counting queries need more results to ensure completeness
         let final_k = if is_counting { std::cmp::max(k, 80) } else { k };
         merged.truncate(final_k);
@@ -933,7 +970,7 @@ impl MenteDB {
             // --- Phase 2: Reconstructive synthesis ---
             // Feed UNION of: (a) re-ranker picks + (b) top-K by original retrieval score.
             // This ensures nothing is lost even if the re-ranker misscores items.
-            let retrieval_top_k = if is_temporal { std::cmp::min(expanded.len(), 35) } else if is_counting { std::cmp::min(expanded.len(), 40) } else if is_preference { std::cmp::min(expanded.len(), 35) } else { std::cmp::min(expanded.len(), 20) };
+            let retrieval_top_k = if is_temporal { std::cmp::min(expanded.len(), 35) } else if is_counting { std::cmp::min(expanded.len(), 40) } else if is_preference { std::cmp::min(expanded.len(), 35) } else if is_knowledge_update { std::cmp::min(expanded.len(), 30) } else { std::cmp::min(expanded.len(), 20) };
             let mut synth_ids: Vec<String> = Vec::new();
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -967,11 +1004,6 @@ impl MenteDB {
                 }
             }
             let is_multi_session = session_set.len() > 3;
-
-            // Detect knowledge-update from query patterns
-            let is_knowledge_update = query_lower.contains("current") || query_lower.contains("latest")
-                || query_lower.contains("now") || query_lower.contains("updated")
-                || query_lower.contains("changed") || query_lower.contains("still");
 
             // Per-category evidence budget (max items to feed to reader)
             let evidence_budget: usize = if is_multi_session { 40 } else if is_temporal { 40 } else if is_preference { 35 } else if is_knowledge_update { 25 } else { 20 };
