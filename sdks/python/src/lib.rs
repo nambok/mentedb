@@ -1230,8 +1230,8 @@ impl MenteDB {
                 }
             }
 
-            // Sort chronologically for temporal queries so the LLM sees events in time order
-            if is_temporal {
+            // Sort chronologically for temporal/KU queries so the LLM sees events in time order
+            if is_temporal || is_knowledge_update {
                 evidence_items.sort_by(|a, b| a.date.cmp(&b.date));
             }
 
@@ -1465,17 +1465,21 @@ impl MenteDB {
                                  - Quote amounts/numbers EXACTLY as stated in evidence\n\
                                  - If the question asks about a specific time period, only include items from that period\n\
                                  - If the question asks about frequency (per week/month), list each OCCURRENCE separately\n\
-                                 - \"Plan to\" or \"looking to\" = include if question asks about plans\n\
+                                 - \"Plan to\" or \"looking to\" acquiring X does NOT mean they have X — exclude unless question asks about plans\n\
+                                 - DEDUPLICATE: if the same event/item appears in multiple evidence entries, count it ONLY ONCE\n\
+                                 - Each unique session may mention the same item — that is ONE item, not multiple\n\
+                                 - READ ALL EVIDENCE carefully — items may appear in later entries that you missed\n\
                                  For each item, include:\n\
-                                 - \"name\": the item name\n\
+                                 - \"name\": the item name (be specific)\n\
                                  - \"qualifies\": true if it should be counted, false if not\n\
                                  - \"reason\": cite which evidence entry [N] supports this item\n\
+                                 - \"session\": which session/date this came from (if identifiable)\n\
                                  - \"amount\": if the question involves money, quote the EXACT amount from evidence\n\n\
                                  Return ONLY valid JSON. Example:\n\
-                                 [{{\"name\": \"Zumba - Tuesday\", \"qualifies\": true, \"reason\": \"Evidence [3] states user attends Tuesdays\"}}]",
+                                 [{{\"name\": \"Zumba - Tuesday\", \"qualifies\": true, \"reason\": \"Evidence [3] states user attends Tuesdays\", \"session\": \"Session 2\"}}]",
                                 query, evidence
                             );
-                            let enum_system = "You enumerate items from evidence as JSON. ONLY include items with explicit evidence support. Quote all numbers exactly. Return ONLY a JSON array.";
+                            let enum_system = "You enumerate items from evidence as JSON. ONLY include items with explicit evidence support. Quote all numbers exactly. DEDUPLICATE: same item from multiple evidence entries = ONE item. Return ONLY a JSON array.";
 
                             match rt.block_on(synth_provider.call_text_with_retry(&enum_prompt, enum_system)) {
                                 Ok(enum_response) => {
