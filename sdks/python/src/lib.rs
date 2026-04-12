@@ -579,10 +579,15 @@ impl MenteDB {
             if !category_terms.is_empty() {
                 // Search ALL memories (not just graph nodes) for context tags
                 let all_mem_ids: Vec<MemoryId> = db.memory_ids().to_vec();
+                let before_us_filter = time_range.map(|(_, b)| b);
                 let mut found_entities = 0;
                 let mut found_facts = 0;
                 for mid in &all_mem_ids {
                     if let Ok(node) = db.get_memory(*mid) {
+                        // Time filter: skip memories created after question date
+                        if let Some(before) = before_us_filter {
+                            if node.created_at > before { continue; }
+                        }
                         // Check entity nodes by category attribute
                         if node.tags.iter().any(|t| t.starts_with("entity_name:")) {
                             if let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
@@ -629,6 +634,10 @@ impl MenteDB {
                 let mut entity_sims: Vec<(MemoryId, f32)> = Vec::new();
                 for nid in &all_node_ids {
                     if let Ok(node) = db.get_memory(*nid) {
+                        // Time filter: skip nodes created after question date
+                        if let Some(ref tr) = time_range {
+                            if node.created_at > tr.1 { continue; }
+                        }
                         if node.tags.iter().any(|t| t.starts_with("entity_name:")) {
                             let sim = cosine_similarity(seed_emb, &node.embedding);
                             if sim > 0.3 {
@@ -913,6 +922,12 @@ impl MenteDB {
                         for nid in neighbor_ids {
                             let nid_str = nid.to_string();
                             if !seen.contains(&nid_str) {
+                                // Time filter: skip neighbors created after question date
+                                if let Some(ref tr) = time_range {
+                                    if let Ok(nnode) = db.get_memory(nid) {
+                                        if nnode.created_at > tr.1 { continue; }
+                                    }
+                                }
                                 seen.insert(nid_str.clone());
                                 // Entity neighbors get a slightly lower score
                                 expanded.push((nid_str, score * 0.9));
@@ -1180,13 +1195,30 @@ impl MenteDB {
                         // For multi-session: filter out assistant turns (they drown out user facts)
                         if is_multi_session && is_assistant_turn { continue; }
 
+                        // Time filter: skip memories created after the question date
+                        if let Some(ref tr) = time_range {
+                            if node.created_at > tr.1 && !node.tags.iter().any(|t| t.starts_with("date:")) {
+                                continue;
+                            }
+                        }
+
                         let session = node.tags.iter()
                             .find_map(|t| t.strip_prefix("session:").map(|s| s.to_string()))
                             .unwrap_or_default();
-                        let date = node.tags.iter()
+                        let raw_date = node.tags.iter()
                             .find_map(|t| t.strip_prefix("date:").map(|s| s.to_string()))
                             .or_else(|| format_timestamp_date(node.created_at))
                             .unwrap_or_default();
+                        // Suppress dates that are obviously wrong (after question date)
+                        let date = if let Some(ref tr) = time_range {
+                            if node.created_at > tr.1 && !node.tags.iter().any(|t| t.starts_with("date:")) {
+                                String::new() // Don't show phantom future dates
+                            } else {
+                                raw_date
+                            }
+                        } else {
+                            raw_date
+                        };
 
                         evidence_items.push(EvidenceItem {
                             session,
@@ -2111,6 +2143,32 @@ impl MenteDB {
             if let Some(ts) = mem.created_at {
                 node.created_at = ts;
                 node.accessed_at = ts;
+            } else {
+                // Fallback: derive timestamp from date: tag if present
+                for tag in &node.tags {
+                    if let Some(date_str) = tag.strip_prefix("date:") {
+                        // Parse "YYYY/MM/DD" or "YYYY/MM/DD (Day) HH:MM" format
+                        let parts: Vec<&str> = date_str.split('/').collect();
+                        if parts.len() >= 3 {
+                            if let (Ok(y), Ok(m), Ok(d)) = (
+                                parts[0].parse::<i64>(),
+                                parts[1].parse::<i64>(),
+                                parts[2].split_whitespace().next().unwrap_or("1").split('(').next().unwrap_or("1").trim().parse::<i64>(),
+                            ) {
+                                // Approximate: days since epoch * microseconds per day
+                                let days = (y - 1970) * 365 + (y - 1969) / 4 + match m {
+                                    1 => 0, 2 => 31, 3 => 59, 4 => 90, 5 => 120, 6 => 151,
+                                    7 => 181, 8 => 212, 9 => 243, 10 => 273, 11 => 304, 12 => 334,
+                                    _ => 0,
+                                } + d - 1;
+                                let ts = (days as u64) * 86_400_000_000;
+                                node.created_at = ts;
+                                node.accessed_at = ts;
+                            }
+                        }
+                        break;
+                    }
+                }
             }
 
             // If this is an entity, populate its attributes
