@@ -399,7 +399,12 @@ impl MenteDB {
             || query_lower.contains("before") || query_lower.contains("after")
             || query_lower.contains("first") || query_lower.contains("most recent")
             || query_lower.contains("days") || query_lower.contains("weeks")
-            || query_lower.contains("months ago") || query_lower.contains("order");
+            || query_lower.contains("months ago") || query_lower.contains("order")
+            || query_lower.contains("ago") || query_lower.contains("last saturday")
+            || query_lower.contains("last sunday") || query_lower.contains("last monday")
+            || query_lower.contains("last tuesday") || query_lower.contains("last wednesday")
+            || query_lower.contains("last thursday") || query_lower.contains("last friday")
+            || (query_lower.contains("last") && (query_lower.contains("week") || query_lower.contains("month")));
         let is_temporal_ordering = is_temporal && (query_lower.contains("order") || query_lower.contains("earliest") || query_lower.contains("latest") || query_lower.contains("first") || query_lower.contains("most recent"));
         let is_preference = query_lower.contains("suggest") || query_lower.contains("recommend")
             || query_lower.contains("any tips") || query_lower.contains("any advice")
@@ -673,6 +678,134 @@ impl MenteDB {
             }
         }
 
+        // --- Pass 6: Temporal window retrieval (for temporal queries only) ---
+        // For queries with relative time references ("X days/weeks ago", "last Saturday"),
+        // search a narrow time window around the target date to find the right event.
+        let mut temporal_window_hits: Vec<(mentedb_core::types::MemoryId, f32)> = Vec::new();
+        let mut temporal_target_us: Option<u64> = None; // Target date in microseconds
+
+        if is_temporal {
+            let before_us = time_range.map(|(_, b)| b).unwrap_or(0);
+
+            if before_us > 0 {
+                // Parse temporal offset from query using regex-like matching
+                let day_us: u64 = 86_400_000_000; // 1 day in microseconds
+                let week_us: u64 = 7 * day_us;
+
+                // Extract "X days/weeks/months ago" patterns
+                let mut offset_us: Option<u64> = None;
+                let words: Vec<&str> = query_lower.split_whitespace().collect();
+                for i in 0..words.len() {
+                    if let Ok(n) = words[i].parse::<u64>() {
+                        if i + 1 < words.len() {
+                            let unit = words[i + 1].trim_end_matches('?');
+                            if unit.starts_with("day") {
+                                offset_us = Some(n * day_us);
+                            } else if unit.starts_with("week") {
+                                offset_us = Some(n * week_us);
+                            } else if unit.starts_with("month") {
+                                offset_us = Some(n * 30 * day_us);
+                            }
+                        }
+                    }
+                }
+
+                // "last Saturday/Sunday/etc." → ~1 week ago
+                if offset_us.is_none() && query_lower.contains("last") {
+                    for day_name in &["saturday", "sunday", "monday", "tuesday", "wednesday", "thursday", "friday"] {
+                        if query_lower.contains(day_name) {
+                            offset_us = Some(week_us); // approximate: last [day] ≈ 1 week ago
+                            break;
+                        }
+                    }
+                }
+
+                // "a week ago" / "a month ago"
+                if offset_us.is_none() {
+                    if query_lower.contains("a week ago") || query_lower.contains("one week ago") {
+                        offset_us = Some(week_us);
+                    } else if query_lower.contains("a month ago") || query_lower.contains("one month ago") {
+                        offset_us = Some(30 * day_us);
+                    } else if query_lower.contains("two weeks ago") {
+                        offset_us = Some(2 * week_us);
+                    }
+                }
+
+                if let Some(off) = offset_us {
+                    let target = before_us.saturating_sub(off);
+                    temporal_target_us = Some(target);
+                    // Search within ±5 days of target date
+                    let window_margin = 5 * day_us;
+                    let window_start = target.saturating_sub(window_margin);
+                    let window_end = std::cmp::min(target + window_margin, before_us);
+                    let window_range = Some((window_start, window_end));
+
+                    if debug { eprintln!("[temporal_window] target={}, window=±5 days", target); }
+
+                    // Semantic search within the time window
+                    let window_emb = if let Some(ref embedder) = self.embedder {
+                        embedder.embed(query).map_err(to_pyerr)?
+                    } else {
+                        hash_embedding(query, 384)
+                    };
+                    let window_hits = db.recall_hybrid_at(
+                        &window_emb, Some(query), 20,
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_micros() as u64,
+                        tag_refs, window_range
+                    ).map_err(to_pyerr)?;
+                    temporal_window_hits = window_hits;
+                    if debug { eprintln!("[temporal_window] Found {} memories in window", temporal_window_hits.len()); }
+                }
+
+                // For ordering queries with "past X months" pattern, do a wide window search
+                if is_temporal_ordering && temporal_target_us.is_none() {
+                    // Try to extract time range for ordering ("past three months", "past two months")
+                    let mut range_months: Option<u64> = None;
+                    for i in 0..words.len() {
+                        if (words[i] == "past" || words[i] == "last") && i + 2 < words.len() {
+                            let num_word = words[i + 1];
+                            let n = match num_word {
+                                "two" | "2" => Some(2u64),
+                                "three" | "3" => Some(3),
+                                "four" | "4" => Some(4),
+                                "five" | "5" => Some(5),
+                                "six" | "6" => Some(6),
+                                _ => num_word.parse().ok(),
+                            };
+                            if let Some(months) = n {
+                                if words[i + 2].starts_with("month") {
+                                    range_months = Some(months);
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(months) = range_months {
+                        let wide_start = before_us.saturating_sub(months * 30 * day_us);
+                        let wide_range = Some((wide_start, before_us));
+                        let wide_emb = if let Some(ref embedder) = self.embedder {
+                            embedder.embed(query).map_err(to_pyerr)?
+                        } else {
+                            hash_embedding(query, 384)
+                        };
+                        let wide_hits = db.recall_hybrid_at(
+                            &wide_emb, Some(query), 30,
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_micros() as u64,
+                            tag_refs, wide_range
+                        ).map_err(to_pyerr)?;
+                        temporal_window_hits.extend(wide_hits);
+                        if debug { eprintln!("[temporal_window] Ordering wide search: {} months, {} hits", months, temporal_window_hits.len()); }
+                    }
+                }
+            }
+        }
+
         // --- Merge all passes with RRF ---
         use std::collections::HashMap;
         let rrf_k: f32 = 60.0;
@@ -703,13 +836,15 @@ impl MenteDB {
         for (rank, (id, _)) in categorical_hits.iter().enumerate() {
             *rrf_scores.entry(id.to_string()).or_insert(0.0) += 1.5 / (rrf_k + rank as f32);
         }
+        // Pass 6 temporal window: high weight — time-targeted retrieval
+        for (rank, (id, _)) in temporal_window_hits.iter().enumerate() {
+            *rrf_scores.entry(id.to_string()).or_insert(0.0) += 1.8 / (rrf_k + rank as f32);
+        }
 
         let mut merged: Vec<(String, f32)> = rrf_scores.into_iter().collect();
         merged.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        // --- Recency boost for knowledge-update and temporal queries ---
-        // More recent memories get a score bonus so the latest version of a fact
-        // ranks above older versions. Also helps temporal queries find the right event.
+        // --- Recency/proximity boost for knowledge-update and temporal queries ---
         if is_knowledge_update || is_temporal {
             let before_us = time_range.map(|(_, b)| b).unwrap_or(
                 std::time::SystemTime::now()
@@ -717,24 +852,37 @@ impl MenteDB {
                     .unwrap_or_default()
                     .as_micros() as u64
             );
-            // Boost factor: knowledge-update gets stronger recency preference
-            let recency_weight: f32 = if is_knowledge_update { 0.015 } else { 0.005 };
+
             for (id_str, score) in merged.iter_mut() {
                 if let Ok(mem_id) = parse_memory_id(id_str) {
                     if let Ok(node) = db.get_memory(mem_id) {
-                        // Recency = fraction of time range elapsed (0.0 = oldest, 1.0 = most recent)
-                        let recency = if before_us > 0 {
-                            (node.created_at as f64 / before_us as f64).min(1.0) as f32
-                        } else {
-                            0.0
-                        };
-                        *score += recency * recency_weight;
+                        if is_knowledge_update {
+                            // Knowledge-update: prefer most recent version of a fact
+                            let recency = if before_us > 0 {
+                                (node.created_at as f64 / before_us as f64).min(1.0) as f32
+                            } else { 0.0 };
+                            *score += recency * 0.015;
+                        }
+
+                        // Temporal proximity: if we have a target date, boost memories near it
+                        if let Some(target) = temporal_target_us {
+                            let dist = if node.created_at > target {
+                                node.created_at - target
+                            } else {
+                                target - node.created_at
+                            };
+                            let day_us: u64 = 86_400_000_000;
+                            let days_away = dist as f64 / day_us as f64;
+                            // Gaussian-like proximity: max boost at 0 days, decays to ~0 at 14 days
+                            let proximity = (-days_away * days_away / 50.0).exp() as f32;
+                            *score += proximity * 0.02;
+                        }
                     }
                 }
             }
-            // Re-sort after recency boost
+            // Re-sort after boost
             merged.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            if debug { eprintln!("[recency] Applied recency boost (weight={})", recency_weight); }
+            if debug { eprintln!("[proximity] Applied temporal proximity boost (target={:?})", temporal_target_us); }
         }
 
         // Counting queries need more results to ensure completeness
@@ -970,7 +1118,7 @@ impl MenteDB {
             // --- Phase 2: Reconstructive synthesis ---
             // Feed UNION of: (a) re-ranker picks + (b) top-K by original retrieval score.
             // This ensures nothing is lost even if the re-ranker misscores items.
-            let retrieval_top_k = if is_temporal { std::cmp::min(expanded.len(), 35) } else if is_counting { std::cmp::min(expanded.len(), 40) } else if is_preference { std::cmp::min(expanded.len(), 35) } else if is_knowledge_update { std::cmp::min(expanded.len(), 30) } else { std::cmp::min(expanded.len(), 20) };
+            let retrieval_top_k = if is_temporal { std::cmp::min(expanded.len(), 50) } else if is_counting { std::cmp::min(expanded.len(), 40) } else if is_preference { std::cmp::min(expanded.len(), 35) } else if is_knowledge_update { std::cmp::min(expanded.len(), 30) } else { std::cmp::min(expanded.len(), 20) };
             let mut synth_ids: Vec<String> = Vec::new();
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -1006,7 +1154,7 @@ impl MenteDB {
             let is_multi_session = session_set.len() > 3;
 
             // Per-category evidence budget (max items to feed to reader)
-            let evidence_budget: usize = if is_multi_session { 40 } else if is_temporal { 40 } else if is_preference { 35 } else if is_knowledge_update { 25 } else { 20 };
+            let evidence_budget: usize = if is_multi_session { 40 } else if is_temporal { 50 } else if is_preference { 35 } else if is_knowledge_update { 25 } else { 20 };
 
             if debug { eprintln!("[synthesis] multi_session={}, temporal={}, ku={}, budget={}",
                 is_multi_session, is_temporal, is_knowledge_update, evidence_budget); }
