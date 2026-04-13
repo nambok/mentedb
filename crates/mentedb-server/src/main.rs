@@ -390,6 +390,7 @@ fn build_extraction_config(config: &ServerConfig) -> Option<ExtractionConfig> {
         deduplication_threshold: config.extraction_dedup_threshold.unwrap_or(0.85),
         enable_contradiction_check: true,
         enable_deduplication: true,
+        extraction_passes: 1,
     })
 }
 

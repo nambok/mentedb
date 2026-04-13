@@ -46,6 +46,7 @@ fn mock_extraction_config() -> ExtractionConfig {
         deduplication_threshold: 0.85,
         enable_contradiction_check: true,
         enable_deduplication: true,
+        extraction_passes: 1,
     }
 }
 

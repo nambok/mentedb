@@ -2,7 +2,12 @@ use crate::config::{ExtractionConfig, LlmProvider};
 use crate::error::ExtractionError;
 
 /// Classify an HTTP error response into a specific ExtractionError variant.
-fn classify_api_error(status: reqwest::StatusCode, body: &str, provider: &str, model: &str) -> ExtractionError {
+fn classify_api_error(
+    status: reqwest::StatusCode,
+    body: &str,
+    provider: &str,
+    model: &str,
+) -> ExtractionError {
     let code = status.as_u16();
     match code {
         401 => ExtractionError::AuthError(format!(
@@ -15,9 +20,7 @@ fn classify_api_error(status: reqwest::StatusCode, body: &str, provider: &str, m
         404 => ExtractionError::ModelNotFound(format!(
             "{provider} returned 404. Model '{model}' may not exist or is not available on your account."
         )),
-        _ => ExtractionError::ProviderError(format!(
-            "{provider} API returned {status}: {body}"
-        )),
+        _ => ExtractionError::ProviderError(format!("{provider} API returned {status}: {body}")),
     }
 }
 
@@ -89,7 +92,11 @@ impl HttpExtractionProvider {
 
         // Parse JSON response (call_openai forces json_object response format)
         let mut lines: Vec<String> = Vec::new();
-        let cleaned = result.trim().trim_start_matches("```json").trim_end_matches("```").trim();
+        let cleaned = result
+            .trim()
+            .trim_start_matches("```json")
+            .trim_end_matches("```")
+            .trim();
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(cleaned) {
             if let Some(answer_type) = json.get("answer_type").and_then(|v| v.as_str()) {
                 lines.push(answer_type.to_string());
@@ -108,10 +115,10 @@ impl HttpExtractionProvider {
                 lines.push(format!("BROAD_KEYWORDS: {}", broad_kw));
             }
             // Fallback: old single "keywords" field → treat all as item keywords
-            if let Some(keywords) = json.get("keywords").and_then(|v| v.as_str()) {
-                if json.get("item_keywords").is_none() {
-                    lines.push(format!("ITEM_KEYWORDS: {}", keywords));
-                }
+            if let Some(keywords) = json.get("keywords").and_then(|v| v.as_str())
+                && json.get("item_keywords").is_none()
+            {
+                lines.push(format!("ITEM_KEYWORDS: {}", keywords));
             }
         } else {
             // Fallback: parse as plain text lines
@@ -156,7 +163,12 @@ impl HttpExtractionProvider {
         let text = resp.text().await?;
 
         if !status.is_success() {
-            return Err(classify_api_error(status, &text, "OpenAI", &self.config.model));
+            return Err(classify_api_error(
+                status,
+                &text,
+                "OpenAI",
+                &self.config.model,
+            ));
         }
 
         let parsed: serde_json::Value = serde_json::from_str(&text)?;
@@ -198,7 +210,12 @@ impl HttpExtractionProvider {
         let text = resp.text().await?;
 
         if !status.is_success() {
-            return Err(classify_api_error(status, &text, "OpenAI", &self.config.model));
+            return Err(classify_api_error(
+                status,
+                &text,
+                "OpenAI",
+                &self.config.model,
+            ));
         }
 
         let parsed: serde_json::Value = serde_json::from_str(&text)?;
@@ -240,7 +257,12 @@ impl HttpExtractionProvider {
         let text = resp.text().await?;
 
         if !status.is_success() {
-            return Err(classify_api_error(status, &text, "Anthropic", &self.config.model));
+            return Err(classify_api_error(
+                status,
+                &text,
+                "Anthropic",
+                &self.config.model,
+            ));
         }
 
         let parsed: serde_json::Value = serde_json::from_str(&text)?;
@@ -259,9 +281,7 @@ impl HttpExtractionProvider {
             })
             .or_else(|| {
                 // Fallback: try the old path for backwards compat
-                parsed["content"][0]["text"]
-                    .as_str()
-                    .map(|s| s.to_string())
+                parsed["content"][0]["text"].as_str().map(|s| s.to_string())
             });
 
         match content_text {
@@ -311,7 +331,12 @@ impl HttpExtractionProvider {
         let text = resp.text().await?;
 
         if !status.is_success() {
-            return Err(classify_api_error(status, &text, "Ollama", &self.config.model));
+            return Err(classify_api_error(
+                status,
+                &text,
+                "Ollama",
+                &self.config.model,
+            ));
         }
 
         let parsed: serde_json::Value = serde_json::from_str(&text)?;
@@ -330,7 +355,8 @@ impl HttpExtractionProvider {
         conversation: &str,
         system_prompt: &str,
     ) -> Result<String, ExtractionError> {
-        self.call_with_retry_inner(conversation, system_prompt, true).await
+        self.call_with_retry_inner(conversation, system_prompt, true)
+            .await
     }
 
     /// Like call_with_retry but without forcing JSON response format.
@@ -340,7 +366,8 @@ impl HttpExtractionProvider {
         conversation: &str,
         system_prompt: &str,
     ) -> Result<String, ExtractionError> {
-        self.call_with_retry_inner(conversation, system_prompt, false).await
+        self.call_with_retry_inner(conversation, system_prompt, false)
+            .await
     }
 
     async fn call_with_retry_inner(
@@ -388,10 +415,14 @@ impl HttpExtractionProvider {
                     return Ok(text);
                 }
                 Err(ExtractionError::ProviderError(ref msg))
-                    if msg.contains("429") || msg.contains("500")
-                        || msg.contains("502") || msg.contains("503")
-                        || msg.contains("529") || msg.contains("timeout")
-                        || msg.contains("connection") || msg.contains("overloaded") =>
+                    if msg.contains("429")
+                        || msg.contains("500")
+                        || msg.contains("502")
+                        || msg.contains("503")
+                        || msg.contains("529")
+                        || msg.contains("timeout")
+                        || msg.contains("connection")
+                        || msg.contains("overloaded") =>
                 {
                     tracing::warn!(attempt = attempt + 1, error = %msg, "retrying transient LLM error");
                     last_err = Some(result.unwrap_err());

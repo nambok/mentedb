@@ -21,17 +21,15 @@ const MIN_TOKEN_LEN: usize = 2;
 
 /// Common English stop words to skip during tokenization.
 const STOP_WORDS: &[&str] = &[
-    "the", "be", "to", "of", "and", "in", "that", "have", "it", "for", "not",
-    "on", "with", "he", "as", "you", "do", "at", "this", "but", "his", "by",
-    "from", "they", "we", "say", "her", "she", "or", "an", "will", "my", "one",
-    "all", "would", "there", "their", "what", "so", "up", "out", "if", "about",
-    "who", "get", "which", "go", "me", "when", "make", "can", "like", "time",
-    "no", "just", "him", "know", "take", "people", "into", "year", "your",
-    "good", "some", "could", "them", "see", "other", "than", "then", "now",
-    "look", "only", "come", "its", "over", "think", "also", "back", "after",
-    "use", "two", "how", "our", "work", "first", "well", "way", "even", "new",
-    "want", "because", "any", "these", "give", "day", "most", "us", "is", "was",
-    "are", "were", "been", "has", "had", "did", "am",
+    "the", "be", "to", "of", "and", "in", "that", "have", "it", "for", "not", "on", "with", "he",
+    "as", "you", "do", "at", "this", "but", "his", "by", "from", "they", "we", "say", "her", "she",
+    "or", "an", "will", "my", "one", "all", "would", "there", "their", "what", "so", "up", "out",
+    "if", "about", "who", "get", "which", "go", "me", "when", "make", "can", "like", "time", "no",
+    "just", "him", "know", "take", "people", "into", "year", "your", "good", "some", "could",
+    "them", "see", "other", "than", "then", "now", "look", "only", "come", "its", "over", "think",
+    "also", "back", "after", "use", "two", "how", "our", "work", "first", "well", "way", "even",
+    "new", "want", "because", "any", "these", "give", "day", "most", "us", "is", "was", "are",
+    "were", "been", "has", "had", "did", "am",
 ];
 
 /// Inverted index entry: which documents contain a term and how many times.
@@ -260,7 +258,10 @@ mod tests {
         let b = MemoryId::new();
         let c = MemoryId::new();
 
-        idx.insert(a, "Sarah recommended an Italian restaurant in downtown Portland");
+        idx.insert(
+            a,
+            "Sarah recommended an Italian restaurant in downtown Portland",
+        );
         idx.insert(b, "The project uses PostgreSQL for the database backend");
         idx.insert(c, "We had dinner at the new Thai restaurant last Friday");
 
@@ -277,7 +278,10 @@ mod tests {
         let b = MemoryId::new();
 
         idx.insert(a, "Meeting with Dr. Chen about the quarterly review");
-        idx.insert(b, "Scheduled a meeting about project planning for next quarter");
+        idx.insert(
+            b,
+            "Scheduled a meeting about project planning for next quarter",
+        );
 
         let results = idx.search("Dr. Chen", 10);
         assert!(!results.is_empty());

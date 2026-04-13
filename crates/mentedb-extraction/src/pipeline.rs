@@ -90,7 +90,8 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
 
         // Verification pass: re-read conversation to find what the first pass missed
         if self.config.extraction_passes >= 2 && !result.memories.is_empty() {
-            let first_pass_facts: String = result.memories
+            let first_pass_facts: String = result
+                .memories
                 .iter()
                 .map(|m| format!("- {}", m.content))
                 .collect::<Vec<_>>()
@@ -124,7 +125,9 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
                 max = self.config.max_extractions_per_conversation,
                 "truncating extractions to configured maximum"
             );
-            result.memories.truncate(self.config.max_extractions_per_conversation);
+            result
+                .memories
+                .truncate(self.config.max_extractions_per_conversation);
         }
 
         Ok(result)
@@ -137,7 +140,10 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
 
         // Empty response = no memories to extract
         if trimmed.is_empty() {
-            return Ok(ExtractionResult { memories: vec![], entities: vec![] });
+            return Ok(ExtractionResult {
+                memories: vec![],
+                entities: vec![],
+            });
         }
 
         // Strip markdown code fences if present
@@ -187,7 +193,10 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
             &candidate[..end]
         } else {
             // No JSON object found — LLM returned plain text (e.g. "No memories to extract")
-            return Ok(ExtractionResult { memories: vec![], entities: vec![] });
+            return Ok(ExtractionResult {
+                memories: vec![],
+                entities: vec![],
+            });
         };
 
         // Parse with serde_json::Value first (tolerates duplicate keys — last one wins)

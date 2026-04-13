@@ -285,9 +285,16 @@ impl MenteDb {
         tags: Option<&[&str]>,
         time_range: Option<(Timestamp, Timestamp)>,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
-        debug!("Recall hybrid, k={}, at={}, bm25={}", k, at, query_text.is_some());
+        debug!(
+            "Recall hybrid, k={}, at={}, bm25={}",
+            k,
+            at,
+            query_text.is_some()
+        );
         // Over-fetch to account for filtered-out results
-        let results = self.index.hybrid_search_with_query(embedding, query_text, tags, time_range, k * 3);
+        let results =
+            self.index
+                .hybrid_search_with_query(embedding, query_text, tags, time_range, k * 3);
         let graph = self.graph.graph();
         let filtered: Vec<(MemoryId, f32)> = results
             .into_iter()

@@ -183,7 +183,8 @@ If the conversation contains nothing worth remembering, return: {"memories": [],
 /// Returns a verification prompt for the second extraction pass.
 /// Given the first pass results, asks the LLM to find what was missed.
 pub fn extraction_verification_prompt(first_pass_facts: &str) -> String {
-    format!(r#"You are a memory extraction VERIFIER. A first-pass extractor already processed a conversation and found these facts:
+    format!(
+        r#"You are a memory extraction VERIFIER. A first-pass extractor already processed a conversation and found these facts:
 
 --- FIRST PASS RESULTS ---
 {first_pass_facts}
@@ -221,5 +222,6 @@ Use the SAME output format as the first pass:
       "attributes": {{}}
     }}
   ]
-}}"#)
+}}"#
+    )
 }

@@ -366,7 +366,10 @@ pub async fn create_edge(
         created_at: now,
         valid_from,
         valid_until,
-        label: req.get("label").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        label: req
+            .get("label")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
     };
 
     let mut db = state.db.write().await;

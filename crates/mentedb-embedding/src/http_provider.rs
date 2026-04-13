@@ -192,31 +192,37 @@ mod http_impl {
                 }
 
                 match req.send_json(&body) {
-                    Ok(mut resp) => {
-                        match resp.body_mut().read_json::<OpenAIEmbeddingResponse>() {
-                            Ok(parsed) => {
-                                return parsed
-                                    .data
-                                    .into_iter()
-                                    .next()
-                                    .map(|d| d.embedding)
-                                    .ok_or_else(|| MenteError::Storage("Empty embedding response".to_string()));
-                            }
-                            Err(e) => {
-                                last_err = Some(format!("Failed to parse embedding response: {}", e));
-                            }
+                    Ok(mut resp) => match resp.body_mut().read_json::<OpenAIEmbeddingResponse>() {
+                        Ok(parsed) => {
+                            return parsed
+                                .data
+                                .into_iter()
+                                .next()
+                                .map(|d| d.embedding)
+                                .ok_or_else(|| {
+                                    MenteError::Storage("Empty embedding response".to_string())
+                                });
                         }
-                    }
+                        Err(e) => {
+                            last_err = Some(format!("Failed to parse embedding response: {}", e));
+                        }
+                    },
                     Err(e) => {
                         last_err = Some(format!("HTTP embedding request failed: {}", e));
                     }
                 }
             }
-            Err(MenteError::Storage(last_err.unwrap_or_else(|| "embedding failed after retries".to_string())))
+            Err(MenteError::Storage(last_err.unwrap_or_else(|| {
+                "embedding failed after retries".to_string()
+            })))
         }
 
         /// Retry-aware batch embedding call with exponential backoff.
-        fn embed_batch_with_retry(&self, texts: &[&str], max_attempts: u32) -> MenteResult<Vec<Vec<f32>>> {
+        fn embed_batch_with_retry(
+            &self,
+            texts: &[&str],
+            max_attempts: u32,
+        ) -> MenteResult<Vec<Vec<f32>>> {
             let mut last_err = None;
             for attempt in 0..max_attempts {
                 if attempt > 0 {
@@ -238,22 +244,22 @@ mod http_impl {
                 }
 
                 match req.send_json(&body) {
-                    Ok(mut resp) => {
-                        match resp.body_mut().read_json::<OpenAIEmbeddingResponse>() {
-                            Ok(parsed) => {
-                                return Ok(parsed.data.into_iter().map(|d| d.embedding).collect());
-                            }
-                            Err(e) => {
-                                last_err = Some(format!("Failed to parse embedding response: {}", e));
-                            }
+                    Ok(mut resp) => match resp.body_mut().read_json::<OpenAIEmbeddingResponse>() {
+                        Ok(parsed) => {
+                            return Ok(parsed.data.into_iter().map(|d| d.embedding).collect());
                         }
-                    }
+                        Err(e) => {
+                            last_err = Some(format!("Failed to parse embedding response: {}", e));
+                        }
+                    },
                     Err(e) => {
                         last_err = Some(format!("HTTP embedding request failed: {}", e));
                     }
                 }
             }
-            Err(MenteError::Storage(last_err.unwrap_or_else(|| "batch embedding failed after retries".to_string())))
+            Err(MenteError::Storage(last_err.unwrap_or_else(|| {
+                "batch embedding failed after retries".to_string()
+            })))
         }
     }
 

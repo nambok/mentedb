@@ -180,7 +180,11 @@ impl CsrGraph {
     /// Adds a delta edge with the new weight; compaction will merge it.
     pub fn strengthen_edge(&mut self, source: MemoryId, target: MemoryId, delta: f32) {
         // Find the existing edge to get its current data
-        if let Some(existing) = self.outgoing(source).into_iter().find(|(id, _)| *id == target) {
+        if let Some(existing) = self
+            .outgoing(source)
+            .into_iter()
+            .find(|(id, _)| *id == target)
+        {
             let (_, stored) = existing;
             let new_weight = (stored.weight + delta).min(1.0);
             let source_idx = self.add_node(source);
