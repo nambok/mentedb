@@ -385,6 +385,35 @@ LLM_PROVIDER=anthropic LLM_API_KEY=sk-ant-... \
   cargo test -p mentedb-extraction --test llm_accuracy -- --ignored --nocapture
 ```
 
+### LongMemEval Benchmark
+
+[LongMemEval](https://arxiv.org/abs/2410.10813) is the standard benchmark for long-term conversational memory systems. It tests 500 questions across 7 categories using real multi-session conversation histories.
+
+**MenteDB v0.4.2** — 500 questions, judged by gpt-4o-2024-08-06 (official):
+
+| Category | Score | Questions |
+|----------|-------|-----------|
+| Single-session (user) | **95.3%** | 70 |
+| Abstention | **86.7%** | 30 |
+| Multi-session | **83.5%** | 133 |
+| Single-session (preference) | **83.3%** | 30 |
+| Temporal reasoning | **81.9%** | 133 |
+| Knowledge update | **79.2%** | 78 |
+| Single-session (assistant) | **73.2%** | 56 |
+| **Task-averaged** | **83.3%** | |
+| **Overall** | **83.0%** | 500 |
+
+**Setup:** GPT-4o-mini extraction, text-embedding-3-small embeddings, Claude Sonnet reader. No benchmark files modified — all improvements are engine-side retrieval and synthesis.
+
+```bash
+# Run it yourself
+cd benchmarks/longmemeval
+bash run_full_benchmark.sh 0
+
+# Evaluate
+OPENAI_API_KEY=... python3 evaluate.py results/hypotheses_full.jsonl
+```
+
 ### Mem0 vs MenteDB (head-to-head)
 
 | | MenteDB | Mem0 |
