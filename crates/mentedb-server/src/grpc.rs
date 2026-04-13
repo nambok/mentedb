@@ -348,6 +348,7 @@ impl MemoryService for MemoryServiceImpl {
             created_at: now,
             valid_from: req.valid_from,
             valid_until: req.valid_until,
+            label: None,
         };
 
         let mut db = self.state.db.write().await;

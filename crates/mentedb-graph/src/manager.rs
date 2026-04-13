@@ -90,6 +90,11 @@ impl GraphManager {
     pub fn compact(&mut self) {
         self.graph.compact();
     }
+
+    /// Strengthen an edge weight (Hebbian learning: neurons that fire together wire together).
+    pub fn strengthen_edge(&mut self, source: MemoryId, target: MemoryId, delta: f32) {
+        self.graph.strengthen_edge(source, target, delta);
+    }
 }
 
 impl Default for GraphManager {
@@ -112,6 +117,7 @@ mod tests {
             created_at: 1000,
             valid_from: None,
             valid_until: None,
+            label: None,
         }
     }
 
@@ -190,6 +196,7 @@ mod tests {
             created_at: 1000,
             valid_from: None,
             valid_until: None,
+            label: None,
         })
         .unwrap();
 

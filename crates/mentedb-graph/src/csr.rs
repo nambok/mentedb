@@ -7,7 +7,7 @@ use mentedb_core::types::{MemoryId, Timestamp};
 use serde::{Deserialize, Serialize};
 
 /// Compact edge data stored in CSR/CSC arrays.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredEdge {
     /// The relationship type.
     pub edge_type: EdgeType,
@@ -21,6 +21,9 @@ pub struct StoredEdge {
     /// When this relationship stopped being valid. None = still valid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub valid_until: Option<Timestamp>,
+    /// Semantic label for the relationship (e.g. "owns", "attends").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl StoredEdge {
@@ -32,6 +35,7 @@ impl StoredEdge {
             created_at: edge.created_at,
             valid_from: edge.valid_from,
             valid_until: edge.valid_until,
+            label: edge.label.clone(),
         }
     }
 
@@ -172,6 +176,30 @@ impl CsrGraph {
         });
     }
 
+    /// Strengthen an edge by incrementing its weight (Hebbian learning).
+    /// Adds a delta edge with the new weight; compaction will merge it.
+    pub fn strengthen_edge(&mut self, source: MemoryId, target: MemoryId, delta: f32) {
+        // Find the existing edge to get its current data
+        if let Some(existing) = self
+            .outgoing(source)
+            .into_iter()
+            .find(|(id, _)| *id == target)
+        {
+            let (_, stored) = existing;
+            let new_weight = (stored.weight + delta).min(1.0);
+            let source_idx = self.add_node(source);
+            let target_idx = self.add_node(target);
+            self.delta_edges.push(DeltaEdge {
+                source_idx,
+                target_idx,
+                data: StoredEdge {
+                    weight: new_weight,
+                    ..stored
+                },
+            });
+        }
+    }
+
     /// Mark an edge for removal.
     pub fn remove_edge(&mut self, source: MemoryId, target: MemoryId) {
         let (Some(&src_idx), Some(&tgt_idx)) =
@@ -210,7 +238,7 @@ impl CsrGraph {
             if !self.is_removed(idx, neighbor)
                 && let Some(&id) = self.idx_to_id.get(neighbor as usize)
             {
-                results.push((id, edges[i]));
+                results.push((id, edges[i].clone()));
             }
         }
 
@@ -219,7 +247,7 @@ impl CsrGraph {
             if delta.source_idx == idx
                 && let Some(&id) = self.idx_to_id.get(delta.target_idx as usize)
             {
-                results.push((id, delta.data));
+                results.push((id, delta.data.clone()));
             }
         }
 
@@ -252,7 +280,7 @@ impl CsrGraph {
             if !self.is_removed(neighbor, idx)
                 && let Some(&id) = self.idx_to_id.get(neighbor as usize)
             {
-                results.push((id, edges[i]));
+                results.push((id, edges[i].clone()));
             }
         }
 
@@ -261,7 +289,7 @@ impl CsrGraph {
             if delta.target_idx == idx
                 && let Some(&id) = self.idx_to_id.get(delta.source_idx as usize)
             {
-                results.push((id, delta.data));
+                results.push((id, delta.data.clone()));
             }
         }
 
@@ -314,14 +342,14 @@ impl CsrGraph {
             let edges = self.csr.edge_data_for(row);
             for (i, &col) in neighbors.iter().enumerate() {
                 if !self.is_removed(row, col) {
-                    all_edges.push((row, col, edges[i]));
+                    all_edges.push((row, col, edges[i].clone()));
                 }
             }
         }
 
         // Delta edges
         for delta in &self.delta_edges {
-            all_edges.push((delta.source_idx, delta.target_idx, delta.data));
+            all_edges.push((delta.source_idx, delta.target_idx, delta.data.clone()));
         }
 
         // Build CSR (sorted by source)
@@ -341,7 +369,7 @@ impl CsrGraph {
     ) -> CompressedStorage {
         // Count edges per row
         let mut counts = vec![0u32; num_nodes];
-        for &(src, tgt, _) in edges {
+        for &(src, tgt, ref _data) in edges {
             let row = if transpose { tgt } else { src };
             if (row as usize) < num_nodes {
                 counts[row as usize] += 1;
@@ -363,18 +391,19 @@ impl CsrGraph {
                 created_at: 0,
                 valid_from: None,
                 valid_until: None,
+                label: None,
             };
             total
         ];
 
         // Fill using write cursors
         let mut cursors = row_offsets[..num_nodes].to_vec();
-        for &(src, tgt, data) in edges {
+        for &(src, tgt, ref data) in edges {
             let (row, col) = if transpose { (tgt, src) } else { (src, tgt) };
             if (row as usize) < num_nodes {
                 let pos = cursors[row as usize] as usize;
                 col_indices[pos] = col;
-                edge_data[pos] = data;
+                edge_data[pos] = data.clone();
                 cursors[row as usize] += 1;
             }
         }
@@ -421,6 +450,7 @@ mod tests {
             created_at: 1000,
             valid_from: None,
             valid_until: None,
+            label: None,
         }
     }
 

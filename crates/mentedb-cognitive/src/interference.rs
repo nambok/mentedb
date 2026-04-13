@@ -11,7 +11,6 @@ pub struct InterferencePair {
 
 pub struct InterferenceDetector {
     similarity_threshold: f32,
-    truncation_length: usize,
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -30,25 +29,11 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if denom == 0.0 { 0.0 } else { dot / denom }
 }
 
-fn truncate_content(s: &str, max_len: usize) -> &str {
-    if s.len() <= max_len {
-        s
-    } else {
-        &s[..s.floor_char_boundary(max_len)]
-    }
-}
-
 impl InterferenceDetector {
     pub fn new(similarity_threshold: f32) -> Self {
         Self {
             similarity_threshold,
-            truncation_length: 80,
         }
-    }
-
-    pub fn with_truncation_length(mut self, truncation_length: usize) -> Self {
-        self.truncation_length = truncation_length;
-        self
     }
 
     pub fn detect_interference(&self, memories: &[MemoryNode]) -> Vec<InterferencePair> {
@@ -70,11 +55,9 @@ impl InterferenceDetector {
     }
 
     pub fn generate_disambiguation(&self, a: &MemoryNode, b: &MemoryNode) -> String {
-        let a_content = truncate_content(&a.content, self.truncation_length);
-        let b_content = truncate_content(&b.content, self.truncation_length);
         format!(
             "Note: Memory A: \"{}\" (created {}), Memory B: \"{}\" (created {}). Do not confuse.",
-            a_content, a.created_at, b_content, b.created_at
+            &a.content, a.created_at, &b.content, b.created_at
         )
     }
 

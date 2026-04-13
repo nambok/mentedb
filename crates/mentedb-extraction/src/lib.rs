@@ -14,4 +14,4 @@ pub use pipeline::{
     ProcessedExtractionResult, map_extraction_type_to_memory_type,
 };
 pub use provider::{ExtractionProvider, HttpExtractionProvider, MockExtractionProvider};
-pub use schema::{ExtractedMemory, ExtractionResult};
+pub use schema::{ExtractedEntity, ExtractedMemory, ExtractionResult};

@@ -223,11 +223,22 @@ impl MenteDb {
         embedding: &[f32],
         k: usize,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
+        self.recall_similar_filtered(embedding, k, None, None)
+    }
+
+    /// Vector similarity search with optional tag and time range filters.
+    pub fn recall_similar_filtered(
+        &mut self,
+        embedding: &[f32],
+        k: usize,
+        tags: Option<&[&str]>,
+        time_range: Option<(Timestamp, Timestamp)>,
+    ) -> MenteResult<Vec<(MemoryId, f32)>> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_micros() as u64;
-        self.recall_similar_at(embedding, k, now)
+        self.recall_similar_filtered_at(embedding, k, now, tags, time_range)
     }
 
     /// Vector similarity search at a specific point in time.
@@ -241,9 +252,49 @@ impl MenteDb {
         k: usize,
         at: Timestamp,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
-        debug!("Recall similar, k={}, at={}", k, at);
+        self.recall_similar_filtered_at(embedding, k, at, None, None)
+    }
+
+    /// Vector similarity search at a specific point in time with optional filters.
+    ///
+    /// Only returns memories that were temporally valid at the given timestamp.
+    /// Superseded/contradicted memories are excluded unless the edge itself
+    /// was not yet valid at that time. Optionally filters by tags and time range.
+    pub fn recall_similar_filtered_at(
+        &mut self,
+        embedding: &[f32],
+        k: usize,
+        at: Timestamp,
+        tags: Option<&[&str]>,
+        time_range: Option<(Timestamp, Timestamp)>,
+    ) -> MenteResult<Vec<(MemoryId, f32)>> {
+        self.recall_hybrid_at(embedding, None, k, at, tags, time_range)
+    }
+
+    /// Hybrid search combining vector similarity and BM25 keyword matching.
+    ///
+    /// When `query_text` is provided, BM25 results are fused with vector
+    /// results via Reciprocal Rank Fusion (RRF) for better recall on
+    /// exact entity names, dates, and specific terms.
+    pub fn recall_hybrid_at(
+        &mut self,
+        embedding: &[f32],
+        query_text: Option<&str>,
+        k: usize,
+        at: Timestamp,
+        tags: Option<&[&str]>,
+        time_range: Option<(Timestamp, Timestamp)>,
+    ) -> MenteResult<Vec<(MemoryId, f32)>> {
+        debug!(
+            "Recall hybrid, k={}, at={}, bm25={}",
+            k,
+            at,
+            query_text.is_some()
+        );
         // Over-fetch to account for filtered-out results
-        let results = self.index.hybrid_search(embedding, None, None, k * 3);
+        let results =
+            self.index
+                .hybrid_search_with_query(embedding, query_text, tags, time_range, k * 3);
         let graph = self.graph.graph();
         let filtered: Vec<(MemoryId, f32)> = results
             .into_iter()
@@ -269,6 +320,58 @@ impl MenteDb {
             .take(k)
             .collect();
         Ok(filtered)
+    }
+
+    /// Multi-query search with Reciprocal Rank Fusion (RRF).
+    ///
+    /// Runs multiple vector searches (one per embedding) and merges results
+    /// using RRF: score = Σ 1/(k + rank_i). This improves recall by matching
+    /// on different semantic aspects of a query.
+    /// When `query_texts` is provided, each search also runs BM25 matching.
+    pub fn recall_similar_multi(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        k: usize,
+        tags: Option<&[&str]>,
+        time_range: Option<(Timestamp, Timestamp)>,
+    ) -> MenteResult<Vec<(MemoryId, f32)>> {
+        self.recall_hybrid_multi(embeddings, None, k, tags, time_range)
+    }
+
+    /// Multi-query hybrid search with BM25 + vector fusion.
+    ///
+    /// Each query text is searched via both BM25 and vector, then all results
+    /// are merged via RRF.
+    pub fn recall_hybrid_multi(
+        &mut self,
+        embeddings: &[Vec<f32>],
+        query_texts: Option<&[String]>,
+        k: usize,
+        tags: Option<&[&str]>,
+        time_range: Option<(Timestamp, Timestamp)>,
+    ) -> MenteResult<Vec<(MemoryId, f32)>> {
+        use std::collections::HashMap;
+
+        let rrf_k: f32 = 60.0;
+        let mut rrf_scores: HashMap<MemoryId, f32> = HashMap::new();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+
+        for (i, emb) in embeddings.iter().enumerate() {
+            let qt = query_texts.and_then(|texts| texts.get(i).map(|s| s.as_str()));
+            let results = self.recall_hybrid_at(emb, qt, k, now, tags, time_range)?;
+            for (rank, (id, _score)) in results.iter().enumerate() {
+                *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
+            }
+        }
+
+        let mut merged: Vec<(MemoryId, f32)> = rrf_scores.into_iter().collect();
+        merged.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        merged.truncate(k);
+        Ok(merged)
     }
 
     /// Invalidate a memory by setting its valid_until timestamp.
@@ -336,6 +439,11 @@ impl MenteDb {
     /// Returns a reference to the underlying graph manager.
     pub fn graph(&self) -> &GraphManager {
         &self.graph
+    }
+
+    /// Returns a mutable reference to the underlying graph manager.
+    pub fn graph_mut(&mut self) -> &mut GraphManager {
+        &mut self.graph
     }
 
     /// Flushes all data and closes the database.

@@ -46,6 +46,7 @@ fn mock_extraction_config() -> ExtractionConfig {
         deduplication_threshold: 0.85,
         enable_contradiction_check: true,
         enable_deduplication: true,
+        extraction_passes: 1,
     }
 }
 
@@ -179,7 +180,7 @@ fn extraction_config_defaults() {
 fn extraction_config_anthropic() {
     let config = ExtractionConfig::anthropic("anthropic-key");
     assert_eq!(config.provider, LlmProvider::Anthropic);
-    assert_eq!(config.model, "claude-sonnet-4-20250514");
+    assert_eq!(config.model, "claude-haiku-4-5");
 }
 
 #[test]

@@ -3,15 +3,69 @@
 /// extraction pipeline: it determines what gets remembered and what gets
 /// discarded.
 pub fn extraction_system_prompt() -> &'static str {
-    r#"You are a memory extraction engine. Your job is to read a conversation and extract ONLY the high-value, durable facts worth remembering long term. Output valid JSON matching the schema below.
+    r#"You are a memory extraction engine. Your job is to read a conversation and extract ALL factual details mentioned. Be comprehensive — extract every specific detail, even if it seems minor. Output valid JSON matching the schema below.
 
-WHAT TO EXTRACT:
-- Decisions: what was decided and why (not every option that was discussed)
-- Preferences: explicitly stated preferences ("I prefer X over Y"), not inferences
+WHAT TO EXTRACT (extract ALL of these, not just "important" ones):
+- Decisions: what was decided and why
+- Preferences: explicitly stated preferences ("I prefer X over Y")
 - Corrections: what was wrong, and what the correct answer is
-- Facts: confirmed information that was stated as true, not speculation
+- Facts: ANY confirmed information stated as true
 - Entities: projects, tools, people, systems, with their relationships and roles
-- Anti-patterns: things that failed, caused bugs, or should be avoided in the future
+- Anti-patterns: things that failed, caused bugs, or should be avoided
+- Events: activities, appointments, outings, meetings — what happened, when, where, with whom
+- Specifics: names, locations, dates, prices, quantities, brands, addresses, durations
+- Places: stores, venues, studios, restaurants, parks — ANY named location
+- Numbers: amounts, counts, measurements, distances, ages, durations, scores
+- Assistant outputs: recommendations, schedules, plans, tables, or lists the assistant provided — extract the KEY DATA POINTS (names, assignments, values) as individual facts
+
+CRITICAL RULES FOR COMPLETENESS:
+
+1. CONTEXT DETAILS ARE MEMORIES: When the user mentions a detail as CONTEXT for another topic, STILL extract it as its own separate memory. Examples:
+   - "a collar for my Golden Retriever" → Extract: "User has a Golden Retriever"
+   - "to match the Philips LED bulb in my lamp" → Extract: "User has a Philips LED bulb in their bedside lamp"
+   - "brunch spots near Serenity Yoga" → Extract: "User goes to Serenity Yoga"
+   - "my friend Sarah who I convinced to start" → Extract: "User's friend is named Sarah"
+
+2. RESOLVE DATES: Resolve holiday names, relative dates, and named events to specific calendar dates when possible:
+   - "on Valentine's Day" → "on February 14th (Valentine's Day)"
+   - "on Christmas Eve" → "on December 24th"
+   - "last Thanksgiving" → include the specific date if inferrable from context
+
+   CRITICAL: The conversation begins with [Date: YYYY/MM/DD ...]. This is WHEN the conversation happened. Include this date in EVERY extracted fact so temporal context is never lost:
+   ✗ "User visited the Museum of Modern Art" (WHEN?)
+   ✓ "User visited the Museum of Modern Art on January 8, 2023"
+   ✗ "User received a crystal chandelier from aunt" (WHEN?)
+   ✓ "User received a crystal chandelier from aunt on March 4, 2023"
+
+3. ONE FACT PER MEMORY: Each memory should contain exactly ONE distinct fact. Do NOT combine multiple facts into a single memory. Instead of:
+   ✗ "User takes yoga at Serenity Yoga and uses Down Dog app at home"
+   Do this:
+   ✓ "User takes yoga classes at Serenity Yoga" (one memory)
+   ✓ "User uses the Down Dog app for home yoga practice" (separate memory)
+
+4. CONVERSATIONAL CONTEXT: When extracting a fact, include implied context from the surrounding conversation. If the user is discussing a specific store, place, or person, and then mentions an action, include the store/place/person even if it is not repeated in that sentence:
+   ✗ "User redeemed a $5 coupon on coffee creamer" (WHERE? The conversation is about Target)
+   ✓ "User redeemed a $5 coupon on coffee creamer at Target on May 28, 2023"
+   ✗ "User bought a new pair of running shoes" (WHERE? The user was discussing their trip to Nike outlet)
+   ✓ "User bought a new pair of running shoes at the Nike outlet"
+
+4. DISTINGUISH SIMILAR FACTS: When the conversation mentions similar but different things (e.g., two different locations, two different activities), make sure each gets its own memory with enough detail to tell them apart.
+
+5. PRESERVE SPECIFICS: NEVER summarize away specific numbers, names, titles, brands, amounts, or measurements. These are the details people ask about. Instead of:
+   ✗ "User upgraded their laptop RAM" (missing the amount)
+   ✓ "User upgraded their laptop RAM to 16GB"
+   ✗ "User had a previous job at a startup" (missing the title)
+   ✓ "User previously worked as a marketing specialist at a small startup"
+   ✗ "User spent money on bike maintenance" (missing the amount)
+   ✓ "User spent $25 on a bike chain replacement"
+
+6. SEMANTIC ENRICHMENT: When mentioning a specific subtype, also include the broader category it belongs to. This ensures memories are discoverable by general searches, not just exact terms:
+   ✗ "User had follow-up with dermatologist Dr. Lee" (searching "doctor" won't find this)
+   ✓ "User visited a doctor — dermatologist Dr. Lee — for a follow-up mole biopsy"
+   ✗ "User's TikTok gained 200 followers" (searching "social media growth" might miss this)
+   ✓ "User gained 200 followers on social media platform TikTok in three weeks"
+   ✗ "User bought a Bell Zephyr helmet at the bike shop" (searching "bike expense" might miss this)
+   ✓ "User bought a Bell Zephyr helmet (bike gear) for $120 at the local bike shop"
 
 HOW TO SCORE CONFIDENCE (0.0 to 1.0):
 - 0.9 to 1.0: explicitly stated multiple times, or confirmed by both parties
@@ -30,13 +84,72 @@ MEMORY TYPE VALUES (use exactly these strings):
 RULES:
 - Do NOT extract greetings, pleasantries, thank-yous, or filler
 - Do NOT extract intermediate reasoning steps, only final conclusions
-- Do NOT extract things that were discussed but never decided
 - Do NOT duplicate information, say it once in the most complete form
-- Do NOT extract low-confidence inferences the user did not explicitly state
-- Each memory should be self-contained and understandable without the original conversation
+- Each memory should be self-contained and understandable without the original conversation. ALWAYS include WHO, WHAT, WHERE, WHEN from the conversation context — even if the user didn't repeat it in every sentence. If the conversation is about Target and the user mentions redeeming a coupon, write "redeemed a coupon AT TARGET" not just "redeemed a coupon."
 - Keep content concise but complete, one to two sentences maximum
 - Include ALL relevant entities for each memory
 - Provide a one-sentence reasoning for why each memory is worth keeping
+- PREFER extracting too many facts over too few — missing a detail is worse than storing an extra one
+
+CONTEXT TAGS FOR FACTS:
+Every fact memory MUST include a "context" field — an array of life-domain categories this fact belongs to. Use the SAME category vocabulary as entity categories. This is how facts become discoverable by category searches.
+
+Examples:
+- "User orders hearing aid batteries from Amazon" → context: ["health_device", "shopping"]
+- "User tracks 10,000 steps daily with Fitbit" → context: ["health_device", "fitness_tracker", "daily_routine"]
+- "User spent $120 on bike helmet" → context: ["cycling", "bike_gear", "recent_purchase"]
+- "User visited Dr. Lee for a mole biopsy" → context: ["medical_appointment", "health_activity"]
+- "User's niece plays violin at school" → context: ["family", "music", "education"]
+
+The KEY test: If someone searches "health devices", will this fact show up? If YES, include "health_device" in context.
+Think broadly — a fact about ordering hearing aid BATTERIES is still about a health_device.
+
+ENTITY EXTRACTION:
+In addition to flat memories, extract structured ENTITIES — the people, pets, places, events, and items mentioned. Each entity has a name, type, and key-value attributes.
+
+Entity types: person, pet, place, event, item, organization, account
+
+For EACH entity mentioned (even incidentally), extract:
+- name: canonical name (e.g., "Max", "Serenity Yoga")
+- entity_type: one of the types above
+- attributes: key-value pairs of everything known about this entity
+
+REQUIRED ATTRIBUTES (include these when determinable from context):
+- "relationship": How the user relates to this entity. Use one of: owns, uses, attends, visits, plays, wants, considering, previously_owned, someone_else_owns, manages, works_at, knows, member_of. If the relationship is unclear, omit this attribute.
+- "category": The role this entity plays IN THE USER'S LIFE. Do NOT categorize by what the object technically is — categorize by how the user relates to it and what life domain it belongs to.
+
+  CONTEXT-FIRST CATEGORIZATION:
+  Ask yourself: "If the user were organizing their life into folders, where would this go?"
+  - Hearing aids → the user wears them daily for health → "health_device, daily_use_device" (NOT "assistive_device" or "audio_device")
+  - Fitbit → the user wears it for fitness/health tracking → "health_device, fitness_tracker, daily_use_device"
+  - $500 in savings account → personal finance → "personal_finance, savings" (NOT just "bank_account")
+  - $500 in business account → business operations → "business_finance, operations" (NOT just "bank_account")
+  - Guitar at home → hobby/recreation → "musical_instrument, hobby_equipment"
+  - Guitar at school → education tool → "musical_instrument, school_equipment"
+
+  The KEY test: Would this entity show up if the user searched for this category?
+  "What health devices do I use?" → hearing aids should appear → category MUST include "health_device"
+  "What are my business expenses?" → business account should appear → category MUST include "business_finance"
+
+  List ALL applicable life-context categories as a comma-separated string. Think broadly — what questions might someone ask that should find this entity?
+
+- "relationship_owner": If the entity belongs to someone other than the user, specify who (e.g., "niece", "friend Sarah"). Omit if the user is the owner/primary person.
+- "acquisition": How the user came to have this entity, when determinable. Use one of: bought, gifted, inherited, found, borrowed, won, built, subscribed. Include source if known (e.g., "gifted by grandmother", "bought on Amazon"). Omit if not mentioned or not applicable.
+
+Examples:
+- "a collar for my Golden Retriever like Max" → entity: {name: "Max", type: "pet", attributes: {breed: "Golden Retriever", owner: "user", relationship: "owns", category: "pet, family_member"}}
+- "brunch spots near Serenity Yoga" → entity: {name: "Serenity Yoga", type: "place", attributes: {activity: "yoga classes", relationship: "attends", category: "fitness_activity, health_activity, yoga_studio"}}
+- "the Love is in the Air dinner I volunteered at on Valentine's Day" → entity: {name: "Love is in the Air", type: "event", attributes: {event_type: "fundraising dinner", date: "February 14th (Valentine's Day)", role: "volunteer", relationship: "attends"}}
+- "I've been thinking about selling my Pearl Export drum set" → entity: {name: "Pearl Export", type: "item", attributes: {instrument_type: "drum set", relationship: "owns", category: "musical_instrument, hobby_equipment", status: "considering selling"}}
+- "my niece plays violin" → entity: {name: "violin", type: "item", attributes: {category: "musical_instrument", relationship: "someone_else_owns", relationship_owner: "niece"}}
+- "I've been wearing my Fitbit Versa 3 non-stop" → entity: {name: "Fitbit Versa 3", type: "item", attributes: {relationship: "uses", category: "health_device, fitness_tracker, wearable, daily_use_device"}}
+- "ordering replacement batteries for my hearing aids" → entity: {name: "hearing aids", type: "item", attributes: {brand: "Phonak", style: "BTE", relationship: "uses", category: "health_device, daily_use_device, medical_device"}}
+- "checking my business account balance" → entity: {name: "business account", type: "account", attributes: {relationship: "manages", category: "business_finance, financial_account"}}
+- "I bought an engagement ring last month" → entity: {name: "engagement ring", type: "item", attributes: {relationship: "owns", acquisition: "bought", category: "jewelry, relationship_milestone, recent_purchase"}}
+- "my grandmother gave me her kitchen knife" → entity: {name: "kitchen knife", type: "item", attributes: {relationship: "owns", acquisition: "gifted by grandmother", category: "kitchen_equipment, cooking_tool, family_heirloom"}}
+- "I got a survival knife for my camping trips" → entity: {name: "survival knife", type: "item", attributes: {relationship: "owns", acquisition: "bought", category: "outdoor_gear, camping_equipment, safety_tool"}}
+
+CRITICAL: Resolve holidays and relative dates to specific dates in entity attributes.
 
 OUTPUT FORMAT (strict JSON, no markdown fences):
 {
@@ -47,10 +160,68 @@ OUTPUT FORMAT (strict JSON, no markdown fences):
       "confidence": 0.9,
       "entities": ["PostgreSQL"],
       "tags": ["database", "infrastructure"],
+      "context": ["tech_stack", "backend_infrastructure"],
       "reasoning": "Explicitly confirmed tech stack choice"
+    }
+  ],
+  "entities": [
+    {
+      "name": "Max",
+      "entity_type": "pet",
+      "attributes": {
+        "breed": "Golden Retriever",
+        "likes": "peanut butter",
+        "owner": "user"
+      }
     }
   ]
 }
 
-If the conversation contains nothing worth remembering, return: {"memories": []}"#
+If the conversation contains nothing worth remembering, return: {"memories": [], "entities": []}"#
+}
+
+/// Returns a verification prompt for the second extraction pass.
+/// Given the first pass results, asks the LLM to find what was missed.
+pub fn extraction_verification_prompt(first_pass_facts: &str) -> String {
+    format!(
+        r#"You are a memory extraction VERIFIER. A first-pass extractor already processed a conversation and found these facts:
+
+--- FIRST PASS RESULTS ---
+{first_pass_facts}
+--- END FIRST PASS ---
+
+Your job: Re-read the conversation and find ANYTHING the first pass MISSED. Focus on:
+1. Assistant-provided information (schedules, recommendations, calculations, plans, lists)
+2. Incidental details mentioned as context (pet names, store names, locations visited)
+3. Specific numbers, amounts, dates, durations, counts
+4. Preferences stated indirectly ("I always go to X" = preference for X)
+5. Temporal facts: when things happened, how long things took, sequences of events
+6. Relationships between people, places, and activities
+
+IMPORTANT: Do NOT re-extract facts already in the first pass. Only extract NEW facts that were missed.
+
+If the first pass was thorough and nothing was missed, return: {{"memories": [], "entities": []}}
+
+Use the SAME output format as the first pass:
+{{
+  "memories": [
+    {{
+      "content": "...",
+      "memory_type": "fact|decision|preference|correction|anti_pattern",
+      "confidence": 0.7,
+      "entities": [],
+      "tags": [],
+      "context": [],
+      "reasoning": "Missed by first pass because..."
+    }}
+  ],
+  "entities": [
+    {{
+      "name": "...",
+      "entity_type": "person|pet|place|event|item|organization|account",
+      "attributes": {{}}
+    }}
+  ]
+}}"#
+    )
 }

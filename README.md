@@ -60,10 +60,11 @@ Most AI memory tools store everything and retrieve by similarity. The result: **
 MenteDB solves this with **write time intelligence:**
 
 1. **LLM Powered Extraction** parses conversations and extracts only what matters: decisions, preferences, corrections, facts, entities
-2. **Quality Filtering** rejects low confidence extractions before they hit storage
-3. **Deduplication** checks embedding similarity against existing memories
-4. **Contradiction Detection** flags when new information conflicts with existing beliefs
-5. **Belief Propagation** cascades updates when facts change
+2. **Entity-Centric Memory** extracts structured entities (people, pets, places, events) with typed attributes and links them to related memories via knowledge graph edges — so "bought a collar for my Golden Retriever" remembers the breed, not just the collar
+3. **Quality Filtering** rejects low confidence extractions before they hit storage
+4. **Deduplication** checks embedding similarity against existing memories
+5. **Contradiction Detection** flags when new information conflicts with existing beliefs
+6. **Belief Propagation** cascades updates when facts change
 
 The result: a clean, curated memory that actually helps the AI perform better.
 
@@ -72,8 +73,10 @@ The result: a clean, curated memory that actually helps the AI perform better.
 | Feature | Traditional DBs | Vector DBs | Mem0/Zep | MenteDB |
 |---------|----------------|------------|----------|---------|
 | Storage model | Tables/Documents | Embeddings | Key value | Memory nodes (embeddings + graph + bi-temporal) |
+| Entity understanding | Manual schemas | None | None | **Auto-extracted typed entities with graph edges** |
 | Query result | Raw data | Similarity scores | Raw memories | **Token budget optimized context** |
 | Memory quality | Manual | None | LLM extract | **LLM extract + quality filter + dedup + contradiction** |
+| Retrieval strategy | Index scan | Single-pass kNN | Single-pass kNN | **Adaptive multi-pass + entity graph expansion** |
 | Understands AI attention? | No | No | No | **Yes, U curve ordering** |
 | Tracks what AI knows? | No | No | No | **Epistemic state tracking** |
 | Multi-agent isolation? | Schema level | Collection level | API key | **Memory spaces with ACLs** |
@@ -82,6 +85,8 @@ The result: a clean, curated memory that actually helps the AI perform better.
 ### Core Features
 
 - **Automatic Memory Extraction** LLM powered pipeline extracts structured memories from raw conversations
+- **Entity-Centric Memory** Extracts typed entities (person, pet, place, event, item, organization) with structured attributes. Entity resolution merges attributes across mentions. Graph edges link memories to the entities they reference
+- **Adaptive Multi-Pass Retrieval** Engine-level 3-pass search (instant recall → active search → deep dig) with progressively increasing depth, reciprocal rank fusion, and entity graph expansion
 - **Write Time Intelligence** Quality filter, deduplication, and contradiction detection at ingest
 - **LLM Powered Cognitive Inference** CognitiveLlmService judges whether new memories invalidate, update, or are compatible with existing ones (supports Anthropic, OpenAI, Ollama)
 - **Bi-Temporal Validity** Memories and edges carry `valid_from`/`valid_until` timestamps. Temporal invalidation instead of deletion. Point-in-time queries via `recall_similar_at(embedding, k, timestamp)`
@@ -96,6 +101,25 @@ The result: a clean, curated memory that actually helps the AI perform better.
 - **Binary Embeddings** Base64 encoded storage, 65% smaller than JSON arrays
 - **Local Candle Embeddings** Zero config semantic search using all-MiniLM-L6-v2 (384 dims), no API key required
 - **gRPC + REST + MCP** Three integration paths for any use case
+
+### Entity-Centric Memory
+
+Most memory systems store flat text strings. When a user says *"I bought a collar for my Golden Retriever like Max"*, a flat system remembers the collar purchase but loses the breed. MenteDB extracts **structured entities** with typed attributes:
+
+```
+Entity: MAX (pet)
+  breed: Golden Retriever
+  ──linked to──> "User bought a collar for their dog Max"
+  ──linked to──> "User takes Max to the park on weekends"
+```
+
+**How it works:**
+1. **Extraction** — The LLM identifies entities (people, pets, places, events, items) and their attributes, even from incidental mentions
+2. **Resolution** — Multiple mentions of the same entity are merged: "Max", "my dog", "the Golden Retriever" all resolve to one entity node
+3. **Graph linking** — `PartOf` edges connect every memory that mentions an entity back to the entity node
+4. **Search expansion** — When search hits an entity, the engine traverses its subgraph to surface all related memories
+
+This means asking *"What breed is my dog?"* finds the entity MAX, follows its edges, and returns the breed attribute — even if no single memory explicitly says "my dog is a Golden Retriever".
 
 ### Performance Targets (10M memories)
 
@@ -182,6 +206,7 @@ graph TD
 
     subgraph Extraction["Memory Extraction"]
         LLM["LLM Provider<br/>OpenAI / Anthropic / Ollama"]
+        ENT["Entity Extraction<br/>typed attributes, resolution"]
         QF["Quality Filter"]
         DEDUP["Deduplication"]
         CONTRA_EX["Contradiction Check"]
@@ -209,6 +234,7 @@ graph TD
     subgraph Graph["Knowledge Graph"]
         CSR["CSR/CSC Storage"]
         TRAV["BFS / DFS Traversal"]
+        ENTG["Entity Graph<br/>PartOf edges, resolution"]
     end
 
     subgraph Storage["Storage Engine"]
@@ -217,7 +243,7 @@ graph TD
         PAGE["Page Manager<br/>16KB pages"]
     end
 
-    LLM --> QF --> DEDUP --> CONTRA_EX --> WI
+    LLM --> ENT --> QF --> DEDUP --> CONTRA_EX --> WI
 
     MQL --> QE
     GRPC --> QE
@@ -357,6 +383,35 @@ MenteDB's cognitive layer uses LLM judgment for memory invalidation, contradicti
 # Run the accuracy benchmark yourself
 LLM_PROVIDER=anthropic LLM_API_KEY=sk-ant-... \
   cargo test -p mentedb-extraction --test llm_accuracy -- --ignored --nocapture
+```
+
+### LongMemEval Benchmark
+
+[LongMemEval](https://arxiv.org/abs/2410.10813) is the standard benchmark for long-term conversational memory systems. It tests 500 questions across 7 categories using real multi-session conversation histories.
+
+**MenteDB v0.4.2** — 500 questions, judged by gpt-4o-2024-08-06 (official):
+
+| Category | Score | Questions |
+|----------|-------|-----------|
+| Single-session (user) | **95.3%** | 70 |
+| Abstention | **86.7%** | 30 |
+| Multi-session | **83.5%** | 133 |
+| Single-session (preference) | **83.3%** | 30 |
+| Temporal reasoning | **81.9%** | 133 |
+| Knowledge update | **79.2%** | 78 |
+| Single-session (assistant) | **73.2%** | 56 |
+| **Task-averaged** | **83.3%** | |
+| **Overall** | **83.0%** | 500 |
+
+**Setup:** GPT-4o-mini extraction, text-embedding-3-small embeddings, Claude Sonnet reader. No benchmark files modified — all improvements are engine-side retrieval and synthesis.
+
+```bash
+# Run it yourself
+cd benchmarks/longmemeval
+bash run_full_benchmark.sh 0
+
+# Evaluate
+OPENAI_API_KEY=... python3 evaluate.py results/hypotheses_full.jsonl
 ```
 
 ### Mem0 vs MenteDB (head-to-head)

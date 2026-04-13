@@ -168,76 +168,108 @@ mod http_impl {
         embedding: Vec<f32>,
     }
 
-    impl EmbeddingProvider for HttpEmbeddingProvider {
-        fn embed(&self, text: &str) -> MenteResult<Vec<f32>> {
-            let body = json!({
-                "model": self.config.model_name,
-                "input": text,
-            });
+    impl HttpEmbeddingProvider {
+        /// Retry-aware single embedding call with exponential backoff.
+        fn embed_with_retry(&self, text: &str, max_attempts: u32) -> MenteResult<Vec<f32>> {
+            let mut last_err = None;
+            for attempt in 0..max_attempts {
+                if attempt > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(500 * (1 << attempt)));
+                }
 
-            let mut req = ureq::post(&self.config.api_url)
-                .header("Authorization", &format!("Bearer {}", self.config.api_key));
+                let body = json!({
+                    "model": self.config.model_name,
+                    "input": text,
+                });
 
-            for (k, v) in &self.config.headers {
-                if k.to_lowercase() != "content-type" {
-                    req = req.header(k, v);
+                let mut req = ureq::post(&self.config.api_url)
+                    .header("Authorization", &format!("Bearer {}", self.config.api_key));
+
+                for (k, v) in &self.config.headers {
+                    if k.to_lowercase() != "content-type" {
+                        req = req.header(k, v);
+                    }
+                }
+
+                match req.send_json(&body) {
+                    Ok(mut resp) => match resp.body_mut().read_json::<OpenAIEmbeddingResponse>() {
+                        Ok(parsed) => {
+                            return parsed
+                                .data
+                                .into_iter()
+                                .next()
+                                .map(|d| d.embedding)
+                                .ok_or_else(|| {
+                                    MenteError::Storage("Empty embedding response".to_string())
+                                });
+                        }
+                        Err(e) => {
+                            last_err = Some(format!("Failed to parse embedding response: {}", e));
+                        }
+                    },
+                    Err(e) => {
+                        last_err = Some(format!("HTTP embedding request failed: {}", e));
+                    }
                 }
             }
+            Err(MenteError::Storage(last_err.unwrap_or_else(|| {
+                "embedding failed after retries".to_string()
+            })))
+        }
 
-            let result = req.send_json(&body);
-            let mut resp = match result {
-                Ok(r) => r,
-                Err(e) => {
-                    return Err(MenteError::Storage(format!(
-                        "HTTP embedding request failed: {}",
-                        e
-                    )));
+        /// Retry-aware batch embedding call with exponential backoff.
+        fn embed_batch_with_retry(
+            &self,
+            texts: &[&str],
+            max_attempts: u32,
+        ) -> MenteResult<Vec<Vec<f32>>> {
+            let mut last_err = None;
+            for attempt in 0..max_attempts {
+                if attempt > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(500 * (1 << attempt)));
                 }
-            };
 
-            let parsed: OpenAIEmbeddingResponse = resp.body_mut().read_json().map_err(|e| {
-                MenteError::Storage(format!("Failed to parse embedding response: {}", e))
-            })?;
+                let body = json!({
+                    "model": self.config.model_name,
+                    "input": texts,
+                });
 
-            parsed
-                .data
-                .into_iter()
-                .next()
-                .map(|d| d.embedding)
-                .ok_or_else(|| MenteError::Storage("Empty embedding response".to_string()))
+                let mut req = ureq::post(&self.config.api_url)
+                    .header("Authorization", &format!("Bearer {}", self.config.api_key));
+
+                for (k, v) in &self.config.headers {
+                    if k.to_lowercase() != "content-type" {
+                        req = req.header(k, v);
+                    }
+                }
+
+                match req.send_json(&body) {
+                    Ok(mut resp) => match resp.body_mut().read_json::<OpenAIEmbeddingResponse>() {
+                        Ok(parsed) => {
+                            return Ok(parsed.data.into_iter().map(|d| d.embedding).collect());
+                        }
+                        Err(e) => {
+                            last_err = Some(format!("Failed to parse embedding response: {}", e));
+                        }
+                    },
+                    Err(e) => {
+                        last_err = Some(format!("HTTP embedding request failed: {}", e));
+                    }
+                }
+            }
+            Err(MenteError::Storage(last_err.unwrap_or_else(|| {
+                "batch embedding failed after retries".to_string()
+            })))
+        }
+    }
+
+    impl EmbeddingProvider for HttpEmbeddingProvider {
+        fn embed(&self, text: &str) -> MenteResult<Vec<f32>> {
+            self.embed_with_retry(text, 3)
         }
 
         fn embed_batch(&self, texts: &[&str]) -> MenteResult<Vec<Vec<f32>>> {
-            let body = json!({
-                "model": self.config.model_name,
-                "input": texts,
-            });
-
-            let mut req = ureq::post(&self.config.api_url)
-                .header("Authorization", &format!("Bearer {}", self.config.api_key));
-
-            for (k, v) in &self.config.headers {
-                if k.to_lowercase() != "content-type" {
-                    req = req.header(k, v);
-                }
-            }
-
-            let result = req.send_json(&body);
-            let mut resp = match result {
-                Ok(r) => r,
-                Err(e) => {
-                    return Err(MenteError::Storage(format!(
-                        "HTTP embedding request failed: {}",
-                        e
-                    )));
-                }
-            };
-
-            let parsed: OpenAIEmbeddingResponse = resp.body_mut().read_json().map_err(|e| {
-                MenteError::Storage(format!("Failed to parse embedding response: {}", e))
-            })?;
-
-            Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
+            self.embed_batch_with_retry(texts, 3)
         }
 
         fn dimensions(&self) -> usize {

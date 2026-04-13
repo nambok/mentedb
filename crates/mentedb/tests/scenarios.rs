@@ -148,6 +148,7 @@ fn test_coding_assistant_workflow() {
             created_at: now_us(),
             valid_from: None,
             valid_until: None,
+            label: None,
         };
         let e2 = MemoryEdge {
             source: ids[1], // chose TypeScript
@@ -157,6 +158,7 @@ fn test_coding_assistant_workflow() {
             created_at: now_us(),
             valid_from: None,
             valid_until: None,
+            label: None,
         };
         db.relate(e1).unwrap();
         db.relate(e2).unwrap();
@@ -1031,6 +1033,7 @@ fn test_gdpr_forget() {
             created_at: now_us(),
             valid_from: None,
             valid_until: None,
+            label: None,
         };
         edge_pairs.push((memory_ids[i], memory_ids[i + 1]));
         db.relate(edge).unwrap();

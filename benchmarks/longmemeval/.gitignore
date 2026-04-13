@@ -1,0 +1,5 @@
+# Downloaded dataset files
+data/
+
+# Benchmark results and eval logs
+results/

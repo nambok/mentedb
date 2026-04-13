@@ -207,6 +207,7 @@ impl MenteDB {
             created_at: now,
             valid_from: valid_from.map(|v| v as u64),
             valid_until: valid_until.map(|v| v as u64),
+            label: None,
         };
         self.inner.relate(edge).map_err(mente_err)
     }

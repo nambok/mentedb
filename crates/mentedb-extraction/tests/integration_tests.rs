@@ -138,6 +138,7 @@ async fn test_deduplication() {
         confidence: 0.95,
         entities: vec![],
         tags: vec![],
+        context: vec![],
         reasoning: "test".to_string(),
     };
     let is_exact_dup = pipeline.check_duplicates(&exact_dup, &existing, &emb);
@@ -171,6 +172,7 @@ async fn test_contradiction_detection() {
         confidence: 0.9,
         entities: vec!["PostgreSQL".to_string()],
         tags: vec![],
+        context: vec![],
         reasoning: "test contradiction".to_string(),
     };
 
@@ -213,12 +215,12 @@ async fn test_prompt_output_parsing() {
     assert!(result[0].entities.is_empty()); // default
     assert!(result[0].tags.is_empty()); // default
 
-    // Malformed JSON should return a parse error
+    // Plain text without JSON should return empty memories (graceful fallback)
     let provider = MockExtractionProvider::new("not json at all");
     let config = ExtractionConfig::default();
     let pipeline = ExtractionPipeline::new(provider, config);
-    let result = pipeline.extract_from_conversation("test").await;
-    assert!(result.is_err());
+    let result = pipeline.extract_from_conversation("test").await.unwrap();
+    assert!(result.is_empty());
 }
 
 #[tokio::test]

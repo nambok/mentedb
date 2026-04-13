@@ -1,6 +1,6 @@
 //! Composite index manager that owns and coordinates all index types.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use mentedb_core::MemoryNode;
@@ -8,6 +8,7 @@ use mentedb_core::error::MenteResult;
 use mentedb_core::types::{MemoryId, Timestamp};
 
 use crate::bitmap::BitmapIndex;
+use crate::bm25::Bm25Index;
 use crate::hnsw::{HnswConfig, HnswIndex};
 use crate::salience::SalienceIndex;
 use crate::temporal::TemporalIndex;
@@ -23,6 +24,8 @@ pub struct IndexManagerConfig {
 pub struct IndexManager {
     /// Vector similarity index.
     pub hnsw: HnswIndex,
+    /// BM25 full-text index for keyword search.
+    pub bm25: Bm25Index,
     /// Tag and attribute bitmap index.
     pub bitmap: BitmapIndex,
     /// Timestamp range index.
@@ -36,6 +39,7 @@ impl IndexManager {
     pub fn new(config: IndexManagerConfig) -> Self {
         Self {
             hnsw: HnswIndex::new(config.hnsw),
+            bm25: Bm25Index::new(),
             bitmap: BitmapIndex::new(),
             temporal: TemporalIndex::new(),
             salience: SalienceIndex::new(),
@@ -46,6 +50,7 @@ impl IndexManager {
     pub fn save(&self, dir: &Path) -> MenteResult<()> {
         std::fs::create_dir_all(dir)?;
         self.hnsw.save(&dir.join("hnsw.json"))?;
+        self.bm25.save(&dir.join("bm25.json"))?;
         self.bitmap.save(&dir.join("bitmap.json"))?;
         self.temporal.save(&dir.join("temporal.json"))?;
         self.salience.save(&dir.join("salience.json"))?;
@@ -55,11 +60,18 @@ impl IndexManager {
     /// Load all indexes from the given directory.
     pub fn load(dir: &Path) -> MenteResult<Self> {
         let hnsw = HnswIndex::load(&dir.join("hnsw.json"), HnswConfig::default().ef_search)?;
+        let bm25_path = dir.join("bm25.json");
+        let bm25 = if bm25_path.exists() {
+            Bm25Index::load(&bm25_path)?
+        } else {
+            Bm25Index::new()
+        };
         let bitmap = BitmapIndex::load(&dir.join("bitmap.json"))?;
         let temporal = TemporalIndex::load(&dir.join("temporal.json"))?;
         let salience = SalienceIndex::load(&dir.join("salience.json"))?;
         Ok(Self {
             hnsw,
+            bm25,
             bitmap,
             temporal,
             salience,
@@ -71,6 +83,11 @@ impl IndexManager {
         // Vector index
         if !node.embedding.is_empty() {
             let _ = self.hnsw.insert(node.id, &node.embedding);
+        }
+
+        // BM25 full-text index
+        if !node.content.is_empty() {
+            self.bm25.insert(node.id, &node.content);
         }
 
         // Tag bitmap index
@@ -88,21 +105,40 @@ impl IndexManager {
     /// Remove a memory from all indexes.
     pub fn remove_memory(&self, id: MemoryId, node: &MemoryNode) {
         let _ = self.hnsw.remove(id);
+        self.bm25.remove(id);
         self.bitmap.remove_all(id);
         self.temporal.remove(id, node.created_at);
         self.salience.remove(id, node.salience);
     }
 
-    /// Hybrid search combining vector similarity, tag filtering, time range, and salience.
+    /// Hybrid search combining vector similarity, BM25 keyword matching,
+    /// tag filtering, time range, and salience.
     ///
     /// Strategy:
-    /// 1. Vector search to get top k*4 candidates
-    /// 2. Filter by tags (if provided) and time range (if provided)
-    /// 3. Re-rank by combined score: vector_sim * 0.6 + salience * 0.3 + recency * 0.1
-    /// 4. Return top k results
+    /// 1. Vector search (HNSW) for top candidates
+    /// 2. BM25 keyword search for top candidates
+    /// 3. Merge via Reciprocal Rank Fusion (RRF)
+    /// 4. Filter by tags and time range
+    /// 5. Boost by salience and recency
+    /// 6. Return top k results
     pub fn hybrid_search(
         &self,
         query_embedding: &[f32],
+        tags: Option<&[&str]>,
+        time_range: Option<(Timestamp, Timestamp)>,
+        k: usize,
+    ) -> Vec<(MemoryId, f32)> {
+        self.hybrid_search_with_query(query_embedding, None, tags, time_range, k)
+    }
+
+    /// Hybrid search with an optional text query for BM25 matching.
+    ///
+    /// When `query_text` is provided, BM25 results are merged with vector
+    /// results via RRF. When None, behaves like vector-only search.
+    pub fn hybrid_search_with_query(
+        &self,
+        query_embedding: &[f32],
+        query_text: Option<&str>,
         tags: Option<&[&str]>,
         time_range: Option<(Timestamp, Timestamp)>,
         k: usize,
@@ -111,11 +147,30 @@ impl IndexManager {
             return Vec::new();
         }
 
-        // Step 1: vector search for top k*4 candidates
-        let vector_candidates = self.hnsw.search(query_embedding, k * 4);
+        let fetch_k = k * 4;
+        let rrf_k: f32 = 60.0;
 
-        if vector_candidates.is_empty() {
+        // Step 1: Vector search candidates
+        let vector_candidates = self.hnsw.search(query_embedding, fetch_k);
+
+        // Step 2: BM25 search candidates (if query text provided and index has docs)
+        let bm25_candidates = match query_text {
+            Some(qt) if !self.bm25.is_empty() => self.bm25.search(qt, fetch_k),
+            _ => Vec::new(),
+        };
+
+        if vector_candidates.is_empty() && bm25_candidates.is_empty() {
             return Vec::new();
+        }
+
+        // Step 3: Merge via RRF
+        let mut rrf_scores: HashMap<MemoryId, f32> = HashMap::new();
+
+        for (rank, (id, _)) in vector_candidates.iter().enumerate() {
+            *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
+        }
+        for (rank, (id, _)) in bm25_candidates.iter().enumerate() {
+            *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
         }
 
         // Build set of tag-filtered ids (if tags are specified)
@@ -131,22 +186,14 @@ impl IndexManager {
         let time_filter: Option<HashSet<MemoryId>> =
             time_range.map(|(start, end)| self.temporal.range(start, end).into_iter().collect());
 
-        // Find the max distance for normalization
-        let max_dist = vector_candidates
-            .iter()
-            .map(|(_, d)| *d)
-            .fold(f32::NEG_INFINITY, f32::max)
-            .max(f32::EPSILON);
-
-        // Find the latest timestamp among candidates for recency normalization
-        let max_ts = vector_candidates
-            .iter()
-            .filter_map(|(id, _)| self.temporal.get_timestamp(*id))
+        // Step 4: Filter and boost with salience/recency
+        let max_ts = rrf_scores
+            .keys()
+            .filter_map(|id| self.temporal.get_timestamp(*id))
             .max()
             .unwrap_or(1) as f64;
 
-        // Step 2 & 3: filter and re-rank
-        let mut scored: Vec<(MemoryId, f32)> = vector_candidates
+        let mut scored: Vec<(MemoryId, f32)> = rrf_scores
             .into_iter()
             .filter(|(id, _)| {
                 if let Some(ref tf) = tag_filter
@@ -161,14 +208,8 @@ impl IndexManager {
                 }
                 true
             })
-            .map(|(id, dist)| {
-                // Vector similarity: 1.0 - normalized distance
-                let vector_sim = 1.0 - (dist / max_dist);
-
-                // Salience score (default 0.5 if not found)
+            .map(|(id, rrf_score)| {
                 let salience = self.salience.get_salience(id).unwrap_or(0.5);
-
-                // Recency: normalize timestamp to [0, 1]
                 let ts = self.temporal.get_timestamp(id).unwrap_or(0) as f64;
                 let recency = if max_ts > 0.0 {
                     (ts / max_ts) as f32
@@ -176,7 +217,8 @@ impl IndexManager {
                     0.0
                 };
 
-                let combined = vector_sim * 0.6 + salience * 0.3 + recency * 0.1;
+                // RRF is the primary signal, salience and recency are light boosts
+                let combined = rrf_score * 0.7 + salience * 0.05 + recency * 0.02;
                 (id, combined)
             })
             .collect();

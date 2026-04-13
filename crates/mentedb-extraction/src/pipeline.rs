@@ -5,7 +5,6 @@ use mentedb_embedding::provider::EmbeddingProvider;
 
 use crate::config::ExtractionConfig;
 use crate::error::ExtractionError;
-use crate::prompts::extraction_system_prompt;
 use crate::provider::ExtractionProvider;
 use crate::schema::{ExtractedMemory, ExtractionResult};
 
@@ -72,31 +71,83 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
         &self,
         conversation: &str,
     ) -> Result<Vec<ExtractedMemory>, ExtractionError> {
+        let result = self.extract_full(conversation).await?;
+        Ok(result.memories)
+    }
+
+    /// Extract memories AND entities from a conversation.
+    /// Returns the full ExtractionResult including structured entities.
+    pub async fn extract_full(
+        &self,
+        conversation: &str,
+    ) -> Result<ExtractionResult, ExtractionError> {
+        use crate::prompts::{extraction_system_prompt, extraction_verification_prompt};
+
         let system_prompt = extraction_system_prompt();
         let raw_response = self.provider.extract(conversation, system_prompt).await?;
 
-        let result = self.parse_extraction_response(&raw_response)?;
+        let mut result = self.parse_extraction_response(&raw_response)?;
 
-        let mut memories = result.memories;
-        if memories.len() > self.config.max_extractions_per_conversation {
+        // Verification pass: re-read conversation to find what the first pass missed
+        if self.config.extraction_passes >= 2 && !result.memories.is_empty() {
+            let first_pass_facts: String = result
+                .memories
+                .iter()
+                .map(|m| format!("- {}", m.content))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let verify_prompt = extraction_verification_prompt(&first_pass_facts);
+            match self.provider.extract(conversation, &verify_prompt).await {
+                Ok(verify_response) => {
+                    if let Ok(verify_result) = self.parse_extraction_response(&verify_response) {
+                        let new_memories = verify_result.memories.len();
+                        let new_entities = verify_result.entities.len();
+                        result.memories.extend(verify_result.memories);
+                        result.entities.extend(verify_result.entities);
+                        if new_memories > 0 || new_entities > 0 {
+                            tracing::info!(
+                                new_memories,
+                                new_entities,
+                                "verification pass found additional extractions"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("verification pass failed, using first pass only: {}", e);
+                }
+            }
+        }
+
+        if result.memories.len() > self.config.max_extractions_per_conversation {
             tracing::warn!(
-                extracted = memories.len(),
+                extracted = result.memories.len(),
                 max = self.config.max_extractions_per_conversation,
                 "truncating extractions to configured maximum"
             );
-            memories.truncate(self.config.max_extractions_per_conversation);
+            result
+                .memories
+                .truncate(self.config.max_extractions_per_conversation);
         }
 
-        Ok(memories)
+        Ok(result)
     }
 
     /// Parse the raw JSON response from the LLM into an ExtractionResult.
-    /// Handles edge cases like markdown fences around JSON.
+    /// Handles edge cases like markdown fences around JSON and preamble text.
     fn parse_extraction_response(&self, raw: &str) -> Result<ExtractionResult, ExtractionError> {
         let trimmed = raw.trim();
 
+        // Empty response = no memories to extract
+        if trimmed.is_empty() {
+            return Ok(ExtractionResult {
+                memories: vec![],
+                entities: vec![],
+            });
+        }
+
         // Strip markdown code fences if present
-        let json_str = if trimmed.starts_with("```") {
+        let stripped = if trimmed.starts_with("```") {
             let without_prefix = trimmed
                 .trim_start_matches("```json")
                 .trim_start_matches("```");
@@ -105,11 +156,64 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
             trimmed
         };
 
-        serde_json::from_str::<ExtractionResult>(json_str).map_err(|e| {
+        // Find the outermost JSON object using brace-depth matching
+        // that respects quoted strings (handles braces inside string values)
+        let json_str = if let Some(start) = stripped.find('{') {
+            let candidate = &stripped[start..];
+            let mut depth = 0i32;
+            let mut in_string = false;
+            let mut escape_next = false;
+            let mut end = candidate.len();
+            for (i, ch) in candidate.char_indices() {
+                if escape_next {
+                    escape_next = false;
+                    continue;
+                }
+                if in_string {
+                    match ch {
+                        '\\' => escape_next = true,
+                        '"' => in_string = false,
+                        _ => {}
+                    }
+                    continue;
+                }
+                match ch {
+                    '"' => in_string = true,
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            &candidate[..end]
+        } else {
+            // No JSON object found — LLM returned plain text (e.g. "No memories to extract")
+            return Ok(ExtractionResult {
+                memories: vec![],
+                entities: vec![],
+            });
+        };
+
+        // Parse with serde_json::Value first (tolerates duplicate keys — last one wins)
+        // then convert to ExtractionResult. LLMs sometimes emit duplicate fields.
+        let value: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
             tracing::error!(
                 error = %e,
                 response_preview = &json_str[..json_str.len().min(200)],
-                "failed to parse LLM extraction response"
+                "failed to parse LLM extraction response as JSON"
+            );
+            ExtractionError::ParseError(format!("Failed to parse extraction JSON: {e}"))
+        })?;
+
+        serde_json::from_value::<ExtractionResult>(value).map_err(|e| {
+            tracing::error!(
+                error = %e,
+                "failed to deserialize extraction JSON into ExtractionResult"
             );
             ExtractionError::ParseError(format!("Failed to parse extraction JSON: {e}"))
         })
