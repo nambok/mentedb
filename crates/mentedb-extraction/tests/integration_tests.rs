@@ -138,6 +138,7 @@ async fn test_deduplication() {
         confidence: 0.95,
         entities: vec![],
         tags: vec![],
+        context: vec![],
         reasoning: "test".to_string(),
     };
     let is_exact_dup = pipeline.check_duplicates(&exact_dup, &existing, &emb);
@@ -171,6 +172,7 @@ async fn test_contradiction_detection() {
         confidence: 0.9,
         entities: vec!["PostgreSQL".to_string()],
         tags: vec![],
+        context: vec![],
         reasoning: "test contradiction".to_string(),
     };
 
