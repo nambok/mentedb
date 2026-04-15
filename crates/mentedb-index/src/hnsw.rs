@@ -441,8 +441,8 @@ impl HnswIndex {
 
 /// Random level assignment: floor(-ln(uniform) * level_mult).
 fn random_level(level_mult: f64, _m: usize) -> usize {
-    let mut rng = rand::thread_rng();
-    let r: f64 = rng.r#gen::<f64>();
+    let mut rng = rand::rng();
+    let r: f64 = rng.random::<f64>();
     // Avoid log(0)
     let r = r.max(f64::EPSILON);
 
@@ -572,8 +572,8 @@ mod tests {
     }
 
     fn random_vec(dim: usize) -> Vec<f32> {
-        let mut rng = rand::thread_rng();
-        (0..dim).map(|_| rng.r#gen::<f32>()).collect()
+        let mut rng = rand::rng();
+        (0..dim).map(|_| rng.random::<f32>()).collect()
     }
 
     #[test]
