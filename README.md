@@ -138,8 +138,14 @@ This means asking *"What breed is my dog?"* finds the entity MAX, follows its ed
 For Claude CLI, Copilot CLI, Cursor, Windsurf, and any MCP compatible client.
 
 ```bash
-# Requires Rust: https://rustup.rs
+npx mentedb-mcp@latest setup copilot
+```
+
+Or install from crates.io if you prefer Rust:
+
+```bash
 cargo install mentedb-mcp
+mentedb-mcp setup copilot
 ```
 
 See [mentedb-mcp](https://github.com/nambok/mentedb-mcp) for setup, configuration, and the full list of 32 tools.
