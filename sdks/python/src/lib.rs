@@ -585,16 +585,15 @@ impl MenteDB {
                 for mid in &all_mem_ids {
                     if let Ok(node) = db.get_memory(*mid) {
                         // Time filter: skip memories created after question date
-                        if let Some(before) = before_us_filter {
-                            if node.created_at > before { continue; }
-                        }
+                        if let Some(before) = before_us_filter
+                            && node.created_at > before { continue; }
                         // Check entity nodes by category attribute
                         if node.tags.iter().any(|t| t.starts_with("entity_name:")) {
                             if let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
                                 let cat_lower = cat.to_lowercase();
                                 let cat_parts: Vec<&str> = cat_lower.split(',').map(|s| s.trim()).collect();
                                 for ct in &category_terms {
-                                    if cat_parts.iter().any(|cp| *cp == ct.as_str()) {
+                                    if cat_parts.contains(&ct.as_str()) {
                                         categorical_hits.push((*mid, 1.0));
                                         found_entities += 1;
                                         break;
@@ -606,7 +605,7 @@ impl MenteDB {
                         // Check facts by context: tags
                         for ct in &category_terms {
                             let ctx_tag = format!("context:{}", ct);
-                            if node.tags.iter().any(|t| *t == ctx_tag) {
+                            if node.tags.contains(&ctx_tag) {
                                 categorical_hits.push((*mid, 1.2)); // Higher weight for direct fact match
                                 found_facts += 1;
                                 break;
@@ -635,9 +634,8 @@ impl MenteDB {
                 for nid in &all_node_ids {
                     if let Ok(node) = db.get_memory(*nid) {
                         // Time filter: skip nodes created after question date
-                        if let Some(ref tr) = time_range {
-                            if node.created_at > tr.1 { continue; }
-                        }
+                        if let Some(ref tr) = time_range
+                            && node.created_at > tr.1 { continue; }
                         if node.tags.iter().any(|t| t.starts_with("entity_name:")) {
                             let sim = cosine_similarity(seed_emb, &node.embedding);
                             if sim > 0.3 {
@@ -705,8 +703,8 @@ impl MenteDB {
                 let mut offset_us: Option<u64> = None;
                 let words: Vec<&str> = query_lower.split_whitespace().collect();
                 for i in 0..words.len() {
-                    if let Ok(n) = words[i].parse::<u64>() {
-                        if i + 1 < words.len() {
+                    if let Ok(n) = words[i].parse::<u64>()
+                        && i + 1 < words.len() {
                             let unit = words[i + 1].trim_end_matches('?');
                             if unit.starts_with("day") {
                                 offset_us = Some(n * day_us);
@@ -716,7 +714,6 @@ impl MenteDB {
                                 offset_us = Some(n * 30 * day_us);
                             }
                         }
-                    }
                 }
 
                 // "last Saturday/Sunday/etc." → ~1 week ago
@@ -784,11 +781,10 @@ impl MenteDB {
                                 "six" | "6" => Some(6),
                                 _ => num_word.parse().ok(),
                             };
-                            if let Some(months) = n {
-                                if words[i + 2].starts_with("month") {
+                            if let Some(months) = n
+                                && words[i + 2].starts_with("month") {
                                     range_months = Some(months);
                                 }
-                            }
                         }
                     }
 
@@ -863,8 +859,8 @@ impl MenteDB {
             );
 
             for (id_str, score) in merged.iter_mut() {
-                if let Ok(mem_id) = parse_memory_id(id_str) {
-                    if let Ok(node) = db.get_memory(mem_id) {
+                if let Ok(mem_id) = parse_memory_id(id_str)
+                    && let Ok(node) = db.get_memory(mem_id) {
                         if is_knowledge_update {
                             // Knowledge-update: prefer most recent version of a fact
                             let recency = if before_us > 0 {
@@ -875,11 +871,7 @@ impl MenteDB {
 
                         // Temporal proximity: if we have a target date, boost memories near it
                         if let Some(target) = temporal_target_us {
-                            let dist = if node.created_at > target {
-                                node.created_at - target
-                            } else {
-                                target - node.created_at
-                            };
+                            let dist = node.created_at.abs_diff(target);
                             let day_us: u64 = 86_400_000_000;
                             let days_away = dist as f64 / day_us as f64;
                             // Gaussian-like proximity: max boost at 0 days, decays to ~0 at 14 days
@@ -887,7 +879,6 @@ impl MenteDB {
                             *score += proximity * 0.02;
                         }
                     }
-                }
             }
             // Re-sort after boost
             merged.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -909,8 +900,8 @@ impl MenteDB {
             expanded.push((id_str.clone(), *score));
 
             // Check if this is an entity node — if so, traverse graph
-            if let Ok(mem_id) = parse_memory_id(id_str) {
-                if let Ok(node) = db.get_memory(mem_id) {
+            if let Ok(mem_id) = parse_memory_id(id_str)
+                && let Ok(node) = db.get_memory(mem_id) {
                     let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
                     if is_entity {
                         // Get subgraph (depth 1) to find PartOf neighbors
@@ -923,11 +914,9 @@ impl MenteDB {
                             let nid_str = nid.to_string();
                             if !seen.contains(&nid_str) {
                                 // Time filter: skip neighbors created after question date
-                                if let Some(ref tr) = time_range {
-                                    if let Ok(nnode) = db.get_memory(nid) {
-                                        if nnode.created_at > tr.1 { continue; }
-                                    }
-                                }
+                                if let Some(ref tr) = time_range
+                                    && let Ok(nnode) = db.get_memory(nid)
+                                        && nnode.created_at > tr.1 { continue; }
                                 seen.insert(nid_str.clone());
                                 // Entity neighbors get a slightly lower score
                                 expanded.push((nid_str, score * 0.9));
@@ -935,7 +924,6 @@ impl MenteDB {
                         }
                     }
                 }
-            }
         }
         // Re-sort after expansion and truncate
         expanded.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -950,14 +938,13 @@ impl MenteDB {
             let gap_limit = std::cmp::min(expanded.len(), 30);
             let mut found_items: Vec<String> = Vec::new();
             for (id_str, _) in expanded.iter().take(gap_limit) {
-                if let Ok(mem_id) = parse_memory_id(id_str) {
-                    if let Ok(node) = db.get_memory(mem_id) {
+                if let Ok(mem_id) = parse_memory_id(id_str)
+                    && let Ok(node) = db.get_memory(mem_id) {
                         let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
                         let is_community = node.tags.iter().any(|t| t == "community_summary");
                         if is_entity || is_community { continue; }
                         found_items.push(node.content.clone());
                     }
-                }
             }
 
             if !found_items.is_empty() {
@@ -1067,15 +1054,14 @@ impl MenteDB {
             let rerank_limit = std::cmp::min(expanded.len(), 30);
             let mut memory_contents: Vec<(String, String)> = Vec::new(); // (id, content)
             for (id_str, _score) in expanded.iter().take(rerank_limit) {
-                if let Ok(mem_id) = parse_memory_id(id_str) {
-                    if let Ok(node) = db.get_memory(mem_id) {
+                if let Ok(mem_id) = parse_memory_id(id_str)
+                    && let Ok(node) = db.get_memory(mem_id) {
                         // Skip entity/community nodes from reranker — they duplicate facts
                         let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
                         let is_community = node.tags.iter().any(|t| t == "community_summary");
                         if is_entity || is_community { continue; }
                         memory_contents.push((id_str.clone(), node.content.clone()));
                     }
-                }
             }
 
             // Collect IDs that the re-ranker considers relevant (score >= 1)
@@ -1173,15 +1159,14 @@ impl MenteDB {
             // --- Detect multi-session and question category ---
             let mut session_set: std::collections::HashSet<String> = std::collections::HashSet::new();
             for id_str in &synth_ids {
-                if let Ok(mem_id) = parse_memory_id(id_str) {
-                    if let Ok(node) = db.get_memory(mem_id) {
+                if let Ok(mem_id) = parse_memory_id(id_str)
+                    && let Ok(node) = db.get_memory(mem_id) {
                         for t in &node.tags {
                             if let Some(s) = t.strip_prefix("session:") {
                                 session_set.insert(s.to_string());
                             }
                         }
                     }
-                }
             }
             let is_multi_session = session_set.len() > 3;
 
@@ -1201,8 +1186,8 @@ impl MenteDB {
             }
             let mut evidence_items: Vec<EvidenceItem> = Vec::new();
             for id_str in &synth_ids {
-                if let Ok(mem_id) = parse_memory_id(id_str) {
-                    if let Ok(node) = db.get_memory(mem_id) {
+                if let Ok(mem_id) = parse_memory_id(id_str)
+                    && let Ok(node) = db.get_memory(mem_id) {
                         let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
                         let is_community = node.tags.iter().any(|t| t == "community_summary");
                         if is_entity || is_community { continue; }
@@ -1213,11 +1198,10 @@ impl MenteDB {
                         if is_multi_session && is_assistant_turn { continue; }
 
                         // Time filter: skip memories created after the question date
-                        if let Some(ref tr) = time_range {
-                            if node.created_at > tr.1 && !node.tags.iter().any(|t| t.starts_with("date:")) {
+                        if let Some(ref tr) = time_range
+                            && node.created_at > tr.1 && !node.tags.iter().any(|t| t.starts_with("date:")) {
                                 continue;
                             }
-                        }
 
                         let session = node.tags.iter()
                             .find_map(|t| t.strip_prefix("session:").map(|s| s.to_string()))
@@ -1244,7 +1228,6 @@ impl MenteDB {
                             is_assistant_turn,
                         });
                     }
-                }
             }
 
             // Sort chronologically for temporal/KU queries so the LLM sees events in time order
@@ -1285,8 +1268,8 @@ impl MenteDB {
                 if is_counting {
                     // Scan entity nodes in our result set for structured attributes
                     for id_str in &synth_ids {
-                        if let Ok(mem_id) = parse_memory_id(id_str) {
-                            if let Ok(node) = db.get_memory(mem_id) {
+                        if let Ok(mem_id) = parse_memory_id(id_str)
+                            && let Ok(node) = db.get_memory(mem_id) {
                                 let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
                                 if !is_entity { continue; }
 
@@ -1322,7 +1305,6 @@ impl MenteDB {
                                     graph_entities.push((name, rel_str, detail_str));
                                 }
                             }
-                        }
                     }
 
                     // Also scan the full graph for entity nodes we might have missed
@@ -1586,15 +1568,14 @@ impl MenteDB {
                                                 );
                                             }
 
-                                            if debug {
-                                                if let Some(gc) = graph_count {
+                                            if debug
+                                                && let Some(gc) = graph_count {
                                                     if gc != enum_count {
                                                         eprintln!("[dual-path] DISAGREEMENT: graph={} enum={}", gc, enum_count);
                                                     } else {
                                                         eprintln!("[dual-path] AGREEMENT: graph={} enum={}", gc, enum_count);
                                                     }
                                                 }
-                                            }
                                             } // close the else branch of enum_count == 0 check
                                         }
                                         Err(e) => if debug { eprintln!("[chain-enum] Failed to parse JSON: {e}"); },
@@ -1635,12 +1616,11 @@ impl MenteDB {
         // semantic gaps (e.g., "Health Device Summary" links hearing aids to health).
         let mut filtered_results: Vec<(String, f32)> = Vec::new();
         for (id_str, score) in expanded {
-            if let Ok(mem_id) = parse_memory_id(&id_str) {
-                if let Ok(node) = db.get_memory(mem_id) {
+            if let Ok(mem_id) = parse_memory_id(&id_str)
+                && let Ok(node) = db.get_memory(mem_id) {
                     let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
                     if is_entity { continue; }
                 }
-            }
             filtered_results.push((id_str, score));
         }
 
@@ -2061,8 +2041,8 @@ impl MenteDB {
         {
             let mut entity_cats: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
             for mem in &parsed {
-                if let (Some(name), Some(attrs)) = (&mem.entity_name, &mem.entity_attributes) {
-                    if let Some(cat) = attrs.get("category") {
+                if let (Some(name), Some(attrs)) = (&mem.entity_name, &mem.entity_attributes)
+                    && let Some(cat) = attrs.get("category") {
                         let cats: Vec<String> = cat.split(',')
                             .map(|c| c.trim().to_lowercase().replace('_', " "))
                             .filter(|c| !c.is_empty())
@@ -2071,18 +2051,15 @@ impl MenteDB {
                             entity_cats.insert(name.to_lowercase(), cats);
                         }
                     }
-                }
             }
             // For entity entries, ensure their embed_key includes categories
             if !entity_cats.is_empty() {
                 for mem in &mut parsed {
-                    if let Some(ref name) = mem.entity_name {
-                        if let Some(cats) = entity_cats.get(&name.to_lowercase()) {
-                            if !mem.embed_key.contains("[categories:") {
+                    if let Some(ref name) = mem.entity_name
+                        && let Some(cats) = entity_cats.get(&name.to_lowercase())
+                            && !mem.embed_key.contains("[categories:") {
                                 mem.embed_key.push_str(&format!(" [categories: {}]", cats.join(", ")));
                             }
-                        }
-                    }
                 }
             }
         }
@@ -2109,8 +2086,8 @@ impl MenteDB {
         // Build an index of existing entity nodes for resolution
         let mut existing_entities: std::collections::HashMap<String, MemoryId> = std::collections::HashMap::new();
         for mid in db.memory_ids() {
-            if let Ok(node) = db.get_memory(mid) {
-                if node.tags.iter().any(|t| t.starts_with("entity_name:")) {
+            if let Ok(node) = db.get_memory(mid)
+                && node.tags.iter().any(|t| t.starts_with("entity_name:")) {
                     let key = node.tags.iter()
                         .filter(|t| t.starts_with("entity_name:") || t.starts_with("entity_type:"))
                         .map(|t| t.to_lowercase())
@@ -2118,7 +2095,6 @@ impl MenteDB {
                         .join("|");
                     existing_entities.insert(key, mid);
                 }
-            }
         }
 
         for (mem, emb) in parsed.into_iter().zip(embeddings.into_iter()) {
@@ -2126,10 +2102,8 @@ impl MenteDB {
 
             // Entity resolution: check if this entity already exists
             if is_entity {
-                let entity_key = vec![
-                    format!("entity_name:{}", mem.entity_name.as_ref().unwrap().to_lowercase()),
-                    format!("entity_type:{}", mem.entity_type.as_ref().unwrap_or(&"unknown".to_string()).to_lowercase()),
-                ].join("|");
+                let entity_key = [format!("entity_name:{}", mem.entity_name.as_ref().unwrap().to_lowercase()),
+                    format!("entity_type:{}", mem.entity_type.as_ref().unwrap_or(&"unknown".to_string()).to_lowercase())].join("|");
 
                 if let Some(&existing_id) = existing_entities.get(&entity_key) {
                     // Merge attributes into existing entity
@@ -2170,8 +2144,8 @@ impl MenteDB {
                     if let Some(date_str) = tag.strip_prefix("date:") {
                         // Parse "YYYY/MM/DD" or "YYYY/MM/DD (Day) HH:MM" format
                         let parts: Vec<&str> = date_str.split('/').collect();
-                        if parts.len() >= 3 {
-                            if let (Ok(y), Ok(m), Ok(d)) = (
+                        if parts.len() >= 3
+                            && let (Ok(y), Ok(m), Ok(d)) = (
                                 parts[0].parse::<i64>(),
                                 parts[1].parse::<i64>(),
                                 parts[2].split_whitespace().next().unwrap_or("1").split('(').next().unwrap_or("1").trim().parse::<i64>(),
@@ -2186,7 +2160,6 @@ impl MenteDB {
                                 node.created_at = ts;
                                 node.accessed_at = ts;
                             }
-                        }
                         break;
                     }
                 }
@@ -2221,10 +2194,8 @@ impl MenteDB {
             // Track entity nodes for graph edge creation
             if let (Some(name), Some(etype)) = (mem.entity_name, mem.entity_type) {
                 existing_entities.insert(
-                    vec![
-                        format!("entity_name:{}", name.to_lowercase()),
-                        format!("entity_type:{}", etype.to_lowercase()),
-                    ].join("|"),
+                    [format!("entity_name:{}", name.to_lowercase()),
+                        format!("entity_type:{}", etype.to_lowercase())].join("|"),
                     id,
                 );
                 entity_ids.push((name, etype, id));
@@ -2240,15 +2211,14 @@ impl MenteDB {
         // Pre-load entity categories for tag propagation
         let mut entity_categories: std::collections::HashMap<MemoryId, Vec<String>> = std::collections::HashMap::new();
         for (_name, _etype, entity_id) in &entity_ids {
-            if let Ok(node) = db.get_memory(*entity_id) {
-                if let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
+            if let Ok(node) = db.get_memory(*entity_id)
+                && let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
                     let cats: Vec<String> = cat.split(',')
                         .map(|s| s.trim().to_lowercase().replace(' ', "_"))
                         .filter(|s| !s.is_empty())
                         .collect();
                     entity_categories.insert(*entity_id, cats);
                 }
-            }
         }
 
         for (entity_name, _etype, entity_id) in &entity_ids {
@@ -2319,8 +2289,8 @@ impl MenteDB {
             // Build category → entity_id index (split comma-separated categories)
             let mut category_index: std::collections::HashMap<String, Vec<MemoryId>> = std::collections::HashMap::new();
             for (_name, _etype, eid) in &entity_ids {
-                if let Ok(node) = db.get_memory(*eid) {
-                    if let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
+                if let Ok(node) = db.get_memory(*eid)
+                    && let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
                         for single_cat in cat.split(',') {
                             let trimmed = single_cat.trim().to_lowercase();
                             if !trimmed.is_empty() {
@@ -2328,7 +2298,6 @@ impl MenteDB {
                             }
                         }
                     }
-                }
             }
             // Connect entities within the same category
             for (category, ids) in &category_index {

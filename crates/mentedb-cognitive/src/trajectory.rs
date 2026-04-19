@@ -110,7 +110,7 @@ impl TransitionMap {
             return Vec::new();
         };
         let mut ranked: Vec<(String, u32)> = targets.iter().map(|(t, &c)| (t.clone(), c)).collect();
-        ranked.sort_by(|a, b| b.1.cmp(&a.1));
+        ranked.sort_by_key(|x| std::cmp::Reverse(x.1));
         ranked.truncate(limit);
         ranked
     }

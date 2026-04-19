@@ -348,7 +348,7 @@ impl PhantomTracker {
     pub fn get_active_phantoms(&self) -> Vec<&PhantomMemory> {
         let mut active: Vec<&PhantomMemory> =
             self.phantoms.iter().filter(|p| !p.resolved).collect();
-        active.sort_by(|a, b| b.priority.cmp(&a.priority));
+        active.sort_by_key(|x| std::cmp::Reverse(x.priority));
         active
     }
 
