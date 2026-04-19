@@ -1087,18 +1087,33 @@ impl MenteDB {
                     memories_text.push_str(&format!("[{}] {}\n", i, content));
                 }
 
-                let rerank_prompt = format!(
-                    "Question: {}\n\n\
-                     Memories:\n{}\n\
-                     Score each memory 0-10 for how relevant it is to answering the question.\n\
-                     Think broadly — any memory that mentions a countable item, fact, or detail \
-                     that could contribute to the answer should score at least 5.\n\
-                     A score of 10 means this memory directly mentions something that should be counted.\n\
-                     A score of 0 means it is clearly unrelated.\n\n\
-                     Return ONLY a JSON array of scores in order, e.g. [8, 2, 10, 0, ...]",
-                    query, memories_text
-                );
-                let rerank_system = "You are a relevance scorer. Return ONLY a JSON array of integer scores 0-10. No explanation.";
+                let rerank_prompt = if is_counting {
+                    format!(
+                        "Question: {}\n\n\
+                         Memories:\n{}\n\
+                         This is a COUNTING question. Score each memory 0-10:\n\
+                         - 10 = directly mentions a specific item/instance that should be counted\n\
+                         - 7 = mentions a class, activity, item, or event in the relevant category\n\
+                         - 3 = tangentially related but not a countable instance\n\
+                         - 0 = clearly unrelated\n\n\
+                         IMPORTANT: Score {} memories. Any memory mentioning a specific named item \
+                         in the category being counted MUST score >= 7.\n\n\
+                         Return ONLY a JSON array of {} integer scores, e.g. [8, 2, 10, 0, ...]",
+                        query, memories_text, memory_contents.len(), memory_contents.len()
+                    )
+                } else {
+                    format!(
+                        "Question: {}\n\n\
+                         Memories:\n{}\n\
+                         Score each memory 0-10 for how relevant it is to answering the question.\n\
+                         - 10 = directly answers or provides key evidence\n\
+                         - 5 = provides useful supporting context\n\
+                         - 0 = clearly unrelated\n\n\
+                         Return ONLY a JSON array of {} integer scores, e.g. [8, 2, 10, 0, ...]",
+                        query, memories_text, memory_contents.len()
+                    )
+                };
+                let rerank_system = "You are a relevance scorer. Return ONLY a JSON array of integer scores 0-10, one score per memory in order. No explanation, no text outside the array.";
 
                 match rt.block_on(http_provider.call_text_with_retry(&rerank_prompt, rerank_system)) {
                     Ok(response) => {
@@ -1111,8 +1126,10 @@ impl MenteDB {
                         } else { trimmed };
 
                         match serde_json::from_str::<Vec<f32>>(array_str) {
-                            Ok(scores) => {
-                                if debug { eprintln!("[rerank] Parsed {} scores: {:?}", scores.len(), scores); }
+                            Ok(mut scores) => {
+                                // Pad or truncate to match memory count
+                                scores.resize(memory_contents.len(), 0.0);
+                                if debug { eprintln!("[rerank] Parsed {} scores (adjusted to {}): {:?}", scores.len(), memory_contents.len(), scores); }
                                 for (i, (id, content)) in memory_contents.iter().enumerate() {
                                     let relevance = scores.get(i).copied().unwrap_or(0.0);
                                     let snip = &content[..std::cmp::min(content.len(), 80)];
