@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.5.0...mentedb-storage-v0.5.1) - 2026-04-19
+
+### Fixed
+
+- use sort_by_key with Reverse to satisfy clippy
+
+### Other
+
+- update MCP install to npx as primary method
+
 ## [0.5.0](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.4.2...mentedb-storage-v0.5.0) - 2026-04-13
 
 ### Added

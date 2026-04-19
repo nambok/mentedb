@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/nambok/mentedb/compare/mentedb-index-v0.5.0...mentedb-index-v0.5.1) - 2026-04-19
+
+### Other
+
+- update MCP install to npx as primary method
+- *(deps)* bump the cargo group across 2 directories with 1 update ([#51](https://github.com/nambok/mentedb/pull/51))
+
 ## [0.5.0](https://github.com/nambok/mentedb/compare/mentedb-index-v0.4.2...mentedb-index-v0.5.0) - 2026-04-13
 
 ### Added
