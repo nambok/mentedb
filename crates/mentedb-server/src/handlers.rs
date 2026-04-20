@@ -151,19 +151,21 @@ pub async fn store_memory(
         ApiError::Internal(format!("store failed: {e}"))
     })?;
 
-    // Auto-extract: if enabled and content looks like a conversation, spawn background extraction
+    // Auto-extract: if enabled and content looks like a conversation, queue extraction
     if state.auto_extract && state.extraction_config.is_some() && looks_like_conversation(&content)
     {
-        let extraction_config = state.extraction_config.clone().unwrap();
-        let db = state.db.clone();
-        let content = content.clone();
-        tokio::spawn(async move {
-            if let Err(e) =
-                run_extraction(&extraction_config, &content, agent_id, space_id, &db).await
-            {
-                tracing::warn!(error = %e, "background auto-extraction failed");
+        if let Some(tx) = &state.extraction_tx {
+            let req = crate::extraction_queue::ExtractionRequest {
+                config: state.extraction_config.clone().unwrap(),
+                content: content.clone(),
+                agent_id,
+                space_id,
+                db: state.db.clone(),
+            };
+            if tx.try_send(req).is_err() {
+                tracing::warn!("extraction queue full, skipping auto-extract");
             }
-        });
+        }
     }
 
     Ok((

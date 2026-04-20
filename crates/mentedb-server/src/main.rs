@@ -2,6 +2,7 @@
 
 mod auth;
 mod error;
+mod extraction_queue;
 mod grpc;
 mod handlers;
 mod rate_limit;
@@ -270,6 +271,14 @@ async fn main() -> Result<()> {
         "disabled (development mode)"
     };
 
+    // Spawn extraction worker if auto-extract is enabled
+    let (extraction_tx, extraction_handle) = if auto_extract && extraction_config.is_some() {
+        let (tx, handle) = extraction_queue::spawn_worker();
+        (Some(tx), Some(handle))
+    } else {
+        (None, None)
+    };
+
     let state = Arc::new(AppState {
         db: db.clone(),
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
@@ -278,6 +287,7 @@ async fn main() -> Result<()> {
         start_time: Instant::now(),
         extraction_config,
         auto_extract,
+        extraction_tx,
     });
 
     let app = routes::build_router(state.clone())
@@ -347,6 +357,13 @@ async fn main() -> Result<()> {
     .await?;
 
     grpc_handle.abort();
+
+    // Drop the extraction sender to signal the worker to drain, then wait
+    if let Some(handle) = extraction_handle {
+        // Sender is inside AppState which is still alive via Arc, so drop the state first
+        drop(state);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), handle).await;
+    }
 
     db.close()?;
     info!("MenteDB server stopped");

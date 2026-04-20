@@ -15,6 +15,8 @@
 pub mod auth;
 /// Unified API error type.
 pub mod error;
+/// Background extraction queue with bounded concurrency.
+pub mod extraction_queue;
 /// gRPC service implementations for memory and cognition.
 pub mod grpc;
 /// HTTP request handlers for the REST API.

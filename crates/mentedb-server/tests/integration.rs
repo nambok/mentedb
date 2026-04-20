@@ -40,6 +40,7 @@ fn build_test_app_with_auth() -> (axum::Router, TempDir) {
         start_time: Instant::now(),
         extraction_config: None,
         auto_extract: false,
+        extraction_tx: None,
     });
     let app = routes::build_router(state.clone()).layer(middleware::from_fn_with_state(
         state.clone(),
@@ -60,6 +61,7 @@ fn build_test_app_no_auth() -> (axum::Router, TempDir) {
         start_time: Instant::now(),
         extraction_config: None,
         auto_extract: false,
+        extraction_tx: None,
     });
     let app = routes::build_router(state.clone()).layer(middleware::from_fn_with_state(
         state.clone(),
@@ -80,6 +82,7 @@ fn build_test_app_rate_limited(max_tokens: u32) -> (axum::Router, TempDir) {
         start_time: Instant::now(),
         extraction_config: None,
         auto_extract: false,
+        extraction_tx: None,
     });
     let app = routes::build_router(state.clone())
         .layer(middleware::from_fn_with_state(
@@ -105,6 +108,7 @@ fn build_test_app_with_auth_no_admin_key() -> (axum::Router, TempDir) {
         start_time: Instant::now(),
         extraction_config: None,
         auto_extract: false,
+        extraction_tx: None,
     });
     let app = routes::build_router(state.clone()).layer(middleware::from_fn_with_state(
         state.clone(),

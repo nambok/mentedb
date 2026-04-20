@@ -463,6 +463,7 @@ mod tests {
             start_time: Instant::now(),
             extraction_config: None,
             auto_extract: false,
+            extraction_tx: None,
         });
         (state, tmp)
     }
@@ -773,6 +774,7 @@ mod tests {
                 start_time: Instant::now(),
                 extraction_config: None,
                 auto_extract: false,
+                extraction_tx: None,
             }),
             tmp,
         )

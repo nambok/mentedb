@@ -29,6 +29,7 @@ fn test_state(
         start_time: Instant::now(),
         extraction_config,
         auto_extract,
+        extraction_tx: None,
     });
     (state, tmp)
 }

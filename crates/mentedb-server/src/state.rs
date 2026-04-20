@@ -3,6 +3,9 @@ use mentedb::MenteDb;
 use mentedb_extraction::ExtractionConfig;
 use std::sync::Arc;
 use std::time::Instant;
+
+use crate::extraction_queue::ExtractionSender;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<MenteDb>,
@@ -14,4 +17,6 @@ pub struct AppState {
     pub extraction_config: Option<ExtractionConfig>,
     /// When true, storing a conversation-type memory auto-runs extraction.
     pub auto_extract: bool,
+    /// Bounded channel sender for the background extraction worker.
+    pub extraction_tx: Option<ExtractionSender>,
 }

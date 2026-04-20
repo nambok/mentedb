@@ -27,7 +27,7 @@ pub enum DistanceMetric {
     DotProduct,
 }
 
-/// Compute distance between two vectors using a 4-accumulator loop-unrolled pattern.
+/// Compute distance between two vectors, dispatching to SIMD when available.
 fn compute_distance(a: &[f32], b: &[f32], metric: DistanceMetric) -> f32 {
     debug_assert_eq!(a.len(), b.len());
     match metric {
@@ -37,85 +37,324 @@ fn compute_distance(a: &[f32], b: &[f32], metric: DistanceMetric) -> f32 {
     }
 }
 
-/// 1 - cosine_similarity. Lower is more similar.
+// ---------------------------------------------------------------------------
+// Platform dispatch — picks the best available SIMD at runtime
+// ---------------------------------------------------------------------------
+
 fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
-    let (mut dot0, mut dot1, mut dot2, mut dot3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-    let (mut na0, mut na1, mut na2, mut na3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-    let (mut nb0, mut nb1, mut nb2, mut nb3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-
-    let chunks = a.len() / 4;
-    for i in 0..chunks {
-        let base = i * 4;
-        let (a0, a1, a2, a3) = (a[base], a[base + 1], a[base + 2], a[base + 3]);
-        let (b0, b1, b2, b3) = (b[base], b[base + 1], b[base + 2], b[base + 3]);
-        dot0 += a0 * b0;
-        dot1 += a1 * b1;
-        dot2 += a2 * b2;
-        dot3 += a3 * b3;
-        na0 += a0 * a0;
-        na1 += a1 * a1;
-        na2 += a2 * a2;
-        na3 += a3 * a3;
-        nb0 += b0 * b0;
-        nb1 += b1 * b1;
-        nb2 += b2 * b2;
-        nb3 += b3 * b3;
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            return unsafe { simd_x86::cosine_avx2(a, b) };
+        }
     }
-    let mut dot = dot0 + dot1 + dot2 + dot3;
-    let mut norm_a = na0 + na1 + na2 + na3;
-    let mut norm_b = nb0 + nb1 + nb2 + nb3;
-
-    for i in (chunks * 4)..a.len() {
-        dot += a[i] * b[i];
-        norm_a += a[i] * a[i];
-        norm_b += b[i] * b[i];
+    #[cfg(target_arch = "aarch64")]
+    {
+        return unsafe { simd_neon::cosine_neon(a, b) };
     }
-
-    let denom = (norm_a * norm_b).sqrt();
-    if denom < f32::EPSILON {
-        return 1.0;
-    }
-    1.0 - (dot / denom)
+    #[allow(unreachable_code)]
+    scalar::cosine_scalar(a, b)
 }
 
 fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
-    let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-    let chunks = a.len() / 4;
-    for i in 0..chunks {
-        let base = i * 4;
-        let d0 = a[base] - b[base];
-        let d1 = a[base + 1] - b[base + 1];
-        let d2 = a[base + 2] - b[base + 2];
-        let d3 = a[base + 3] - b[base + 3];
-        s0 += d0 * d0;
-        s1 += d1 * d1;
-        s2 += d2 * d2;
-        s3 += d3 * d3;
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            return unsafe { simd_x86::euclidean_avx2(a, b) };
+        }
     }
-    let mut sum = s0 + s1 + s2 + s3;
-    for i in (chunks * 4)..a.len() {
-        let d = a[i] - b[i];
-        sum += d * d;
+    #[cfg(target_arch = "aarch64")]
+    {
+        return unsafe { simd_neon::euclidean_neon(a, b) };
     }
-    sum.sqrt()
+    #[allow(unreachable_code)]
+    scalar::euclidean_scalar(a, b)
 }
 
-/// Negative dot product so that lower = more similar.
 fn dot_product_distance(a: &[f32], b: &[f32]) -> f32 {
-    let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
-    let chunks = a.len() / 4;
-    for i in 0..chunks {
-        let base = i * 4;
-        s0 += a[base] * b[base];
-        s1 += a[base + 1] * b[base + 1];
-        s2 += a[base + 2] * b[base + 2];
-        s3 += a[base + 3] * b[base + 3];
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            return unsafe { simd_x86::dot_product_avx2(a, b) };
+        }
     }
-    let mut sum = s0 + s1 + s2 + s3;
-    for i in (chunks * 4)..a.len() {
-        sum += a[i] * b[i];
+    #[cfg(target_arch = "aarch64")]
+    {
+        return unsafe { simd_neon::dot_product_neon(a, b) };
     }
-    -sum
+    #[allow(unreachable_code)]
+    scalar::dot_product_scalar(a, b)
+}
+
+// ---------------------------------------------------------------------------
+// Scalar fallback (4-accumulator loop-unrolled)
+// ---------------------------------------------------------------------------
+
+mod scalar {
+    #[inline]
+    pub fn cosine_scalar(a: &[f32], b: &[f32]) -> f32 {
+        let (mut dot0, mut dot1, mut dot2, mut dot3) = (0.0f32, 0.0, 0.0, 0.0);
+        let (mut na0, mut na1, mut na2, mut na3) = (0.0f32, 0.0, 0.0, 0.0);
+        let (mut nb0, mut nb1, mut nb2, mut nb3) = (0.0f32, 0.0, 0.0, 0.0);
+        let chunks = a.len() / 4;
+        for i in 0..chunks {
+            let base = i * 4;
+            let (a0, a1, a2, a3) = (a[base], a[base + 1], a[base + 2], a[base + 3]);
+            let (b0, b1, b2, b3) = (b[base], b[base + 1], b[base + 2], b[base + 3]);
+            dot0 += a0 * b0;
+            dot1 += a1 * b1;
+            dot2 += a2 * b2;
+            dot3 += a3 * b3;
+            na0 += a0 * a0;
+            na1 += a1 * a1;
+            na2 += a2 * a2;
+            na3 += a3 * a3;
+            nb0 += b0 * b0;
+            nb1 += b1 * b1;
+            nb2 += b2 * b2;
+            nb3 += b3 * b3;
+        }
+        let mut dot = dot0 + dot1 + dot2 + dot3;
+        let mut norm_a = na0 + na1 + na2 + na3;
+        let mut norm_b = nb0 + nb1 + nb2 + nb3;
+        for i in (chunks * 4)..a.len() {
+            dot += a[i] * b[i];
+            norm_a += a[i] * a[i];
+            norm_b += b[i] * b[i];
+        }
+        let denom = (norm_a * norm_b).sqrt();
+        if denom < f32::EPSILON {
+            return 1.0;
+        }
+        1.0 - (dot / denom)
+    }
+
+    #[inline]
+    pub fn euclidean_scalar(a: &[f32], b: &[f32]) -> f32 {
+        let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0, 0.0, 0.0);
+        let chunks = a.len() / 4;
+        for i in 0..chunks {
+            let base = i * 4;
+            let d0 = a[base] - b[base];
+            let d1 = a[base + 1] - b[base + 1];
+            let d2 = a[base + 2] - b[base + 2];
+            let d3 = a[base + 3] - b[base + 3];
+            s0 += d0 * d0;
+            s1 += d1 * d1;
+            s2 += d2 * d2;
+            s3 += d3 * d3;
+        }
+        let mut sum = s0 + s1 + s2 + s3;
+        for i in (chunks * 4)..a.len() {
+            let d = a[i] - b[i];
+            sum += d * d;
+        }
+        sum.sqrt()
+    }
+
+    #[inline]
+    pub fn dot_product_scalar(a: &[f32], b: &[f32]) -> f32 {
+        let (mut s0, mut s1, mut s2, mut s3) = (0.0f32, 0.0, 0.0, 0.0);
+        let chunks = a.len() / 4;
+        for i in 0..chunks {
+            let base = i * 4;
+            s0 += a[base] * b[base];
+            s1 += a[base + 1] * b[base + 1];
+            s2 += a[base + 2] * b[base + 2];
+            s3 += a[base + 3] * b[base + 3];
+        }
+        let mut sum = s0 + s1 + s2 + s3;
+        for i in (chunks * 4)..a.len() {
+            sum += a[i] * b[i];
+        }
+        -sum
+    }
+}
+
+// ---------------------------------------------------------------------------
+// x86_64 AVX2 + FMA (8-wide, 256-bit)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "x86_64")]
+mod simd_x86 {
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    #[inline]
+    unsafe fn hsum256(v: __m256) -> f32 {
+        unsafe {
+            let hi = _mm256_extractf128_ps(v, 1);
+            let lo = _mm256_castps256_ps128(v);
+            let sum128 = _mm_add_ps(hi, lo);
+            let hi64 = _mm_movehl_ps(sum128, sum128);
+            let sum64 = _mm_add_ps(sum128, hi64);
+            let hi32 = _mm_shuffle_ps(sum64, sum64, 0x1);
+            let sum32 = _mm_add_ss(sum64, hi32);
+            _mm_cvtss_f32(sum32)
+        }
+    }
+
+    #[target_feature(enable = "avx2,fma")]
+    pub unsafe fn cosine_avx2(a: &[f32], b: &[f32]) -> f32 {
+        unsafe {
+            let n = a.len().min(b.len());
+            let chunks = n / 8;
+            let mut dot = _mm256_setzero_ps();
+            let mut norm_a = _mm256_setzero_ps();
+            let mut norm_b = _mm256_setzero_ps();
+            for i in 0..chunks {
+                let va = _mm256_loadu_ps(a.as_ptr().add(i * 8));
+                let vb = _mm256_loadu_ps(b.as_ptr().add(i * 8));
+                dot = _mm256_fmadd_ps(va, vb, dot);
+                norm_a = _mm256_fmadd_ps(va, va, norm_a);
+                norm_b = _mm256_fmadd_ps(vb, vb, norm_b);
+            }
+            let mut dot_sum = hsum256(dot);
+            let mut na_sum = hsum256(norm_a);
+            let mut nb_sum = hsum256(norm_b);
+            for i in (chunks * 8)..n {
+                let ai = *a.get_unchecked(i);
+                let bi = *b.get_unchecked(i);
+                dot_sum += ai * bi;
+                na_sum += ai * ai;
+                nb_sum += bi * bi;
+            }
+            let denom = (na_sum * nb_sum).sqrt();
+            if denom < f32::EPSILON {
+                1.0
+            } else {
+                1.0 - (dot_sum / denom)
+            }
+        }
+    }
+
+    #[target_feature(enable = "avx2,fma")]
+    pub unsafe fn euclidean_avx2(a: &[f32], b: &[f32]) -> f32 {
+        unsafe {
+            let n = a.len().min(b.len());
+            let chunks = n / 8;
+            let mut acc = _mm256_setzero_ps();
+            for i in 0..chunks {
+                let va = _mm256_loadu_ps(a.as_ptr().add(i * 8));
+                let vb = _mm256_loadu_ps(b.as_ptr().add(i * 8));
+                let diff = _mm256_sub_ps(va, vb);
+                acc = _mm256_fmadd_ps(diff, diff, acc);
+            }
+            let mut sum = hsum256(acc);
+            for i in (chunks * 8)..n {
+                let d = *a.get_unchecked(i) - *b.get_unchecked(i);
+                sum += d * d;
+            }
+            sum.sqrt()
+        }
+    }
+
+    #[target_feature(enable = "avx2,fma")]
+    pub unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
+        unsafe {
+            let n = a.len().min(b.len());
+            let chunks = n / 8;
+            let mut acc = _mm256_setzero_ps();
+            for i in 0..chunks {
+                let va = _mm256_loadu_ps(a.as_ptr().add(i * 8));
+                let vb = _mm256_loadu_ps(b.as_ptr().add(i * 8));
+                acc = _mm256_fmadd_ps(va, vb, acc);
+            }
+            let mut sum = hsum256(acc);
+            for i in (chunks * 8)..n {
+                sum += *a.get_unchecked(i) * *b.get_unchecked(i);
+            }
+            -sum
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// aarch64 NEON (4-wide, 128-bit) — always available on Apple Silicon / Graviton
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "aarch64")]
+mod simd_neon {
+    use std::arch::aarch64::*;
+
+    #[inline]
+    unsafe fn hsum_f32x4(v: float32x4_t) -> f32 {
+        unsafe {
+            let pair = vpadd_f32(vget_low_f32(v), vget_high_f32(v));
+            vget_lane_f32(vpadd_f32(pair, pair), 0)
+        }
+    }
+
+    pub unsafe fn cosine_neon(a: &[f32], b: &[f32]) -> f32 {
+        unsafe {
+            let n = a.len().min(b.len());
+            let chunks = n / 4;
+            let mut dot = vdupq_n_f32(0.0);
+            let mut norm_a = vdupq_n_f32(0.0);
+            let mut norm_b = vdupq_n_f32(0.0);
+            for i in 0..chunks {
+                let va = vld1q_f32(a.as_ptr().add(i * 4));
+                let vb = vld1q_f32(b.as_ptr().add(i * 4));
+                dot = vfmaq_f32(dot, va, vb);
+                norm_a = vfmaq_f32(norm_a, va, va);
+                norm_b = vfmaq_f32(norm_b, vb, vb);
+            }
+            let mut dot_sum = hsum_f32x4(dot);
+            let mut na_sum = hsum_f32x4(norm_a);
+            let mut nb_sum = hsum_f32x4(norm_b);
+            for i in (chunks * 4)..n {
+                let ai = *a.get_unchecked(i);
+                let bi = *b.get_unchecked(i);
+                dot_sum += ai * bi;
+                na_sum += ai * ai;
+                nb_sum += bi * bi;
+            }
+            let denom = (na_sum * nb_sum).sqrt();
+            if denom < f32::EPSILON {
+                1.0
+            } else {
+                1.0 - (dot_sum / denom)
+            }
+        }
+    }
+
+    pub unsafe fn euclidean_neon(a: &[f32], b: &[f32]) -> f32 {
+        unsafe {
+            let n = a.len().min(b.len());
+            let chunks = n / 4;
+            let mut acc = vdupq_n_f32(0.0);
+            for i in 0..chunks {
+                let va = vld1q_f32(a.as_ptr().add(i * 4));
+                let vb = vld1q_f32(b.as_ptr().add(i * 4));
+                let diff = vsubq_f32(va, vb);
+                acc = vfmaq_f32(acc, diff, diff);
+            }
+            let mut sum = hsum_f32x4(acc);
+            for i in (chunks * 4)..n {
+                let d = *a.get_unchecked(i) - *b.get_unchecked(i);
+                sum += d * d;
+            }
+            sum.sqrt()
+        }
+    }
+
+    pub unsafe fn dot_product_neon(a: &[f32], b: &[f32]) -> f32 {
+        unsafe {
+            let n = a.len().min(b.len());
+            let chunks = n / 4;
+            let mut acc = vdupq_n_f32(0.0);
+            for i in 0..chunks {
+                let va = vld1q_f32(a.as_ptr().add(i * 4));
+                let vb = vld1q_f32(b.as_ptr().add(i * 4));
+                acc = vfmaq_f32(acc, va, vb);
+            }
+            let mut sum = hsum_f32x4(acc);
+            for i in (chunks * 4)..n {
+                sum += *a.get_unchecked(i) * *b.get_unchecked(i);
+            }
+            -sum
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
