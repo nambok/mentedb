@@ -467,7 +467,7 @@ cargo bench
 
 ```bash
 cargo build              # Build all crates
-cargo test               # Run 478+ tests
+cargo test               # Run 477+ tests
 cargo clippy             # Lint
 cargo bench              # Benchmarks
 cargo doc --open         # Documentation

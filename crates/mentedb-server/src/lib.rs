@@ -3,6 +3,7 @@
 //! This crate implements the network facing server for MenteDB:
 //!
 //! - [`auth`]: JWT token creation, validation, and middleware
+//! - [`extraction_queue`]: Background extraction queue with bounded concurrency
 //! - [`handlers`]: Axum request handlers for memory CRUD and search
 //! - [`routes`]: Router construction with middleware stack
 //! - [`state`]: Shared application state (database handle, config)

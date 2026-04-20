@@ -128,7 +128,7 @@ Entry types: `PageWrite` (data mutation), `Commit` (transaction boundary),
 Sits between the page manager and the rest of the system. Uses CLOCK eviction
 (an approximation of LRU that avoids the overhead of maintaining a linked list
 on every access). Pages can be pinned to prevent eviction during active use.
-The pool is wrapped in a `Mutex` for thread safety. Default capacity is 1024 pages
+The pool is wrapped in a `parking_lot::Mutex` for thread safety. Default capacity is 1024 pages
 (16 MB of buffered data).
 
 **Storage Engine** (`engine.rs`):
@@ -411,10 +411,21 @@ what was deleted and why.
 
 ### mentedb-server
 
-Binary crate. Runs a Tokio async TCP server on port 6677 (configurable).
-Wraps `MenteDb` in `Arc<MenteDb>` for concurrent access. Accepts
-`--data-dir` and `--port` command line arguments. Handles graceful
-shutdown on Ctrl+C.
+Binary crate. Axum-based REST API + Tonic gRPC + WebSocket server.
+Wraps `MenteDb` in `Arc<MenteDb>` for concurrent access (no external lock).
+
+Key subsystems:
+- **REST API** (`handlers.rs`): Memory CRUD, MQL recall, vector search, ingest
+- **gRPC** (`grpc.rs`): Bidirectional streaming cognition + memory services
+- **WebSocket** (`websocket.rs`): Real-time memory event streaming
+- **Auth** (`auth.rs`): JWT token creation/validation middleware
+- **Rate limiting** (`rate_limit.rs`): Token bucket rate limiter
+- **Extraction queue** (`extraction_queue.rs`): Bounded mpsc channel (capacity 64)
+  with semaphore-limited concurrency (max 4 parallel LLM calls). Drains
+  gracefully on shutdown.
+
+Configurable via CLI args (`--data-dir`, `--port`, `--grpc-port`, `--jwt-secret`).
+Handles graceful shutdown on SIGTERM/SIGINT.
 
 ### mentedb (facade)
 
