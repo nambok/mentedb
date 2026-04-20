@@ -23,7 +23,7 @@ fn ids(n: usize) -> Vec<MemoryId> {
 
 #[test]
 fn test_graph_manager_full_workflow() {
-    let mut mgr = GraphManager::new();
+    let mgr = GraphManager::new();
     let n = ids(5);
 
     // Add nodes
@@ -144,7 +144,7 @@ fn test_cycle_detection() {
 
 #[test]
 fn test_remove_and_compact() {
-    let mut mgr = GraphManager::new();
+    let mgr = GraphManager::new();
     let n = ids(3);
     for &id in &n {
         mgr.add_memory(id);
@@ -177,7 +177,7 @@ fn test_graph_manager_save_load() {
     let c = MemoryId::new();
 
     {
-        let mut mgr = GraphManager::new();
+        let mgr = GraphManager::new();
         mgr.add_memory(a);
         mgr.add_memory(b);
         mgr.add_memory(c);
@@ -214,7 +214,7 @@ fn test_graph_save_load_after_compact() {
     let b = MemoryId::new();
 
     {
-        let mut mgr = GraphManager::new();
+        let mgr = GraphManager::new();
         mgr.add_memory(a);
         mgr.add_memory(b);
         mgr.add_relationship(&edge(a, b, EdgeType::Supports, 0.9))

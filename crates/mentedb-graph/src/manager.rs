@@ -5,6 +5,7 @@ use std::path::Path;
 use mentedb_core::edge::MemoryEdge;
 use mentedb_core::error::{MenteError, MenteResult};
 use mentedb_core::types::MemoryId;
+use parking_lot::RwLock;
 
 use crate::belief::propagate_update;
 use crate::contradiction::find_contradictions;
@@ -12,54 +13,54 @@ use crate::csr::CsrGraph;
 use crate::traversal::extract_subgraph;
 
 /// Owns a `CsrGraph` and provides high-level graph operations.
+///
+/// All methods take `&self` — internal `RwLock` handles concurrency.
 pub struct GraphManager {
-    graph: CsrGraph,
+    graph: RwLock<CsrGraph>,
 }
 
 impl GraphManager {
     /// Creates a new graph manager with an empty graph.
     pub fn new() -> Self {
         Self {
-            graph: CsrGraph::new(),
+            graph: RwLock::new(CsrGraph::new()),
         }
     }
 
     /// Save the graph to the given directory.
     pub fn save(&self, dir: &Path) -> MenteResult<()> {
         std::fs::create_dir_all(dir)?;
-        self.graph.save(&dir.join("graph.json"))
+        self.graph.read().save(&dir.join("graph.json"))
     }
 
     /// Load the graph from the given directory.
     pub fn load(dir: &Path) -> MenteResult<Self> {
         let graph = CsrGraph::load(&dir.join("graph.json"))?;
-        Ok(Self { graph })
-    }
-
-    /// Access the underlying graph (for traversals, etc.).
-    pub fn graph(&self) -> &CsrGraph {
-        &self.graph
+        Ok(Self {
+            graph: RwLock::new(graph),
+        })
     }
 
     /// Register a memory node in the graph.
-    pub fn add_memory(&mut self, id: MemoryId) {
-        self.graph.add_node(id);
+    pub fn add_memory(&self, id: MemoryId) {
+        self.graph.write().add_node(id);
     }
 
     /// Remove a memory node and all its edges.
-    pub fn remove_memory(&mut self, id: MemoryId) {
-        self.graph.remove_node(id);
+    pub fn remove_memory(&self, id: MemoryId) {
+        self.graph.write().remove_node(id);
     }
 
     /// Add a relationship (edge) between two memory nodes.
-    pub fn add_relationship(&mut self, edge: &MemoryEdge) -> MenteResult<()> {
-        if !self.graph.contains_node(edge.source) {
+    pub fn add_relationship(&self, edge: &MemoryEdge) -> MenteResult<()> {
+        let mut g = self.graph.write();
+        if !g.contains_node(edge.source) {
             return Err(MenteError::MemoryNotFound(edge.source));
         }
-        if !self.graph.contains_node(edge.target) {
+        if !g.contains_node(edge.target) {
             return Err(MenteError::MemoryNotFound(edge.target));
         }
-        self.graph.add_edge(edge);
+        g.add_edge(edge);
         Ok(())
     }
 
@@ -69,7 +70,7 @@ impl GraphManager {
         center: MemoryId,
         depth: usize,
     ) -> (Vec<MemoryId>, Vec<MemoryEdge>) {
-        extract_subgraph(&self.graph, center, depth)
+        extract_subgraph(&self.graph.read(), center, depth)
     }
 
     /// Propagate a confidence change through the graph.
@@ -78,22 +79,34 @@ impl GraphManager {
         id: MemoryId,
         new_confidence: f32,
     ) -> Vec<(MemoryId, f32)> {
-        propagate_update(&self.graph, id, new_confidence)
+        propagate_update(&self.graph.read(), id, new_confidence)
     }
 
     /// Find all nodes that contradict the given node.
     pub fn find_all_contradictions(&self, id: MemoryId) -> Vec<MemoryId> {
-        find_contradictions(&self.graph, id)
+        find_contradictions(&self.graph.read(), id)
     }
 
     /// Merge the delta log into CSR/CSC compressed storage.
-    pub fn compact(&mut self) {
-        self.graph.compact();
+    pub fn compact(&self) {
+        self.graph.write().compact();
     }
 
     /// Strengthen an edge weight (Hebbian learning: neurons that fire together wire together).
-    pub fn strengthen_edge(&mut self, source: MemoryId, target: MemoryId, delta: f32) {
-        self.graph.strengthen_edge(source, target, delta);
+    pub fn strengthen_edge(&self, source: MemoryId, target: MemoryId, delta: f32) {
+        self.graph.write().strengthen_edge(source, target, delta);
+    }
+
+    /// Access the underlying graph for read-only traversals.
+    ///
+    /// Returns a read guard — hold it only briefly to avoid blocking writers.
+    pub fn read_graph(&self) -> parking_lot::RwLockReadGuard<'_, CsrGraph> {
+        self.graph.read()
+    }
+
+    /// Alias for `read_graph()` — backward compatible access to the CsrGraph.
+    pub fn graph(&self) -> parking_lot::RwLockReadGuard<'_, CsrGraph> {
+        self.graph.read()
     }
 }
 
@@ -123,7 +136,7 @@ mod tests {
 
     #[test]
     fn test_add_memory_and_relationship() {
-        let mut mgr = GraphManager::new();
+        let mgr = GraphManager::new();
         let a = MemoryId::new();
         let b = MemoryId::new();
         mgr.add_memory(a);
@@ -136,7 +149,7 @@ mod tests {
 
     #[test]
     fn test_relationship_missing_node() {
-        let mut mgr = GraphManager::new();
+        let mgr = GraphManager::new();
         let a = MemoryId::new();
         let b = MemoryId::new();
         mgr.add_memory(a);
@@ -149,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_context_subgraph() {
-        let mut mgr = GraphManager::new();
+        let mgr = GraphManager::new();
         let a = MemoryId::new();
         let b = MemoryId::new();
         let c = MemoryId::new();
@@ -168,7 +181,7 @@ mod tests {
 
     #[test]
     fn test_compact() {
-        let mut mgr = GraphManager::new();
+        let mgr = GraphManager::new();
         let a = MemoryId::new();
         let b = MemoryId::new();
         mgr.add_memory(a);
@@ -183,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_belief_propagation() {
-        let mut mgr = GraphManager::new();
+        let mgr = GraphManager::new();
         let a = MemoryId::new();
         let b = MemoryId::new();
         mgr.add_memory(a);
