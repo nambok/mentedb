@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/nambok/mentedb/compare/mentedb-index-v0.5.2...mentedb-index-v0.6.0) - 2026-04-20
+
+### Added
+
+- SIMD vector distance (AVX2 + NEON) and extraction queue
+- bincode index persistence, async LLM extraction, SDK concurrency
+
+### Other
+
+- update README test count, ARCHITECTURE server section, lib.rs module list
+
 ## [0.5.1](https://github.com/nambok/mentedb/compare/mentedb-index-v0.5.0...mentedb-index-v0.5.1) - 2026-04-19
 
 ### Other
