@@ -152,19 +152,20 @@ pub async fn store_memory(
     })?;
 
     // Auto-extract: if enabled and content looks like a conversation, queue extraction
-    if state.auto_extract && state.extraction_config.is_some() && looks_like_conversation(&content)
+    if state.auto_extract
+        && state.extraction_config.is_some()
+        && looks_like_conversation(&content)
+        && let Some(tx) = &state.extraction_tx
     {
-        if let Some(tx) = &state.extraction_tx {
-            let req = crate::extraction_queue::ExtractionRequest {
-                config: state.extraction_config.clone().unwrap(),
-                content: content.clone(),
-                agent_id,
-                space_id,
-                db: state.db.clone(),
-            };
-            if tx.try_send(req).is_err() {
-                tracing::warn!("extraction queue full, skipping auto-extract");
-            }
+        let req = crate::extraction_queue::ExtractionRequest {
+            config: state.extraction_config.clone().unwrap(),
+            content: content.clone(),
+            agent_id,
+            space_id,
+            db: state.db.clone(),
+        };
+        if tx.try_send(req).is_err() {
+            tracing::warn!("extraction queue full, skipping auto-extract");
         }
     }
 
