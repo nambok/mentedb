@@ -151,25 +151,19 @@ pub async fn store_memory(
         ApiError::Internal(format!("store failed: {e}"))
     })?;
 
-    // Auto-extract: if enabled and content looks like a conversation, run extraction
+    // Auto-extract: if enabled and content looks like a conversation, spawn background extraction
     if state.auto_extract && state.extraction_config.is_some() && looks_like_conversation(&content)
     {
         let extraction_config = state.extraction_config.clone().unwrap();
-        match run_extraction(&extraction_config, &content, agent_id, space_id, db).await {
-            Ok(extract_stats) => {
-                return Ok((
-                    StatusCode::CREATED,
-                    Json(json!({
-                        "id": id.to_string(),
-                        "status": "stored",
-                        "auto_extract": extract_stats,
-                    })),
-                ));
+        let db = state.db.clone();
+        let content = content.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                run_extraction(&extraction_config, &content, agent_id, space_id, &db).await
+            {
+                tracing::warn!(error = %e, "background auto-extraction failed");
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "auto-extraction failed, memory stored without extraction");
-            }
-        }
+        });
     }
 
     Ok((
@@ -423,8 +417,14 @@ pub async fn ingest_conversation(
         None => SpaceId::nil(),
     };
 
-    let stats =
-        run_extraction(extraction_config, conversation, agent_id, space_id, &state.db).await?;
+    let stats = run_extraction(
+        extraction_config,
+        conversation,
+        agent_id,
+        space_id,
+        &state.db,
+    )
+    .await?;
 
     Ok((StatusCode::OK, Json(stats)))
 }

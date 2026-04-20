@@ -70,17 +70,17 @@ The result: a clean, curated memory that actually helps the AI perform better.
 
 ### What Makes MenteDB Different
 
-| Feature | Traditional DBs | Vector DBs | Mem0/Zep | MenteDB |
-|---------|----------------|------------|----------|---------|
-| Storage model | Tables/Documents | Embeddings | Key value | Memory nodes (embeddings + graph + bi-temporal) |
-| Entity understanding | Manual schemas | None | None | **Auto-extracted typed entities with graph edges** |
-| Query result | Raw data | Similarity scores | Raw memories | **Token budget optimized context** |
-| Memory quality | Manual | None | LLM extract | **LLM extract + quality filter + dedup + contradiction** |
-| Retrieval strategy | Index scan | Single-pass kNN | Single-pass kNN | **Adaptive multi-pass + entity graph expansion** |
-| Understands AI attention? | No | No | No | **Yes, U curve ordering** |
-| Tracks what AI knows? | No | No | No | **Epistemic state tracking** |
-| Multi-agent isolation? | Schema level | Collection level | API key | **Memory spaces with ACLs** |
-| Updates cascade? | Foreign keys | No | No | **Belief propagation** |
+| Feature | Traditional DBs | Vector DBs | MenteDB |
+|---------|----------------|------------|---------|
+| Storage model | Tables/Documents | Embeddings | Memory nodes (embeddings + graph + bi-temporal) |
+| Entity understanding | Manual schemas | None | **Auto-extracted typed entities with graph edges** |
+| Query result | Raw data | Similarity scores | **Token budget optimized context** |
+| Memory quality | Manual | None | **LLM extract + quality filter + dedup + contradiction** |
+| Retrieval strategy | Index scan | Single-pass kNN | **Adaptive multi-pass + entity graph expansion** |
+| Understands AI attention? | No | No | **Yes, U curve ordering** |
+| Tracks what AI knows? | No | No | **Epistemic state tracking** |
+| Multi-agent isolation? | Schema level | Collection level | **Memory spaces with ACLs** |
+| Updates cascade? | Foreign keys | No | **Belief propagation** |
 
 ### Core Features
 
@@ -420,17 +420,6 @@ bash run_full_benchmark.sh 0
 OPENAI_API_KEY=... python3 evaluate.py results/hypotheses_full.jsonl
 ```
 
-### Mem0 vs MenteDB (head-to-head)
-
-| | MenteDB | Mem0 |
-|---|---------|------|
-| Stale belief test | PASS | FAIL (returns stale data) |
-| Latency | 4,363ms | 21,015ms |
-| Speedup | **4.8x faster** | baseline |
-| Belief propagation | Graph edges suppress stale | Flat vector, no supersession |
-
-Mem0 returned both "Uses PostgreSQL" (stale) and "Prefers SQLite" (current). MenteDB returned only the current belief. Both used OpenAI text-embedding-3-small for a fair comparison. The correctness gap (PASS vs FAIL) is the more meaningful result.
-
 ### 10K Scale Test (OpenAI text-embedding-3-small)
 
 | Metric | Value |
@@ -470,9 +459,6 @@ python3 benchmarks/run_all.py --no-llm
 # Full suite (requires ANTHROPIC_API_KEY or OPENAI_API_KEY)
 python3 benchmarks/run_all.py
 
-# Mem0 comparison (requires OPENAI_API_KEY)
-python3 benchmarks/mem0_comparison.py
-
 # Criterion performance benchmarks
 cargo bench
 ```
@@ -481,7 +467,7 @@ cargo bench
 
 ```bash
 cargo build              # Build all crates
-cargo test               # Run 427+ tests
+cargo test               # Run 478+ tests
 cargo clippy             # Lint
 cargo bench              # Benchmarks
 cargo doc --open         # Documentation

@@ -414,7 +414,7 @@ impl CsrGraph {
             edge_data,
         }
     }
-    /// Save the graph to a JSON file.
+    /// Save the graph to a binary file.
     pub fn save(&self, path: &std::path::Path) -> MenteResult<()> {
         let data =
             serde_json::to_vec(self).map_err(|e| MenteError::Serialization(e.to_string()))?;
@@ -422,7 +422,7 @@ impl CsrGraph {
         Ok(())
     }
 
-    /// Load the graph from a JSON file.
+    /// Load the graph from a file.
     pub fn load(path: &std::path::Path) -> MenteResult<Self> {
         let data = std::fs::read(path)?;
         let graph: Self =

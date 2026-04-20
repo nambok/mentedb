@@ -212,15 +212,16 @@ impl Bm25Index {
             total_length: inner.total_length,
         };
         let data =
-            serde_json::to_vec(&snapshot).map_err(|e| MenteError::Serialization(e.to_string()))?;
+            bincode::serialize(&snapshot).map_err(|e| MenteError::Serialization(e.to_string()))?;
         std::fs::write(path, data)?;
         Ok(())
     }
 
     pub fn load(path: &std::path::Path) -> MenteResult<Self> {
         let data = std::fs::read(path)?;
-        let snapshot: Bm25Snapshot =
-            serde_json::from_slice(&data).map_err(|e| MenteError::Serialization(e.to_string()))?;
+        let snapshot: Bm25Snapshot = bincode::deserialize(&data)
+            .or_else(|_| serde_json::from_slice(&data))
+            .map_err(|e| MenteError::Serialization(e.to_string()))?;
 
         let inverted = snapshot
             .inverted

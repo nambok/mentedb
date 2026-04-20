@@ -112,16 +112,17 @@ impl TemporalIndex {
             id_to_ts: inner.id_to_ts.iter().map(|(&k, &v)| (k, v)).collect(),
         };
         let data =
-            serde_json::to_vec(&snapshot).map_err(|e| MenteError::Serialization(e.to_string()))?;
+            bincode::serialize(&snapshot).map_err(|e| MenteError::Serialization(e.to_string()))?;
         std::fs::write(path, data)?;
         Ok(())
     }
 
-    /// Load the temporal index from a JSON file.
+    /// Load the temporal index from a file (bincode, with JSON fallback for migration).
     pub fn load(path: &std::path::Path) -> MenteResult<Self> {
         let data = std::fs::read(path)?;
-        let snapshot: TemporalSnapshot =
-            serde_json::from_slice(&data).map_err(|e| MenteError::Serialization(e.to_string()))?;
+        let snapshot: TemporalSnapshot = bincode::deserialize(&data)
+            .or_else(|_| serde_json::from_slice(&data))
+            .map_err(|e| MenteError::Serialization(e.to_string()))?;
 
         let mut tree = BTreeMap::new();
         for (ts, ids) in snapshot.tree {

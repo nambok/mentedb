@@ -8,7 +8,7 @@ MenteDB pre digests knowledge for single pass transformer consumption. Every wri
 triggers inference. Every read is shaped by attention budgets. The engine thinks about
 what it stores so the LLM doesn't have to.
 
-The system is organized as a Cargo workspace of 10 crates, each owning a distinct
+The system is organized as a Cargo workspace of 13 crates, each owning a distinct
 responsibility. The facade crate (`mentedb`) wires them together behind a small,
 coherent API: `open`, `store`, `recall`, `relate`, `forget`, `close`.
 
@@ -25,6 +25,9 @@ mentedb (workspace root)
  +-- mentedb-context          Token budgets, U curve attention, delta serving, serializers
  +-- mentedb-cognitive        Stream cognition, write time inference, phantoms, pain signals
  +-- mentedb-consolidation    Decay, compression, fact extraction, archival, GDPR forget
+ +-- mentedb-extraction       LLM-powered entity/relation extraction pipeline
+ +-- mentedb-embedding        Embedding provider abstraction (OpenAI, local)
+ +-- mentedb-replication      Multi-node replication protocol
  +-- mentedb-server           HTTP/TCP server wrapping the facade
  +-- mentedb                  Unified facade re-exporting the subsystems
 ```
@@ -46,6 +49,9 @@ mentedb  (facade)
     
 mentedb-cognitive ------------> mentedb-core
 mentedb-consolidation --------> mentedb-core
+mentedb-extraction -----------> mentedb-core
+mentedb-embedding ------------> mentedb-core
+mentedb-replication ----------> mentedb-core
 ```
 
 All subsystem crates depend only on `mentedb-core`. The facade crate pulls in
@@ -406,7 +412,7 @@ what was deleted and why.
 ### mentedb-server
 
 Binary crate. Runs a Tokio async TCP server on port 6677 (configurable).
-Wraps `MenteDb` in `Arc<Mutex<_>>` for concurrent access. Accepts
+Wraps `MenteDb` in `Arc<MenteDb>` for concurrent access. Accepts
 `--data-dir` and `--port` command line arguments. Handles graceful
 shutdown on Ctrl+C.
 
@@ -693,20 +699,41 @@ All fallible operations return `MenteResult<T>`, which is
 | `Storage(String)` | Page I/O, WAL corruption, serialization failure |
 | `Index(String)` | HNSW dimension mismatch, bitmap overflow |
 | `Query(String)` | MQL parse error with position information |
-| `Serialization(String)` | JSON encode/decode failure |
+| `Serialization(String)` | Encode/decode failure (JSON or bincode) |
 | `CapacityExceeded(String)` | Buffer pool full, space limit reached |
 | `PermissionDenied { agent_id, space_id }` | Access control violation |
 | `Io(std::io::Error)` | Underlying filesystem error |
 
-## Thread Safety
+## Thread Safety & Concurrency
 
-- All index structures (`HnswIndex`, `BitmapIndex`, `TemporalIndex`,
-  `SalienceIndex`) are wrapped in `RwLock` for concurrent read access.
-- `BufferPool` uses a `Mutex` for exclusive access during page fetches
-  and evictions.
-- `EventBus` uses `RwLock` for the subscriber list.
-- `CognitionStream` uses a `Mutex` on its ring buffer.
-- The server wraps the entire `MenteDb` in `Arc<Mutex<_>>`.
+MenteDB uses **interior mutability** throughout — each component manages its own
+fine-grained locking. The server holds `Arc<MenteDb>` (no external lock).
+
+| Component | Lock Type | Scope |
+|-----------|-----------|-------|
+| `StorageEngine` | `parking_lot::Mutex` on PageManager + WAL | Per-operation |
+| `BufferPool` | `parking_lot::Mutex` on inner state | Page fetch/evict |
+| `GraphManager` | `parking_lot::RwLock` on CsrGraph | Read: traversal/search, Write: add/remove |
+| `IndexManager` | `parking_lot::RwLock` per index (5 indexes) | Read: search, Write: insert/remove |
+| `page_map` | `parking_lot::RwLock` on HashMap | Read: lookups, Write: store/forget |
+| `EventBus` | `RwLock` for subscriber list | Publish/subscribe |
+| `CognitionStream` | `Mutex` on ring buffer | Token feed/drain |
+
+**Lock ordering** (prevents deadlocks):
+1. `page_map` → `StorageEngine` (never reverse)
+2. WAL lock → PageManager lock (released before buffer pool)
+3. Graph lock is independent (never held with page_map or storage)
+
+**Concurrency benefits:**
+- All read operations (recall, search, get_memory, stats) run concurrently with zero contention
+- Write operations only lock the specific component being mutated
+- LLM extraction runs in a background `tokio::spawn` task — no lock held during API calls
+
+## Index Persistence
+
+Indexes are persisted as **bincode** binary format for fast serialization (~5x smaller,
+~10x faster than JSON). On load, indexes auto-detect and migrate from legacy JSON format.
+MemoryNode pages and the knowledge graph use JSON due to `skip_serializing_if` compatibility.
 
 ## Testing Strategy
 

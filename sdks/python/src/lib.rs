@@ -2,7 +2,9 @@ use std::path::Path;
 
 use mentedb::MenteDb;
 use mentedb_cognitive::pain::{PainRegistry as RustPainRegistry, PainSignal};
-use mentedb_cognitive::stream::{CognitionStream as RustCognitionStream, StreamAlert as RustStreamAlert};
+use mentedb_cognitive::stream::{
+    CognitionStream as RustCognitionStream, StreamAlert as RustStreamAlert,
+};
 use mentedb_cognitive::trajectory::{
     DecisionState, TrajectoryNode, TrajectoryTracker as RustTrajectoryTracker,
 };
@@ -10,15 +12,15 @@ use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
 use mentedb_core::types::{AgentId, Embedding, MemoryId, Timestamp};
 use mentedb_core::{MemoryEdge, MemoryNode};
-use mentedb_extraction::{
-    ExtractionConfig, ExtractionPipeline, HttpExtractionProvider, LlmProvider,
-    map_extraction_type_to_memory_type,
-};
 use mentedb_embedding::candle_provider::CandleEmbeddingProvider;
 use mentedb_embedding::hash_provider::HashEmbeddingProvider;
 use mentedb_embedding::http_provider::HttpEmbeddingConfig;
 use mentedb_embedding::http_provider::HttpEmbeddingProvider;
 use mentedb_embedding::provider::EmbeddingProvider;
+use mentedb_extraction::{
+    ExtractionConfig, ExtractionPipeline, HttpExtractionProvider, LlmProvider,
+    map_extraction_type_to_memory_type,
+};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use uuid::Uuid;
@@ -45,7 +47,9 @@ fn parse_memory_id(s: &str) -> PyResult<MemoryId> {
 
 /// Format a microsecond timestamp as "YYYY-MM-DD" for human-readable evidence.
 fn format_timestamp_date(us: u64) -> Option<String> {
-    if us == 0 { return None; }
+    if us == 0 {
+        return None;
+    }
     let secs = (us / 1_000_000) as i64;
     // Manual date calculation from unix timestamp (no chrono dependency)
     let days = secs / 86400;
@@ -122,22 +126,25 @@ impl MenteDB {
     ) -> PyResult<Self> {
         let embedder: Option<Box<dyn EmbeddingProvider>> = match embedding_provider {
             Some("openai") => {
-                let key = embedding_api_key
-                    .ok_or_else(|| PyRuntimeError::new_err("openai provider requires embedding_api_key"))?;
+                let key = embedding_api_key.ok_or_else(|| {
+                    PyRuntimeError::new_err("openai provider requires embedding_api_key")
+                })?;
                 let model = embedding_model.unwrap_or("text-embedding-3-small");
                 let config = HttpEmbeddingConfig::openai(key, model);
                 Some(Box::new(HttpEmbeddingProvider::new(config)))
             }
             Some("cohere") => {
-                let key = embedding_api_key
-                    .ok_or_else(|| PyRuntimeError::new_err("cohere provider requires embedding_api_key"))?;
+                let key = embedding_api_key.ok_or_else(|| {
+                    PyRuntimeError::new_err("cohere provider requires embedding_api_key")
+                })?;
                 let model = embedding_model.unwrap_or("embed-english-v3.0");
                 let config = HttpEmbeddingConfig::cohere(key, model);
                 Some(Box::new(HttpEmbeddingProvider::new(config)))
             }
             Some("voyage") => {
-                let key = embedding_api_key
-                    .ok_or_else(|| PyRuntimeError::new_err("voyage provider requires embedding_api_key"))?;
+                let key = embedding_api_key.ok_or_else(|| {
+                    PyRuntimeError::new_err("voyage provider requires embedding_api_key")
+                })?;
                 let model = embedding_model.unwrap_or("voyage-2");
                 let config = HttpEmbeddingConfig::voyage(key, model);
                 Some(Box::new(HttpEmbeddingProvider::new(config)))
@@ -146,12 +153,12 @@ impl MenteDB {
                 let cache_dir = std::path::PathBuf::from(format!("{data_dir}/.candle-cache"));
                 match CandleEmbeddingProvider::with_cache_dir(cache_dir) {
                     Ok(p) => Some(Box::new(p)),
-                    Err(e) => return Err(PyRuntimeError::new_err(format!("candle init failed: {e}"))),
+                    Err(e) => {
+                        return Err(PyRuntimeError::new_err(format!("candle init failed: {e}")));
+                    }
                 }
             }
-            Some("hash") | None => {
-                Some(Box::new(HashEmbeddingProvider::new(384)))
-            }
+            Some("hash") | None => Some(Box::new(HashEmbeddingProvider::new(384))),
             Some(other) => {
                 return Err(PyRuntimeError::new_err(format!(
                     "unknown embedding provider: {other}. Use 'openai', 'candle', 'cohere', 'voyage', or 'hash'"
@@ -163,13 +170,16 @@ impl MenteDB {
         if let Some(ref e) = embedder {
             db.set_embedder(Box::new(HashEmbeddingProvider::new(e.dimensions())));
         }
-        Ok(Self { db: Some(db), embedder })
+        Ok(Self {
+            db: Some(db),
+            embedder,
+        })
     }
 
     /// Store a memory and return its UUID string.
     #[pyo3(signature = (content, memory_type, embedding=None, agent_id=None, tags=None, created_at=None))]
     fn store(
-        &mut self,
+        &self,
         content: &str,
         memory_type: &str,
         embedding: Option<Vec<f32>>,
@@ -177,9 +187,10 @@ impl MenteDB {
         tags: Option<Vec<String>>,
         created_at: Option<u64>,
     ) -> PyResult<String> {
-        let db = self.db.as_mut().ok_or_else(|| {
-            PyRuntimeError::new_err("database is closed")
-        })?;
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
 
         let aid = match agent_id {
             Some(s) => parse_agent_id(s)?,
@@ -215,10 +226,11 @@ impl MenteDB {
     }
 
     /// Recall memories using an MQL query string.
-    fn recall(&mut self, query: &str) -> PyResult<RecallResult> {
-        let db = self.db.as_mut().ok_or_else(|| {
-            PyRuntimeError::new_err("database is closed")
-        })?;
+    fn recall(&self, query: &str) -> PyResult<RecallResult> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
 
         let window = db.recall(query).map_err(to_pyerr)?;
 
@@ -243,10 +255,11 @@ impl MenteDB {
     }
 
     /// Vector similarity search. Returns a list of SearchResult.
-    fn search(&mut self, embedding: Vec<f32>, k: usize) -> PyResult<Vec<SearchResult>> {
-        let db = self.db.as_mut().ok_or_else(|| {
-            PyRuntimeError::new_err("database is closed")
-        })?;
+    fn search(&self, embedding: Vec<f32>, k: usize) -> PyResult<Vec<SearchResult>> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
 
         let hits = db.recall_similar(&embedding, k).map_err(to_pyerr)?;
         Ok(hits
@@ -262,16 +275,17 @@ impl MenteDB {
     /// Uses OpenAI/Cohere/Voyage if configured, falls back to hash embedding.
     #[pyo3(signature = (query, k=10, tags=None, after=None, before=None))]
     fn search_text(
-        &mut self,
+        &self,
         query: &str,
         k: usize,
         tags: Option<Vec<String>>,
         after: Option<u64>,
         before: Option<u64>,
     ) -> PyResult<Vec<SearchResult>> {
-        let db = self.db.as_mut().ok_or_else(|| {
-            PyRuntimeError::new_err("database is closed")
-        })?;
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
 
         let embedding = if let Some(ref embedder) = self.embedder {
             embedder.embed(query).map_err(to_pyerr)?
@@ -279,7 +293,9 @@ impl MenteDB {
             hash_embedding(query, 384)
         };
 
-        let tag_strs: Option<Vec<&str>> = tags.as_ref().map(|t| t.iter().map(|s| s.as_str()).collect());
+        let tag_strs: Option<Vec<&str>> = tags
+            .as_ref()
+            .map(|t| t.iter().map(|s| s.as_str()).collect());
         let tag_refs: Option<&[&str]> = tag_strs.as_deref();
         let time_range = match (after, before) {
             (Some(a), Some(b)) => Some((a, b)),
@@ -303,10 +319,17 @@ impl MenteDB {
     /// Takes multiple query strings, embeds each, and merges results via RRF
     /// for broader recall across different semantic aspects.
     #[pyo3(signature = (queries, k=10, tags=None, before=None))]
-    fn search_multi(&mut self, queries: Vec<String>, k: usize, tags: Option<Vec<String>>, before: Option<u64>) -> PyResult<Vec<SearchResult>> {
-        let db = self.db.as_mut().ok_or_else(|| {
-            PyRuntimeError::new_err("database is closed")
-        })?;
+    fn search_multi(
+        &self,
+        queries: Vec<String>,
+        k: usize,
+        tags: Option<Vec<String>>,
+        before: Option<u64>,
+    ) -> PyResult<Vec<SearchResult>> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
 
         let mut embeddings = Vec::with_capacity(queries.len());
         for q in &queries {
@@ -318,11 +341,15 @@ impl MenteDB {
             embeddings.push(emb);
         }
 
-        let tag_strs: Option<Vec<&str>> = tags.as_ref().map(|t| t.iter().map(|s| s.as_str()).collect());
+        let tag_strs: Option<Vec<&str>> = tags
+            .as_ref()
+            .map(|t| t.iter().map(|s| s.as_str()).collect());
         let tag_refs: Option<&[&str]> = tag_strs.as_deref();
         let time_range = before.map(|b| (0u64, b));
 
-        let hits = db.recall_hybrid_multi(&embeddings, Some(&queries), k, tag_refs, time_range).map_err(to_pyerr)?;
+        let hits = db
+            .recall_hybrid_multi(&embeddings, Some(&queries), k, tag_refs, time_range)
+            .map_err(to_pyerr)?;
         Ok(hits
             .into_iter()
             .map(|(id, score)| SearchResult {
@@ -346,24 +373,24 @@ impl MenteDB {
     /// instant recall → active search → deep dig → exhaustive category scan.
     #[pyo3(signature = (query, k=10, provider=None, tags=None, before=None))]
     fn search_expanded(
-        &mut self,
+        &self,
         query: &str,
         k: usize,
         provider: Option<&str>,
         tags: Option<Vec<String>>,
         before: Option<u64>,
     ) -> PyResult<Vec<SearchResult>> {
-        let db = self.db.as_mut().ok_or_else(|| {
-            PyRuntimeError::new_err("database is closed")
-        })?;
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
 
         let config = build_extraction_config_from_env(provider)?;
         let http_provider = HttpExtractionProvider::new(config.clone()).map_err(to_pyerr)?;
 
         // Synthesis model — configurable via MENTEDB_SYNTHESIS_MODEL, defaults to same as extraction
-        let synth_model = std::env::var("MENTEDB_SYNTHESIS_MODEL").unwrap_or_else(|_| {
-            config.model.clone()
-        });
+        let synth_model =
+            std::env::var("MENTEDB_SYNTHESIS_MODEL").unwrap_or_else(|_| config.model.clone());
         let mut synth_config = config.clone();
         synth_config.model = synth_model.clone();
         let synth_provider = HttpExtractionProvider::new(synth_config).map_err(to_pyerr)?;
@@ -376,11 +403,13 @@ impl MenteDB {
         }
 
         // Adaptive K values for escalating retrieval depth
-        let k1 = std::cmp::min(k, 10);  // instant recall
+        let k1 = std::cmp::min(k, 10); // instant recall
         let k2 = std::cmp::min(k * 3, 30); // active search
         let k3 = std::cmp::min(k * 5, 50); // deep dig
 
-        let tag_strs: Option<Vec<&str>> = tags.as_ref().map(|t| t.iter().map(|s| s.as_str()).collect());
+        let tag_strs: Option<Vec<&str>> = tags
+            .as_ref()
+            .map(|t| t.iter().map(|s| s.as_str()).collect());
         let tag_refs: Option<&[&str]> = tag_strs.as_deref();
         let time_range = before.map(|b| (0u64, b));
 
@@ -395,25 +424,47 @@ impl MenteDB {
         let mut broad_keywords: Option<String> = None;
         let mut is_counting = false;
         let query_lower = query.to_lowercase();
-        let is_temporal = query_lower.contains("when") || query_lower.contains("how long")
-            || query_lower.contains("before") || query_lower.contains("after")
-            || query_lower.contains("first") || query_lower.contains("most recent")
-            || query_lower.contains("days") || query_lower.contains("weeks")
-            || query_lower.contains("months ago") || query_lower.contains("order")
-            || query_lower.contains("ago") || query_lower.contains("last saturday")
-            || query_lower.contains("last sunday") || query_lower.contains("last monday")
-            || query_lower.contains("last tuesday") || query_lower.contains("last wednesday")
-            || query_lower.contains("last thursday") || query_lower.contains("last friday")
-            || (query_lower.contains("last") && (query_lower.contains("week") || query_lower.contains("month")));
-        let is_temporal_ordering = is_temporal && (query_lower.contains("order") || query_lower.contains("earliest") || query_lower.contains("latest") || query_lower.contains("first") || query_lower.contains("most recent"));
-        let is_preference = query_lower.contains("suggest") || query_lower.contains("recommend")
-            || query_lower.contains("any tips") || query_lower.contains("any advice")
-            || query_lower.contains("what should") || query_lower.contains("do you think");
+        let is_temporal = query_lower.contains("when")
+            || query_lower.contains("how long")
+            || query_lower.contains("before")
+            || query_lower.contains("after")
+            || query_lower.contains("first")
+            || query_lower.contains("most recent")
+            || query_lower.contains("days")
+            || query_lower.contains("weeks")
+            || query_lower.contains("months ago")
+            || query_lower.contains("order")
+            || query_lower.contains("ago")
+            || query_lower.contains("last saturday")
+            || query_lower.contains("last sunday")
+            || query_lower.contains("last monday")
+            || query_lower.contains("last tuesday")
+            || query_lower.contains("last wednesday")
+            || query_lower.contains("last thursday")
+            || query_lower.contains("last friday")
+            || (query_lower.contains("last")
+                && (query_lower.contains("week") || query_lower.contains("month")));
+        let is_temporal_ordering = is_temporal
+            && (query_lower.contains("order")
+                || query_lower.contains("earliest")
+                || query_lower.contains("latest")
+                || query_lower.contains("first")
+                || query_lower.contains("most recent"));
+        let is_preference = query_lower.contains("suggest")
+            || query_lower.contains("recommend")
+            || query_lower.contains("any tips")
+            || query_lower.contains("any advice")
+            || query_lower.contains("what should")
+            || query_lower.contains("do you think");
         // Knowledge-update detection (moved early for recency boosting)
-        let is_knowledge_update = query_lower.contains("current") || query_lower.contains("latest")
-            || query_lower.contains("now") || query_lower.contains("updated")
-            || query_lower.contains("changed") || query_lower.contains("still")
-            || query_lower.contains("most recent") || query_lower.contains("switch")
+        let is_knowledge_update = query_lower.contains("current")
+            || query_lower.contains("latest")
+            || query_lower.contains("now")
+            || query_lower.contains("updated")
+            || query_lower.contains("changed")
+            || query_lower.contains("still")
+            || query_lower.contains("most recent")
+            || query_lower.contains("switch")
             || query_lower.contains("new");
         for sq in &sub_queries {
             if sq.starts_with("ITEM_KEYWORDS:") {
@@ -429,8 +480,12 @@ impl MenteDB {
                 all_queries.push(sq.clone());
             }
         }
-        if debug { eprintln!("[search_expanded] is_counting={}, item_kw={:?}, broad_kw={:?}",
-            is_counting, item_keywords, broad_keywords); }
+        if debug {
+            eprintln!(
+                "[search_expanded] is_counting={}, item_kw={:?}, broad_kw={:?}",
+                is_counting, item_keywords, broad_keywords
+            );
+        }
 
         let mut embeddings = Vec::with_capacity(all_queries.len());
         for q in &all_queries {
@@ -442,9 +497,9 @@ impl MenteDB {
             embeddings.push(emb);
         }
 
-        let pass1_hits = db.recall_hybrid_multi(
-            &embeddings, Some(&all_queries), k1, tag_refs, time_range
-        ).map_err(to_pyerr)?;
+        let pass1_hits = db
+            .recall_hybrid_multi(&embeddings, Some(&all_queries), k1, tag_refs, time_range)
+            .map_err(to_pyerr)?;
 
         // --- Pass 2: Direct text search with original query (active search) ---
         // BM25 keyword matching catches literal terms that semantic search misses
@@ -453,22 +508,29 @@ impl MenteDB {
         } else {
             hash_embedding(query, 384)
         };
-        let pass2_hits = db.recall_hybrid_at(
-            &query_emb, Some(query), k2,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_micros() as u64,
-            tag_refs, time_range
-        ).map_err(to_pyerr)?;
+        let pass2_hits = db
+            .recall_hybrid_at(
+                &query_emb,
+                Some(query),
+                k2,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u64,
+                tag_refs,
+                time_range,
+            )
+            .map_err(to_pyerr)?;
 
         // --- Pass 3: LLM-extracted key nouns for incidental mentions (deep dig) ---
         let key_nouns_prompt = format!(
             "Extract the 2-3 most important nouns from this question. \
              Return ONLY the nouns separated by spaces, nothing else.\n\
-             Question: {}", query
+             Question: {}",
+            query
         );
-        let noun_system = "You extract key nouns from questions. Return only nouns, space-separated.";
+        let noun_system =
+            "You extract key nouns from questions. Return only nouns, space-separated.";
         let nouns = rt
             .block_on(http_provider.call_text_with_retry(&key_nouns_prompt, noun_system))
             .unwrap_or_default();
@@ -480,13 +542,17 @@ impl MenteDB {
                 hash_embedding(nouns.trim(), 384)
             };
             db.recall_hybrid_at(
-                &noun_emb, Some(nouns.trim()), k3,
+                &noun_emb,
+                Some(nouns.trim()),
+                k3,
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_micros() as u64,
-                tag_refs, time_range
-            ).map_err(to_pyerr)?
+                tag_refs,
+                time_range,
+            )
+            .map_err(to_pyerr)?
         } else {
             Vec::new()
         };
@@ -503,44 +569,72 @@ impl MenteDB {
 
             // Search each item keyword individually (specific subtypes)
             if let Some(ref kw_str) = item_keywords {
-                let terms: Vec<&str> = kw_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
-                if debug { eprintln!("[pass4] Searching {} item keywords individually", terms.len()); }
+                let terms: Vec<&str> = kw_str
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if debug {
+                    eprintln!(
+                        "[pass4] Searching {} item keywords individually",
+                        terms.len()
+                    );
+                }
                 for term in &terms {
                     let kw_emb = if let Some(ref embedder) = self.embedder {
                         embedder.embed(term).map_err(to_pyerr)?
                     } else {
                         hash_embedding(term, 384)
                     };
-                    let hits = db.recall_hybrid_at(
-                        &kw_emb, Some(term), k4_per,
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_micros() as u64,
-                        tag_refs, time_range
-                    ).map_err(to_pyerr)?;
+                    let hits = db
+                        .recall_hybrid_at(
+                            &kw_emb,
+                            Some(term),
+                            k4_per,
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_micros() as u64,
+                            tag_refs,
+                            time_range,
+                        )
+                        .map_err(to_pyerr)?;
                     pass4_item_hits.extend(hits);
                 }
             }
 
             // Search each broad keyword individually (category terms)
             if let Some(ref kw_str) = broad_keywords {
-                let terms: Vec<&str> = kw_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
-                if debug { eprintln!("[pass4] Searching {} broad keywords individually", terms.len()); }
+                let terms: Vec<&str> = kw_str
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if debug {
+                    eprintln!(
+                        "[pass4] Searching {} broad keywords individually",
+                        terms.len()
+                    );
+                }
                 for term in &terms {
                     let kw_emb = if let Some(ref embedder) = self.embedder {
                         embedder.embed(term).map_err(to_pyerr)?
                     } else {
                         hash_embedding(term, 384)
                     };
-                    let hits = db.recall_hybrid_at(
-                        &kw_emb, Some(term), k4_per,
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_micros() as u64,
-                        tag_refs, time_range
-                    ).map_err(to_pyerr)?;
+                    let hits = db
+                        .recall_hybrid_at(
+                            &kw_emb,
+                            Some(term),
+                            k4_per,
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_micros() as u64,
+                            tag_refs,
+                            time_range,
+                        )
+                        .map_err(to_pyerr)?;
                     pass4_broad_hits.extend(hits);
                 }
             }
@@ -555,8 +649,13 @@ impl MenteDB {
             // Normalize broad keywords into category-style terms
             let mut category_terms: Vec<String> = Vec::new();
             if let Some(ref kw_str) = broad_keywords {
-                for term in kw_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    let normalized = term.to_lowercase()
+                for term in kw_str
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                {
+                    let normalized = term
+                        .to_lowercase()
                         .replace(' ', "_")
                         .trim_end_matches('s')
                         .to_string();
@@ -565,8 +664,13 @@ impl MenteDB {
                 }
             }
             if let Some(ref kw_str) = item_keywords {
-                for term in kw_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                    let normalized = term.to_lowercase()
+                for term in kw_str
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                {
+                    let normalized = term
+                        .to_lowercase()
                         .replace(' ', "_")
                         .trim_end_matches('s')
                         .to_string();
@@ -586,12 +690,18 @@ impl MenteDB {
                     if let Ok(node) = db.get_memory(*mid) {
                         // Time filter: skip memories created after question date
                         if let Some(before) = before_us_filter
-                            && node.created_at > before { continue; }
+                            && node.created_at > before
+                        {
+                            continue;
+                        }
                         // Check entity nodes by category attribute
                         if node.tags.iter().any(|t| t.starts_with("entity_name:")) {
-                            if let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
+                            if let Some(mentedb_core::memory::AttributeValue::String(cat)) =
+                                node.attributes.get("category")
+                            {
                                 let cat_lower = cat.to_lowercase();
-                                let cat_parts: Vec<&str> = cat_lower.split(',').map(|s| s.trim()).collect();
+                                let cat_parts: Vec<&str> =
+                                    cat_lower.split(',').map(|s| s.trim()).collect();
                                 for ct in &category_terms {
                                     if cat_parts.contains(&ct.as_str()) {
                                         categorical_hits.push((*mid, 1.0));
@@ -613,8 +723,12 @@ impl MenteDB {
                         }
                     }
                 }
-                if debug { eprintln!("[pass4.5-categorical] Found {} entities + {} facts matching categories {:?}",
-                    found_entities, found_facts, category_terms); }
+                if debug {
+                    eprintln!(
+                        "[pass4.5-categorical] Found {} entities + {} facts matching categories {:?}",
+                        found_entities, found_facts, category_terms
+                    );
+                }
             }
         }
 
@@ -635,7 +749,10 @@ impl MenteDB {
                     if let Ok(node) = db.get_memory(*nid) {
                         // Time filter: skip nodes created after question date
                         if let Some(ref tr) = time_range
-                            && node.created_at > tr.1 { continue; }
+                            && node.created_at > tr.1
+                        {
+                            continue;
+                        }
                         if node.tags.iter().any(|t| t.starts_with("entity_name:")) {
                             let sim = cosine_similarity(seed_emb, &node.embedding);
                             if sim > 0.3 {
@@ -644,23 +761,28 @@ impl MenteDB {
                         }
                     }
                 }
-                entity_sims.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                entity_sims
+                    .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                 entity_sims.truncate(5); // Top 5 seed entities
 
                 // BFS depth 2 with activation decay
                 let decay = 0.85f32;
                 let threshold = 0.3f32;
-                let mut visited: std::collections::HashSet<MemoryId> = std::collections::HashSet::new();
-                let mut frontier: Vec<(MemoryId, f32)> = entity_sims.iter()
-                    .map(|(id, sim)| (*id, *sim))
-                    .collect();
+                let mut visited: std::collections::HashSet<MemoryId> =
+                    std::collections::HashSet::new();
+                let mut frontier: Vec<(MemoryId, f32)> =
+                    entity_sims.iter().map(|(id, sim)| (*id, *sim)).collect();
 
                 for _depth in 0..2 {
                     let mut next_frontier: Vec<(MemoryId, f32)> = Vec::new();
                     for (nid, activation) in &frontier {
-                        if !visited.insert(*nid) { continue; }
+                        if !visited.insert(*nid) {
+                            continue;
+                        }
                         let propagated = activation * decay;
-                        if propagated < threshold { continue; }
+                        if propagated < threshold {
+                            continue;
+                        }
                         activation_hits.push((*nid, *activation));
 
                         let neighbors = db.graph().graph().outgoing(*nid);
@@ -680,7 +802,10 @@ impl MenteDB {
                 }
 
                 if debug && !activation_hits.is_empty() {
-                    eprintln!("[search] Spreading activation found {} nodes", activation_hits.len());
+                    eprintln!(
+                        "[search] Spreading activation found {} nodes",
+                        activation_hits.len()
+                    );
                 }
             }
         }
@@ -704,21 +829,30 @@ impl MenteDB {
                 let words: Vec<&str> = query_lower.split_whitespace().collect();
                 for i in 0..words.len() {
                     if let Ok(n) = words[i].parse::<u64>()
-                        && i + 1 < words.len() {
-                            let unit = words[i + 1].trim_end_matches('?');
-                            if unit.starts_with("day") {
-                                offset_us = Some(n * day_us);
-                            } else if unit.starts_with("week") {
-                                offset_us = Some(n * week_us);
-                            } else if unit.starts_with("month") {
-                                offset_us = Some(n * 30 * day_us);
-                            }
+                        && i + 1 < words.len()
+                    {
+                        let unit = words[i + 1].trim_end_matches('?');
+                        if unit.starts_with("day") {
+                            offset_us = Some(n * day_us);
+                        } else if unit.starts_with("week") {
+                            offset_us = Some(n * week_us);
+                        } else if unit.starts_with("month") {
+                            offset_us = Some(n * 30 * day_us);
                         }
+                    }
                 }
 
                 // "last Saturday/Sunday/etc." → ~1 week ago
                 if offset_us.is_none() && query_lower.contains("last") {
-                    for day_name in &["saturday", "sunday", "monday", "tuesday", "wednesday", "thursday", "friday"] {
+                    for day_name in &[
+                        "saturday",
+                        "sunday",
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday",
+                    ] {
                         if query_lower.contains(day_name) {
                             offset_us = Some(week_us); // approximate: last [day] ≈ 1 week ago
                             break;
@@ -730,7 +864,9 @@ impl MenteDB {
                 if offset_us.is_none() {
                     if query_lower.contains("a week ago") || query_lower.contains("one week ago") {
                         offset_us = Some(week_us);
-                    } else if query_lower.contains("a month ago") || query_lower.contains("one month ago") {
+                    } else if query_lower.contains("a month ago")
+                        || query_lower.contains("one month ago")
+                    {
                         offset_us = Some(30 * day_us);
                     } else if query_lower.contains("two weeks ago") {
                         offset_us = Some(2 * week_us);
@@ -746,7 +882,9 @@ impl MenteDB {
                     let window_end = std::cmp::min(target + window_margin, before_us);
                     let window_range = Some((window_start, window_end));
 
-                    if debug { eprintln!("[temporal_window] target={}, window=±5 days", target); }
+                    if debug {
+                        eprintln!("[temporal_window] target={}, window=±5 days", target);
+                    }
 
                     // Semantic search within the time window
                     let window_emb = if let Some(ref embedder) = self.embedder {
@@ -754,16 +892,26 @@ impl MenteDB {
                     } else {
                         hash_embedding(query, 384)
                     };
-                    let window_hits = db.recall_hybrid_at(
-                        &window_emb, Some(query), 20,
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_micros() as u64,
-                        tag_refs, window_range
-                    ).map_err(to_pyerr)?;
+                    let window_hits = db
+                        .recall_hybrid_at(
+                            &window_emb,
+                            Some(query),
+                            20,
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_micros() as u64,
+                            tag_refs,
+                            window_range,
+                        )
+                        .map_err(to_pyerr)?;
                     temporal_window_hits = window_hits;
-                    if debug { eprintln!("[temporal_window] Found {} memories in window", temporal_window_hits.len()); }
+                    if debug {
+                        eprintln!(
+                            "[temporal_window] Found {} memories in window",
+                            temporal_window_hits.len()
+                        );
+                    }
                 }
 
                 // For ordering queries with "past X months" pattern, do a wide window search
@@ -782,9 +930,10 @@ impl MenteDB {
                                 _ => num_word.parse().ok(),
                             };
                             if let Some(months) = n
-                                && words[i + 2].starts_with("month") {
-                                    range_months = Some(months);
-                                }
+                                && words[i + 2].starts_with("month")
+                            {
+                                range_months = Some(months);
+                            }
                         }
                     }
 
@@ -796,16 +945,27 @@ impl MenteDB {
                         } else {
                             hash_embedding(query, 384)
                         };
-                        let wide_hits = db.recall_hybrid_at(
-                            &wide_emb, Some(query), 30,
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_micros() as u64,
-                            tag_refs, wide_range
-                        ).map_err(to_pyerr)?;
+                        let wide_hits = db
+                            .recall_hybrid_at(
+                                &wide_emb,
+                                Some(query),
+                                30,
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_micros() as u64,
+                                tag_refs,
+                                wide_range,
+                            )
+                            .map_err(to_pyerr)?;
                         temporal_window_hits.extend(wide_hits);
-                        if debug { eprintln!("[temporal_window] Ordering wide search: {} months, {} hits", months, temporal_window_hits.len()); }
+                        if debug {
+                            eprintln!(
+                                "[temporal_window] Ordering wide search: {} months, {} hits",
+                                months,
+                                temporal_window_hits.len()
+                            );
+                        }
                     }
                 }
             }
@@ -855,34 +1015,44 @@ impl MenteDB {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
-                    .as_micros() as u64
+                    .as_micros() as u64,
             );
 
             for (id_str, score) in merged.iter_mut() {
                 if let Ok(mem_id) = parse_memory_id(id_str)
-                    && let Ok(node) = db.get_memory(mem_id) {
-                        if is_knowledge_update {
-                            // Knowledge-update: prefer most recent version of a fact
-                            let recency = if before_us > 0 {
-                                (node.created_at as f64 / before_us as f64).min(1.0) as f32
-                            } else { 0.0 };
-                            *score += recency * 0.015;
-                        }
-
-                        // Temporal proximity: if we have a target date, boost memories near it
-                        if let Some(target) = temporal_target_us {
-                            let dist = node.created_at.abs_diff(target);
-                            let day_us: u64 = 86_400_000_000;
-                            let days_away = dist as f64 / day_us as f64;
-                            // Gaussian-like proximity: max boost at 0 days, decays to ~0 at 14 days
-                            let proximity = (-days_away * days_away / 50.0).exp() as f32;
-                            *score += proximity * 0.02;
-                        }
+                    && let Ok(node) = db.get_memory(mem_id)
+                {
+                    if is_knowledge_update {
+                        // Knowledge-update: prefer most recent version of a fact
+                        let recency = if before_us > 0 {
+                            (node.created_at as f64 / before_us as f64).min(1.0) as f32
+                        } else {
+                            0.0
+                        };
+                        *score += recency * 0.015;
                     }
+
+                    // Temporal proximity: if we have a target date, boost memories near it
+                    if let Some(target) = temporal_target_us {
+                        let dist = node.created_at.abs_diff(target);
+                        let day_us: u64 = 86_400_000_000;
+                        let days_away = dist as f64 / day_us as f64;
+                        // Gaussian-like proximity: max boost at 0 days, decays to ~0 at 14 days
+                        let proximity = (-days_away * days_away / 50.0).exp() as f32;
+                        *score += proximity * 0.02;
+                    }
+                }
             }
             // Re-sort after boost
-            merged.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            if debug { eprintln!("[proximity] Applied temporal proximity boost (target={:?})", temporal_target_us); }
+            merged.sort_unstable_by(|a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            if debug {
+                eprintln!(
+                    "[proximity] Applied temporal proximity boost (target={:?})",
+                    temporal_target_us
+                );
+            }
         }
 
         // Counting queries need more results to ensure completeness
@@ -895,38 +1065,45 @@ impl MenteDB {
         let mut expanded: Vec<(String, f32)> = Vec::with_capacity(merged.len() * 2);
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         for (id_str, score) in &merged {
-            if seen.contains(id_str) { continue; }
+            if seen.contains(id_str) {
+                continue;
+            }
             seen.insert(id_str.clone());
             expanded.push((id_str.clone(), *score));
 
             // Check if this is an entity node — if so, traverse graph
             if let Ok(mem_id) = parse_memory_id(id_str)
-                && let Ok(node) = db.get_memory(mem_id) {
-                    let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
-                    if is_entity {
-                        // Get subgraph (depth 1) to find PartOf neighbors
-                        let (neighbor_ids, edges) = db.graph().get_context_subgraph(mem_id, 1);
-                        // Hebbian learning: strengthen traversed edges
-                        for edge in &edges {
-                            db.graph().strengthen_edge(edge.source, edge.target, 0.02);
-                        }
-                        for nid in neighbor_ids {
-                            let nid_str = nid.to_string();
-                            if !seen.contains(&nid_str) {
-                                // Time filter: skip neighbors created after question date
-                                if let Some(ref tr) = time_range
-                                    && let Ok(nnode) = db.get_memory(nid)
-                                        && nnode.created_at > tr.1 { continue; }
-                                seen.insert(nid_str.clone());
-                                // Entity neighbors get a slightly lower score
-                                expanded.push((nid_str, score * 0.9));
+                && let Ok(node) = db.get_memory(mem_id)
+            {
+                let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
+                if is_entity {
+                    // Get subgraph (depth 1) to find PartOf neighbors
+                    let (neighbor_ids, edges) = db.graph().get_context_subgraph(mem_id, 1);
+                    // Hebbian learning: strengthen traversed edges
+                    for edge in &edges {
+                        db.graph().strengthen_edge(edge.source, edge.target, 0.02);
+                    }
+                    for nid in neighbor_ids {
+                        let nid_str = nid.to_string();
+                        if !seen.contains(&nid_str) {
+                            // Time filter: skip neighbors created after question date
+                            if let Some(ref tr) = time_range
+                                && let Ok(nnode) = db.get_memory(nid)
+                                && nnode.created_at > tr.1
+                            {
+                                continue;
                             }
+                            seen.insert(nid_str.clone());
+                            // Entity neighbors get a slightly lower score
+                            expanded.push((nid_str, score * 0.9));
                         }
                     }
                 }
+            }
         }
         // Re-sort after expansion and truncate
-        expanded.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        expanded
+            .sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         expanded.truncate(final_k);
 
         // --- Pass 5: Iterative gap analysis (counting queries only) ---
@@ -939,16 +1116,21 @@ impl MenteDB {
             let mut found_items: Vec<String> = Vec::new();
             for (id_str, _) in expanded.iter().take(gap_limit) {
                 if let Ok(mem_id) = parse_memory_id(id_str)
-                    && let Ok(node) = db.get_memory(mem_id) {
-                        let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
-                        let is_community = node.tags.iter().any(|t| t == "community_summary");
-                        if is_entity || is_community { continue; }
-                        found_items.push(node.content.clone());
+                    && let Ok(node) = db.get_memory(mem_id)
+                {
+                    let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
+                    let is_community = node.tags.iter().any(|t| t == "community_summary");
+                    if is_entity || is_community {
+                        continue;
                     }
+                    found_items.push(node.content.clone());
+                }
             }
 
             if !found_items.is_empty() {
-                let items_text = found_items.iter().enumerate()
+                let items_text = found_items
+                    .iter()
+                    .enumerate()
                     .map(|(i, c)| {
                         let snip = &c[..std::cmp::min(c.len(), 200)];
                         format!("[{}] {}", i, snip)
@@ -975,12 +1157,24 @@ impl MenteDB {
 
                 match rt.block_on(http_provider.call_with_retry(&gap_prompt, gap_system)) {
                     Ok(response) => {
-                        let cleaned = response.trim().trim_start_matches("```json").trim_end_matches("```").trim();
+                        let cleaned = response
+                            .trim()
+                            .trim_start_matches("```json")
+                            .trim_end_matches("```")
+                            .trim();
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(cleaned) {
-                            if let Some(gap_kw) = json.get("gap_keywords").and_then(|v| v.as_str()) {
-                                let gap_terms: Vec<&str> = gap_kw.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                            if let Some(gap_kw) = json.get("gap_keywords").and_then(|v| v.as_str())
+                            {
+                                let gap_terms: Vec<&str> = gap_kw
+                                    .split(',')
+                                    .map(|s| s.trim())
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
                                 if debug {
-                                    let found = json.get("found").map(|v| v.to_string()).unwrap_or_default();
+                                    let found = json
+                                        .get("found")
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_default();
                                     eprintln!("[pass5-gap] Found: {}", found);
                                     eprintln!("[pass5-gap] Gap keywords: {:?}", gap_terms);
                                 }
@@ -995,43 +1189,64 @@ impl MenteDB {
                                         } else {
                                             hash_embedding(term, 384)
                                         };
-                                        let hits = db.recall_hybrid_at(
-                                            &kw_emb, Some(term), k5_per,
-                                            std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_micros() as u64,
-                                            tag_refs, time_range
-                                        ).map_err(to_pyerr)?;
+                                        let hits = db
+                                            .recall_hybrid_at(
+                                                &kw_emb,
+                                                Some(term),
+                                                k5_per,
+                                                std::time::SystemTime::now()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_micros()
+                                                    as u64,
+                                                tag_refs,
+                                                time_range,
+                                            )
+                                            .map_err(to_pyerr)?;
                                         for (id, score) in hits {
                                             let id_str = id.to_string();
                                             pass5_hits.push((id_str, score));
                                         }
                                     }
 
-                                    if debug { eprintln!("[pass5-gap] Round 2 retrieved {} hits from {} gap keywords", pass5_hits.len(), gap_terms.len()); }
+                                    if debug {
+                                        eprintln!(
+                                            "[pass5-gap] Round 2 retrieved {} hits from {} gap keywords",
+                                            pass5_hits.len(),
+                                            gap_terms.len()
+                                        );
+                                    }
 
                                     // Merge Round 2 into expanded results with full RRF weight
                                     // (these are targeted, high-signal searches)
-                                    let mut existing_scores: HashMap<String, f32> = expanded.iter()
-                                        .map(|(id, s)| (id.clone(), *s))
-                                        .collect();
+                                    let mut existing_scores: HashMap<String, f32> =
+                                        expanded.iter().map(|(id, s)| (id.clone(), *s)).collect();
                                     for (rank, (id_str, _)) in pass5_hits.iter().enumerate() {
                                         let rrf_contrib = 1.0 / (rrf_k + rank as f32);
-                                        *existing_scores.entry(id_str.clone()).or_insert(0.0) += rrf_contrib;
+                                        *existing_scores.entry(id_str.clone()).or_insert(0.0) +=
+                                            rrf_contrib;
                                     }
 
                                     // Rebuild expanded from merged scores
                                     expanded = existing_scores.into_iter().collect();
-                                    expanded.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                                    expanded.sort_unstable_by(|a, b| {
+                                        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                                    });
                                     expanded.truncate(final_k);
                                 }
                             }
                         } else if debug {
-                            eprintln!("[pass5-gap] Failed to parse gap analysis response: {}", cleaned);
+                            eprintln!(
+                                "[pass5-gap] Failed to parse gap analysis response: {}",
+                                cleaned
+                            );
                         }
                     }
-                    Err(e) => if debug { eprintln!("[pass5-gap] LLM call failed: {e}"); },
+                    Err(e) => {
+                        if debug {
+                            eprintln!("[pass5-gap] LLM call failed: {e}");
+                        }
+                    }
                 }
             }
         }
@@ -1050,22 +1265,31 @@ impl MenteDB {
         // The original retrieval order is preserved for positions [1..N].
         if !expanded.is_empty() {
             // --- Phase 1: Score memories for synthesis selection ---
-            if debug { eprintln!("[rerank] Starting cognitive re-ranking for {} results", expanded.len()); }
+            if debug {
+                eprintln!(
+                    "[rerank] Starting cognitive re-ranking for {} results",
+                    expanded.len()
+                );
+            }
             let rerank_limit = std::cmp::min(expanded.len(), 30);
             let mut memory_contents: Vec<(String, String)> = Vec::new(); // (id, content)
             for (id_str, _score) in expanded.iter().take(rerank_limit) {
                 if let Ok(mem_id) = parse_memory_id(id_str)
-                    && let Ok(node) = db.get_memory(mem_id) {
-                        // Skip entity/community nodes from reranker — they duplicate facts
-                        let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
-                        let is_community = node.tags.iter().any(|t| t == "community_summary");
-                        if is_entity || is_community { continue; }
-                        memory_contents.push((id_str.clone(), node.content.clone()));
+                    && let Ok(node) = db.get_memory(mem_id)
+                {
+                    // Skip entity/community nodes from reranker — they duplicate facts
+                    let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
+                    let is_community = node.tags.iter().any(|t| t == "community_summary");
+                    if is_entity || is_community {
+                        continue;
                     }
+                    memory_contents.push((id_str.clone(), node.content.clone()));
+                }
             }
 
             // Collect IDs that the re-ranker considers relevant (score >= 1)
-            let mut reranker_picks: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut reranker_picks: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
 
             if !memory_contents.is_empty() {
                 let mut memories_text = String::new();
@@ -1085,7 +1309,10 @@ impl MenteDB {
                          IMPORTANT: Score {} memories. Any memory mentioning a specific named item \
                          in the category being counted MUST score >= 7.\n\n\
                          Return ONLY a JSON array of {} integer scores, e.g. [8, 2, 10, 0, ...]",
-                        query, memories_text, memory_contents.len(), memory_contents.len()
+                        query,
+                        memories_text,
+                        memory_contents.len(),
+                        memory_contents.len()
                     )
                 } else {
                     format!(
@@ -1096,47 +1323,91 @@ impl MenteDB {
                          - 5 = provides useful supporting context\n\
                          - 0 = clearly unrelated\n\n\
                          Return ONLY a JSON array of {} integer scores, e.g. [8, 2, 10, 0, ...]",
-                        query, memories_text, memory_contents.len()
+                        query,
+                        memories_text,
+                        memory_contents.len()
                     )
                 };
                 let rerank_system = "You are a relevance scorer. Return ONLY a JSON array of integer scores 0-10, one score per memory in order. No explanation, no text outside the array.";
 
-                match rt.block_on(http_provider.call_text_with_retry(&rerank_prompt, rerank_system)) {
+                match rt.block_on(http_provider.call_text_with_retry(&rerank_prompt, rerank_system))
+                {
                     Ok(response) => {
-                        if debug { eprintln!("[rerank] LLM response: {}", response.trim()); }
+                        if debug {
+                            eprintln!("[rerank] LLM response: {}", response.trim());
+                        }
                         let trimmed = response.trim();
                         let array_str = if let Some(start) = trimmed.find('[') {
                             if let Some(end) = trimmed.rfind(']') {
                                 &trimmed[start..=end]
-                            } else { trimmed }
-                        } else { trimmed };
+                            } else {
+                                trimmed
+                            }
+                        } else {
+                            trimmed
+                        };
 
                         match serde_json::from_str::<Vec<f32>>(array_str) {
                             Ok(mut scores) => {
                                 // Pad or truncate to match memory count
                                 scores.resize(memory_contents.len(), 0.0);
-                                if debug { eprintln!("[rerank] Parsed {} scores (adjusted to {}): {:?}", scores.len(), memory_contents.len(), scores); }
+                                if debug {
+                                    eprintln!(
+                                        "[rerank] Parsed {} scores (adjusted to {}): {:?}",
+                                        scores.len(),
+                                        memory_contents.len(),
+                                        scores
+                                    );
+                                }
                                 for (i, (id, content)) in memory_contents.iter().enumerate() {
                                     let relevance = scores.get(i).copied().unwrap_or(0.0);
                                     let snip = &content[..std::cmp::min(content.len(), 80)];
-                                    if debug { eprintln!("[rerank]   [{}] score={} | {}", i, relevance, snip); }
+                                    if debug {
+                                        eprintln!(
+                                            "[rerank]   [{}] score={} | {}",
+                                            i, relevance, snip
+                                        );
+                                    }
                                     if relevance >= 1.0 {
                                         reranker_picks.insert(id.clone());
                                     }
                                 }
-                                if debug { eprintln!("[rerank] Selected {} memories for synthesis", reranker_picks.len()); }
+                                if debug {
+                                    eprintln!(
+                                        "[rerank] Selected {} memories for synthesis",
+                                        reranker_picks.len()
+                                    );
+                                }
                             }
-                            Err(e) => if debug { eprintln!("[rerank] Failed to parse scores: {e}"); },
+                            Err(e) => {
+                                if debug {
+                                    eprintln!("[rerank] Failed to parse scores: {e}");
+                                }
+                            }
                         }
                     }
-                    Err(e) => if debug { eprintln!("[rerank] LLM call failed: {e}"); },
+                    Err(e) => {
+                        if debug {
+                            eprintln!("[rerank] LLM call failed: {e}");
+                        }
+                    }
                 }
             }
 
             // --- Phase 2: Reconstructive synthesis ---
             // Feed UNION of: (a) re-ranker picks + (b) top-K by original retrieval score.
             // This ensures nothing is lost even if the re-ranker misscores items.
-            let retrieval_top_k = if is_temporal { std::cmp::min(expanded.len(), 50) } else if is_counting { std::cmp::min(expanded.len(), 40) } else if is_preference { std::cmp::min(expanded.len(), 35) } else if is_knowledge_update { std::cmp::min(expanded.len(), 30) } else { std::cmp::min(expanded.len(), 20) };
+            let retrieval_top_k = if is_temporal {
+                std::cmp::min(expanded.len(), 50)
+            } else if is_counting {
+                std::cmp::min(expanded.len(), 40)
+            } else if is_preference {
+                std::cmp::min(expanded.len(), 35)
+            } else if is_knowledge_update {
+                std::cmp::min(expanded.len(), 30)
+            } else {
+                std::cmp::min(expanded.len(), 20)
+            };
             let mut synth_ids: Vec<String> = Vec::new();
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -1153,28 +1424,51 @@ impl MenteDB {
                 }
             }
 
-            if debug { eprintln!("[synthesis] Feeding {} memories ({} from reranker + {} from retrieval top-{})",
-                synth_ids.len(), reranker_picks.len(), synth_ids.len() - reranker_picks.len(), retrieval_top_k); }
+            if debug {
+                eprintln!(
+                    "[synthesis] Feeding {} memories ({} from reranker + {} from retrieval top-{})",
+                    synth_ids.len(),
+                    reranker_picks.len(),
+                    synth_ids.len() - reranker_picks.len(),
+                    retrieval_top_k
+                );
+            }
 
             // --- Detect multi-session and question category ---
-            let mut session_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut session_set: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             for id_str in &synth_ids {
                 if let Ok(mem_id) = parse_memory_id(id_str)
-                    && let Ok(node) = db.get_memory(mem_id) {
-                        for t in &node.tags {
-                            if let Some(s) = t.strip_prefix("session:") {
-                                session_set.insert(s.to_string());
-                            }
+                    && let Ok(node) = db.get_memory(mem_id)
+                {
+                    for t in &node.tags {
+                        if let Some(s) = t.strip_prefix("session:") {
+                            session_set.insert(s.to_string());
                         }
                     }
+                }
             }
             let is_multi_session = session_set.len() > 3;
 
             // Per-category evidence budget (max items to feed to reader)
-            let evidence_budget: usize = if is_multi_session { 40 } else if is_temporal { 50 } else if is_preference { 35 } else if is_knowledge_update { 25 } else { 20 };
+            let evidence_budget: usize = if is_multi_session {
+                40
+            } else if is_temporal {
+                50
+            } else if is_preference {
+                35
+            } else if is_knowledge_update {
+                25
+            } else {
+                20
+            };
 
-            if debug { eprintln!("[synthesis] multi_session={}, temporal={}, ku={}, budget={}",
-                is_multi_session, is_temporal, is_knowledge_update, evidence_budget); }
+            if debug {
+                eprintln!(
+                    "[synthesis] multi_session={}, temporal={}, ku={}, budget={}",
+                    is_multi_session, is_temporal, is_knowledge_update, evidence_budget
+                );
+            }
 
             // Build evidence with session date labels and assistant filtering
             #[allow(dead_code)]
@@ -1187,47 +1481,60 @@ impl MenteDB {
             let mut evidence_items: Vec<EvidenceItem> = Vec::new();
             for id_str in &synth_ids {
                 if let Ok(mem_id) = parse_memory_id(id_str)
-                    && let Ok(node) = db.get_memory(mem_id) {
-                        let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
-                        let is_community = node.tags.iter().any(|t| t == "community_summary");
-                        if is_entity || is_community { continue; }
+                    && let Ok(node) = db.get_memory(mem_id)
+                {
+                    let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
+                    let is_community = node.tags.iter().any(|t| t == "community_summary");
+                    if is_entity || is_community {
+                        continue;
+                    }
 
-                        let is_assistant_turn = node.tags.iter().any(|t| t == "turn:assistant");
+                    let is_assistant_turn = node.tags.iter().any(|t| t == "turn:assistant");
 
-                        // For multi-session: filter out assistant turns (they drown out user facts)
-                        if is_multi_session && is_assistant_turn { continue; }
+                    // For multi-session: filter out assistant turns (they drown out user facts)
+                    if is_multi_session && is_assistant_turn {
+                        continue;
+                    }
 
-                        // Time filter: skip memories created after the question date
-                        if let Some(ref tr) = time_range
-                            && node.created_at > tr.1 && !node.tags.iter().any(|t| t.starts_with("date:")) {
-                                continue;
-                            }
+                    // Time filter: skip memories created after the question date
+                    if let Some(ref tr) = time_range
+                        && node.created_at > tr.1
+                        && !node.tags.iter().any(|t| t.starts_with("date:"))
+                    {
+                        continue;
+                    }
 
-                        let session = node.tags.iter()
-                            .find_map(|t| t.strip_prefix("session:").map(|s| s.to_string()))
-                            .unwrap_or_default();
-                        let raw_date = node.tags.iter()
-                            .find_map(|t| t.strip_prefix("date:").map(|s| s.to_string()))
-                            .or_else(|| format_timestamp_date(node.created_at))
-                            .unwrap_or_default();
-                        // Suppress dates that are obviously wrong (after question date)
-                        let date = if let Some(ref tr) = time_range {
-                            if node.created_at > tr.1 && !node.tags.iter().any(|t| t.starts_with("date:")) {
-                                String::new() // Don't show phantom future dates
-                            } else {
-                                raw_date
-                            }
+                    let session = node
+                        .tags
+                        .iter()
+                        .find_map(|t| t.strip_prefix("session:").map(|s| s.to_string()))
+                        .unwrap_or_default();
+                    let raw_date = node
+                        .tags
+                        .iter()
+                        .find_map(|t| t.strip_prefix("date:").map(|s| s.to_string()))
+                        .or_else(|| format_timestamp_date(node.created_at))
+                        .unwrap_or_default();
+                    // Suppress dates that are obviously wrong (after question date)
+                    let date = if let Some(ref tr) = time_range {
+                        if node.created_at > tr.1
+                            && !node.tags.iter().any(|t| t.starts_with("date:"))
+                        {
+                            String::new() // Don't show phantom future dates
                         } else {
                             raw_date
-                        };
+                        }
+                    } else {
+                        raw_date
+                    };
 
-                        evidence_items.push(EvidenceItem {
-                            session,
-                            date,
-                            content: node.content.clone(),
-                            is_assistant_turn,
-                        });
-                    }
+                    evidence_items.push(EvidenceItem {
+                        session,
+                        date,
+                        content: node.content.clone(),
+                        is_assistant_turn,
+                    });
+                }
             }
 
             // Sort chronologically for temporal/KU queries so the LLM sees events in time order
@@ -1248,12 +1555,18 @@ impl MenteDB {
                         synth_contents.push(format!("--- [Session: {}] ---", item.date));
                     }
                 }
-                let prefix = if !item.date.is_empty() { format!("[{}] ", item.date) } else { String::new() };
+                let prefix = if !item.date.is_empty() {
+                    format!("[{}] ", item.date)
+                } else {
+                    String::new()
+                };
                 synth_contents.push(format!("{}{}", prefix, item.content));
             }
 
             if !synth_contents.is_empty() {
-                let evidence = synth_contents.iter().enumerate()
+                let evidence = synth_contents
+                    .iter()
+                    .enumerate()
                     .map(|(i, c)| format!("[{}] {}", i, c))
                     .collect::<Vec<_>>()
                     .join("\n");
@@ -1269,65 +1582,142 @@ impl MenteDB {
                     // Scan entity nodes in our result set for structured attributes
                     for id_str in &synth_ids {
                         if let Ok(mem_id) = parse_memory_id(id_str)
-                            && let Ok(node) = db.get_memory(mem_id) {
-                                let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
-                                if !is_entity { continue; }
+                            && let Ok(node) = db.get_memory(mem_id)
+                        {
+                            let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
+                            if !is_entity {
+                                continue;
+                            }
 
-                                let name = node.attributes.get("entity_name")
-                                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
-                                    .unwrap_or_default();
-                                let relationship = node.attributes.get("relationship")
-                                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
-                                    .unwrap_or_else(|| "unknown".to_string());
-                                let etype = node.attributes.get("entity_type")
-                                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
-                                    .unwrap_or_default();
-
-                                // Build details from other attributes
-                                let mut details = Vec::new();
-                                for (k, v) in &node.attributes {
-                                    if k == "entity_name" || k == "entity_type" || k == "relationship" || k == "category" || k == "relationship_owner" { continue; }
-                                    if let mentedb_core::memory::AttributeValue::String(s) = v {
-                                        details.push(format!("{}: {}", k, s));
+                            let name = node
+                                .attributes
+                                .get("entity_name")
+                                .and_then(|v| match v {
+                                    mentedb_core::memory::AttributeValue::String(s) => {
+                                        Some(s.clone())
                                     }
+                                    _ => None,
+                                })
+                                .unwrap_or_default();
+                            let relationship = node
+                                .attributes
+                                .get("relationship")
+                                .and_then(|v| match v {
+                                    mentedb_core::memory::AttributeValue::String(s) => {
+                                        Some(s.clone())
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or_else(|| "unknown".to_string());
+                            let etype = node
+                                .attributes
+                                .get("entity_type")
+                                .and_then(|v| match v {
+                                    mentedb_core::memory::AttributeValue::String(s) => {
+                                        Some(s.clone())
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or_default();
+
+                            // Build details from other attributes
+                            let mut details = Vec::new();
+                            for (k, v) in &node.attributes {
+                                if k == "entity_name"
+                                    || k == "entity_type"
+                                    || k == "relationship"
+                                    || k == "category"
+                                    || k == "relationship_owner"
+                                {
+                                    continue;
                                 }
-                                let owner_info = node.attributes.get("relationship_owner")
-                                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None });
-
-                                let detail_str = if details.is_empty() { etype } else { format!("{}, {}", etype, details.join(", ")) };
-                                let rel_str = if let Some(owner) = owner_info {
-                                    format!("{} ({})", relationship, owner)
-                                } else {
-                                    relationship.clone()
-                                };
-
-                                if !name.is_empty() {
-                                    graph_entities.push((name, rel_str, detail_str));
+                                if let mentedb_core::memory::AttributeValue::String(s) = v {
+                                    details.push(format!("{}: {}", k, s));
                                 }
                             }
+                            let owner_info =
+                                node.attributes
+                                    .get("relationship_owner")
+                                    .and_then(|v| match v {
+                                        mentedb_core::memory::AttributeValue::String(s) => {
+                                            Some(s.clone())
+                                        }
+                                        _ => None,
+                                    });
+
+                            let detail_str = if details.is_empty() {
+                                etype
+                            } else {
+                                format!("{}, {}", etype, details.join(", "))
+                            };
+                            let rel_str = if let Some(owner) = owner_info {
+                                format!("{} ({})", relationship, owner)
+                            } else {
+                                relationship.clone()
+                            };
+
+                            if !name.is_empty() {
+                                graph_entities.push((name, rel_str, detail_str));
+                            }
+                        }
                     }
 
                     // Also scan the full graph for entity nodes we might have missed
                     // by looking at entity nodes connected to found memories via PartOf edges
-                    let already_found: std::collections::HashSet<String> = graph_entities.iter().map(|(n, _, _)| n.to_lowercase()).collect();
+                    let already_found: std::collections::HashSet<String> = graph_entities
+                        .iter()
+                        .map(|(n, _, _)| n.to_lowercase())
+                        .collect();
                     for id_str in &synth_ids {
                         if let Ok(mem_id) = parse_memory_id(id_str) {
                             // Check outgoing edges for PartOf connections to entity nodes
                             let neighbors = db.graph().graph().outgoing(mem_id);
                             for (neighbor_id, stored_edge) in neighbors {
-                                if stored_edge.edge_type != EdgeType::PartOf { continue; }
+                                if stored_edge.edge_type != EdgeType::PartOf {
+                                    continue;
+                                }
                                 if let Ok(neighbor_node) = db.get_memory(neighbor_id) {
-                                    let is_entity = neighbor_node.tags.iter().any(|t| t.starts_with("entity_name:"));
-                                    if !is_entity { continue; }
-                                    let name = neighbor_node.attributes.get("entity_name")
-                                        .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                                    let is_entity = neighbor_node
+                                        .tags
+                                        .iter()
+                                        .any(|t| t.starts_with("entity_name:"));
+                                    if !is_entity {
+                                        continue;
+                                    }
+                                    let name = neighbor_node
+                                        .attributes
+                                        .get("entity_name")
+                                        .and_then(|v| match v {
+                                            mentedb_core::memory::AttributeValue::String(s) => {
+                                                Some(s.clone())
+                                            }
+                                            _ => None,
+                                        })
                                         .unwrap_or_default();
-                                    if name.is_empty() || already_found.contains(&name.to_lowercase()) { continue; }
-                                    let relationship = neighbor_node.attributes.get("relationship")
-                                        .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                                    if name.is_empty()
+                                        || already_found.contains(&name.to_lowercase())
+                                    {
+                                        continue;
+                                    }
+                                    let relationship = neighbor_node
+                                        .attributes
+                                        .get("relationship")
+                                        .and_then(|v| match v {
+                                            mentedb_core::memory::AttributeValue::String(s) => {
+                                                Some(s.clone())
+                                            }
+                                            _ => None,
+                                        })
                                         .unwrap_or_else(|| "unknown".to_string());
-                                    let etype = neighbor_node.attributes.get("entity_type")
-                                        .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                                    let etype = neighbor_node
+                                        .attributes
+                                        .get("entity_type")
+                                        .and_then(|v| match v {
+                                            mentedb_core::memory::AttributeValue::String(s) => {
+                                                Some(s.clone())
+                                            }
+                                            _ => None,
+                                        })
                                         .unwrap_or_default();
                                     graph_entities.push((name, relationship, etype));
                                 }
@@ -1337,18 +1727,29 @@ impl MenteDB {
 
                     if !graph_entities.is_empty() {
                         // Compute graph-based count: items where user directly owns/uses/attends
-                        let user_owned: Vec<&(String, String, String)> = graph_entities.iter()
+                        let user_owned: Vec<&(String, String, String)> = graph_entities
+                            .iter()
                             .filter(|(_, rel, _)| {
                                 let r = rel.to_lowercase();
-                                !r.contains("someone_else") && !r.contains("considering") &&
-                                !r.contains("wants") && !r.contains("previously") &&
-                                (r.contains("owns") || r.contains("uses") || r.contains("attends") ||
-                                 r.contains("plays") || r.contains("member") || r == "unknown")
+                                !r.contains("someone_else")
+                                    && !r.contains("considering")
+                                    && !r.contains("wants")
+                                    && !r.contains("previously")
+                                    && (r.contains("owns")
+                                        || r.contains("uses")
+                                        || r.contains("attends")
+                                        || r.contains("plays")
+                                        || r.contains("member")
+                                        || r == "unknown")
                             })
                             .collect();
                         graph_count = Some(user_owned.len());
                         if debug {
-                            eprintln!("[graph-synthesis] Found {} entities, {} user-owned:", graph_entities.len(), user_owned.len());
+                            eprintln!(
+                                "[graph-synthesis] Found {} entities, {} user-owned:",
+                                graph_entities.len(),
+                                user_owned.len()
+                            );
                             for (name, rel, det) in &graph_entities {
                                 eprintln!("[graph-synthesis]   {} — {} ({})", name, rel, det);
                             }
@@ -1359,8 +1760,12 @@ impl MenteDB {
                 // Build the synthesis prompt — use graph structure if available
                 let synth_prompt = if let Some(count) = graph_count {
                     // Graph-informed: structured entity list + evidence for verification
-                    let entity_list = graph_entities.iter().enumerate()
-                        .map(|(i, (name, rel, det))| format!("{}. {} ({}) — {}", i + 1, name, det, rel))
+                    let entity_list = graph_entities
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (name, rel, det))| {
+                            format!("{}. {} ({}) — {}", i + 1, name, det, rel)
+                        })
                         .collect::<Vec<_>>()
                         .join("\n");
 
@@ -1447,7 +1852,8 @@ impl MenteDB {
                 };
                 let synth_system = "You recall facts from memory evidence. Be thorough — list every relevant item. When in doubt, include it. NEVER invent facts not in the evidence. Quote numbers exactly, add them up for totals. For temporal questions: find the date of each event in the evidence, show your calculation, then answer. For knowledge-update questions: report the MOST RECENT value. If the topic was never discussed, say so — do not guess.";
 
-                match rt.block_on(synth_provider.call_text_with_retry(&synth_prompt, synth_system)) {
+                match rt.block_on(synth_provider.call_text_with_retry(&synth_prompt, synth_system))
+                {
                     Ok(synthesis) => {
                         let mut final_synthesis = synthesis.trim().to_string();
 
@@ -1480,112 +1886,203 @@ impl MenteDB {
                             );
                             let enum_system = "You enumerate items from evidence as JSON. ONLY include items with explicit evidence support. Quote all numbers exactly. DEDUPLICATE: same item from multiple evidence entries = ONE item. Return ONLY a JSON array.";
 
-                            match rt.block_on(synth_provider.call_text_with_retry(&enum_prompt, enum_system)) {
+                            match rt.block_on(
+                                synth_provider.call_text_with_retry(&enum_prompt, enum_system),
+                            ) {
                                 Ok(enum_response) => {
                                     let trimmed = enum_response.trim();
                                     let array_str = if let Some(start) = trimmed.find('[') {
                                         if let Some(end) = trimmed.rfind(']') {
                                             &trimmed[start..=end]
-                                        } else { trimmed }
-                                    } else { trimmed };
+                                        } else {
+                                            trimmed
+                                        }
+                                    } else {
+                                        trimmed
+                                    };
 
-                                    match serde_json::from_str::<Vec<serde_json::Value>>(array_str) {
+                                    match serde_json::from_str::<Vec<serde_json::Value>>(array_str)
+                                    {
                                         Ok(items) => {
-                                            let qualifying: Vec<&serde_json::Value> = items.iter()
-                                                .filter(|item| item.get("qualifies").and_then(|v| v.as_bool()).unwrap_or(false))
+                                            let qualifying: Vec<&serde_json::Value> = items
+                                                .iter()
+                                                .filter(|item| {
+                                                    item.get("qualifies")
+                                                        .and_then(|v| v.as_bool())
+                                                        .unwrap_or(false)
+                                                })
                                                 .collect();
                                             let enum_count = qualifying.len();
 
                                             if debug {
-                                                eprintln!("[chain-enum] Enumerated {} items, {} qualifying:", items.len(), enum_count);
+                                                eprintln!(
+                                                    "[chain-enum] Enumerated {} items, {} qualifying:",
+                                                    items.len(),
+                                                    enum_count
+                                                );
                                                 for item in &items {
-                                                    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-                                                    let q = item.get("qualifies").and_then(|v| v.as_bool()).unwrap_or(false);
-                                                    let reason = item.get("reason").and_then(|v| v.as_str()).unwrap_or("");
-                                                    eprintln!("[chain-enum]   {} — qualifies={} ({})", name, q, reason);
+                                                    let name = item
+                                                        .get("name")
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("?");
+                                                    let q = item
+                                                        .get("qualifies")
+                                                        .and_then(|v| v.as_bool())
+                                                        .unwrap_or(false);
+                                                    let reason = item
+                                                        .get("reason")
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("");
+                                                    eprintln!(
+                                                        "[chain-enum]   {} — qualifies={} ({})",
+                                                        name, q, reason
+                                                    );
                                                 }
                                             }
 
                                             // If enumeration found 0 items AND no items at all were extracted,
                                             // this is likely an abstention case (topic never discussed)
                                             if enum_count == 0 && items.is_empty() {
-                                                if debug { eprintln!("[chain-enum] Zero items found — abstaining instead of reporting 0"); }
-                                                let query_topic = query.to_lowercase()
-                                                    .replace("how many", "").replace("how much", "")
-                                                    .replace("do i", "").replace("did i", "")
-                                                    .replace("have i", "").replace("?", "").trim().to_string();
+                                                if debug {
+                                                    eprintln!(
+                                                        "[chain-enum] Zero items found — abstaining instead of reporting 0"
+                                                    );
+                                                }
+                                                let query_topic = query
+                                                    .to_lowercase()
+                                                    .replace("how many", "")
+                                                    .replace("how much", "")
+                                                    .replace("do i", "")
+                                                    .replace("did i", "")
+                                                    .replace("have i", "")
+                                                    .replace("?", "")
+                                                    .trim()
+                                                    .to_string();
                                                 final_synthesis = format!(
                                                     "I don't have information about {} in our conversations.",
-                                                    if query_topic.is_empty() { "that topic".to_string() } else { query_topic }
-                                                );
-                                            } else {
-
-                                            // Build verified synthesis with code-counted result
-                                            let item_list = qualifying.iter().enumerate()
-                                                .map(|(i, item)| {
-                                                    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                                                    let reason = item.get("reason").and_then(|v| v.as_str()).unwrap_or("");
-                                                    format!("{}. {} ({})", i + 1, name, reason)
-                                                })
-                                                .collect::<Vec<_>>()
-                                                .join("\n");
-
-                                            // Extract count from initial synthesis to detect disagreement
-                                            let synth_count = {
-                                                let re_nums: Vec<usize> = final_synthesis.split_whitespace()
-                                                    .filter_map(|w| w.trim_matches(|c: char| !c.is_numeric()).parse::<usize>().ok())
-                                                    .collect();
-                                                // Also check word numbers
-                                                let word_nums = [("one", 1), ("two", 2), ("three", 3), ("four", 4), ("five", 5),
-                                                    ("six", 6), ("seven", 7), ("eight", 8), ("nine", 9), ("ten", 10)];
-                                                let synth_lower = final_synthesis.to_lowercase();
-                                                let mut found = re_nums;
-                                                for (word, num) in &word_nums {
-                                                    if synth_lower.contains(word) { found.push(*num); }
-                                                }
-                                                found.first().copied()
-                                            };
-
-                                            // If enumeration disagrees with synthesis, use enumeration.
-                                            // The code-counted enumeration is more reliable than LLM prose counting.
-                                            // AgentMemory's key insight: enumerate first, count from enumeration.
-                                            let synth_disagrees = synth_count.map(|sc| sc != enum_count).unwrap_or(true);
-
-                                            if synth_disagrees || synth_count.is_none() {
-                                                if debug {
-                                                    eprintln!("[chain-enum] Synthesis={:?} vs Enumeration={} — using enumeration",
-                                                        synth_count, enum_count);
-                                                }
-                                                final_synthesis = format!(
-                                                    "Based on the evidence, the answer is {}.\n\n{}\n\nTotal: {}",
-                                                    enum_count, item_list, enum_count
-                                                );
-                                            } else {
-                                                // Agreement — append enumeration for verification
-                                                final_synthesis = format!(
-                                                    "{}\n\n---\nVerified enumeration ({} items):\n{}",
-                                                    final_synthesis, enum_count, item_list
-                                                );
-                                            }
-
-                                            if debug
-                                                && let Some(gc) = graph_count {
-                                                    if gc != enum_count {
-                                                        eprintln!("[dual-path] DISAGREEMENT: graph={} enum={}", gc, enum_count);
+                                                    if query_topic.is_empty() {
+                                                        "that topic".to_string()
                                                     } else {
-                                                        eprintln!("[dual-path] AGREEMENT: graph={} enum={}", gc, enum_count);
+                                                        query_topic
+                                                    }
+                                                );
+                                            } else {
+                                                // Build verified synthesis with code-counted result
+                                                let item_list = qualifying
+                                                    .iter()
+                                                    .enumerate()
+                                                    .map(|(i, item)| {
+                                                        let name = item
+                                                            .get("name")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("unknown");
+                                                        let reason = item
+                                                            .get("reason")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("");
+                                                        format!("{}. {} ({})", i + 1, name, reason)
+                                                    })
+                                                    .collect::<Vec<_>>()
+                                                    .join("\n");
+
+                                                // Extract count from initial synthesis to detect disagreement
+                                                let synth_count = {
+                                                    let re_nums: Vec<usize> = final_synthesis
+                                                        .split_whitespace()
+                                                        .filter_map(|w| {
+                                                            w.trim_matches(|c: char| {
+                                                                !c.is_numeric()
+                                                            })
+                                                            .parse::<usize>()
+                                                            .ok()
+                                                        })
+                                                        .collect();
+                                                    // Also check word numbers
+                                                    let word_nums = [
+                                                        ("one", 1),
+                                                        ("two", 2),
+                                                        ("three", 3),
+                                                        ("four", 4),
+                                                        ("five", 5),
+                                                        ("six", 6),
+                                                        ("seven", 7),
+                                                        ("eight", 8),
+                                                        ("nine", 9),
+                                                        ("ten", 10),
+                                                    ];
+                                                    let synth_lower =
+                                                        final_synthesis.to_lowercase();
+                                                    let mut found = re_nums;
+                                                    for (word, num) in &word_nums {
+                                                        if synth_lower.contains(word) {
+                                                            found.push(*num);
+                                                        }
+                                                    }
+                                                    found.first().copied()
+                                                };
+
+                                                // If enumeration disagrees with synthesis, use enumeration.
+                                                // The code-counted enumeration is more reliable than LLM prose counting.
+                                                // AgentMemory's key insight: enumerate first, count from enumeration.
+                                                let synth_disagrees = synth_count
+                                                    .map(|sc| sc != enum_count)
+                                                    .unwrap_or(true);
+
+                                                if synth_disagrees || synth_count.is_none() {
+                                                    if debug {
+                                                        eprintln!(
+                                                            "[chain-enum] Synthesis={:?} vs Enumeration={} — using enumeration",
+                                                            synth_count, enum_count
+                                                        );
+                                                    }
+                                                    final_synthesis = format!(
+                                                        "Based on the evidence, the answer is {}.\n\n{}\n\nTotal: {}",
+                                                        enum_count, item_list, enum_count
+                                                    );
+                                                } else {
+                                                    // Agreement — append enumeration for verification
+                                                    final_synthesis = format!(
+                                                        "{}\n\n---\nVerified enumeration ({} items):\n{}",
+                                                        final_synthesis, enum_count, item_list
+                                                    );
+                                                }
+
+                                                if debug && let Some(gc) = graph_count {
+                                                    if gc != enum_count {
+                                                        eprintln!(
+                                                            "[dual-path] DISAGREEMENT: graph={} enum={}",
+                                                            gc, enum_count
+                                                        );
+                                                    } else {
+                                                        eprintln!(
+                                                            "[dual-path] AGREEMENT: graph={} enum={}",
+                                                            gc, enum_count
+                                                        );
                                                     }
                                                 }
                                             } // close the else branch of enum_count == 0 check
                                         }
-                                        Err(e) => if debug { eprintln!("[chain-enum] Failed to parse JSON: {e}"); },
+                                        Err(e) => {
+                                            if debug {
+                                                eprintln!("[chain-enum] Failed to parse JSON: {e}");
+                                            }
+                                        }
                                     }
                                 }
-                                Err(e) => if debug { eprintln!("[chain-enum] LLM call failed: {e}"); },
+                                Err(e) => {
+                                    if debug {
+                                        eprintln!("[chain-enum] LLM call failed: {e}");
+                                    }
+                                }
                             }
                         }
 
-                        if debug { eprintln!("[synthesis] Generated: {}", &final_synthesis[..std::cmp::min(final_synthesis.len(), 200)]); }
+                        if debug {
+                            eprintln!(
+                                "[synthesis] Generated: {}",
+                                &final_synthesis[..std::cmp::min(final_synthesis.len(), 200)]
+                            );
+                        }
 
                         let synth_emb = if let Some(ref embedder) = self.embedder {
                             embedder.embed(&final_synthesis).map_err(to_pyerr)?
@@ -1598,7 +2095,8 @@ impl MenteDB {
                             final_synthesis,
                             synth_emb,
                         );
-                        synth_node.tags = vec!["synthesis:true".to_string(), "ephemeral:true".to_string()];
+                        synth_node.tags =
+                            vec!["synthesis:true".to_string(), "ephemeral:true".to_string()];
                         let synth_id = synth_node.id;
                         db.store(synth_node).map_err(to_pyerr)?;
 
@@ -1606,7 +2104,11 @@ impl MenteDB {
                         let top_score = expanded.first().map(|(_, s)| *s).unwrap_or(1.0);
                         expanded.insert(0, (synth_id.to_string(), top_score * 1.5));
                     }
-                    Err(e) => if debug { eprintln!("[synthesis] LLM call failed: {e}"); },
+                    Err(e) => {
+                        if debug {
+                            eprintln!("[synthesis] LLM call failed: {e}");
+                        }
+                    }
                 }
             }
         }
@@ -1617,10 +2119,13 @@ impl MenteDB {
         let mut filtered_results: Vec<(String, f32)> = Vec::new();
         for (id_str, score) in expanded {
             if let Ok(mem_id) = parse_memory_id(&id_str)
-                && let Ok(node) = db.get_memory(mem_id) {
-                    let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
-                    if is_entity { continue; }
+                && let Ok(node) = db.get_memory(mem_id)
+            {
+                let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
+                if is_entity {
+                    continue;
                 }
+            }
             filtered_results.push((id_str, score));
         }
 
@@ -1632,7 +2137,7 @@ impl MenteDB {
 
     /// Add a typed, weighted edge between two memories.
     fn relate(
-        &mut self,
+        &self,
         source: &str,
         target: &str,
         edge_type: &str,
@@ -1640,9 +2145,10 @@ impl MenteDB {
         valid_from: Option<u64>,
         valid_until: Option<u64>,
     ) -> PyResult<()> {
-        let db = self.db.as_mut().ok_or_else(|| {
-            PyRuntimeError::new_err("database is closed")
-        })?;
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
 
         let edge = MemoryEdge {
             source: parse_memory_id(source)?,
@@ -1659,10 +2165,11 @@ impl MenteDB {
     }
 
     /// Remove a memory by its UUID string.
-    fn forget(&mut self, memory_id: &str) -> PyResult<()> {
-        let db = self.db.as_mut().ok_or_else(|| {
-            PyRuntimeError::new_err("database is closed")
-        })?;
+    fn forget(&self, memory_id: &str) -> PyResult<()> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
 
         let id = parse_memory_id(memory_id)?;
         db.forget(id).map_err(to_pyerr)
@@ -1670,10 +2177,11 @@ impl MenteDB {
 
     /// Retrieve a memory by its UUID string.
     /// Returns a dict with id, content, memory_type, tags, created_at.
-    fn get_memory(&mut self, memory_id: &str) -> PyResult<PyObject> {
-        let db = self.db.as_mut().ok_or_else(|| {
-            PyRuntimeError::new_err("database is closed")
-        })?;
+    fn get_memory(&self, memory_id: &str) -> PyResult<PyObject> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
 
         let id = parse_memory_id(memory_id)?;
         let node = db.get_memory(id).map_err(to_pyerr)?;
@@ -1695,20 +2203,19 @@ impl MenteDB {
     /// or pass `provider` ("openai", "anthropic", "ollama") explicitly.
     #[pyo3(signature = (conversation, provider=None, agent_id=None))]
     fn ingest(
-        &mut self,
+        &self,
         conversation: &str,
         provider: Option<&str>,
         agent_id: Option<&str>,
     ) -> PyResult<PyObject> {
         let db = self
             .db
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
 
         let config = build_extraction_config_from_env(provider)?;
 
-        let http_provider =
-            HttpExtractionProvider::new(config.clone()).map_err(to_pyerr)?;
+        let http_provider = HttpExtractionProvider::new(config.clone()).map_err(to_pyerr)?;
         let pipeline = ExtractionPipeline::new(http_provider, config.clone());
 
         let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
@@ -1739,10 +2246,12 @@ impl MenteDB {
         let mut entries: Vec<MemEntry> = Vec::new();
 
         // Build entity name → categories map for semantic enrichment of fact embeddings
-        let mut entity_categories: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        let mut entity_categories: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
         for entity in &extracted_entities {
             if let Some(cat) = entity.attributes.get("category") {
-                let cats: Vec<String> = cat.split(',')
+                let cats: Vec<String> = cat
+                    .split(',')
                     .map(|c| c.trim().to_lowercase().replace('_', " "))
                     .filter(|c| !c.is_empty())
                     .collect();
@@ -1793,14 +2302,19 @@ impl MenteDB {
 
         for line in conversation.lines() {
             let trimmed = line.trim();
-            let (content, role_tag) =
-                if let Some(rest) = trimmed.strip_prefix("User:").or_else(|| trimmed.strip_prefix("user:")) {
-                    (rest.trim(), "turn:user")
-                } else if let Some(rest) = trimmed.strip_prefix("Assistant:").or_else(|| trimmed.strip_prefix("assistant:")) {
-                    (rest.trim(), "turn:assistant")
-                } else {
-                    continue;
-                };
+            let (content, role_tag) = if let Some(rest) = trimmed
+                .strip_prefix("User:")
+                .or_else(|| trimmed.strip_prefix("user:"))
+            {
+                (rest.trim(), "turn:user")
+            } else if let Some(rest) = trimmed
+                .strip_prefix("Assistant:")
+                .or_else(|| trimmed.strip_prefix("assistant:"))
+            {
+                (rest.trim(), "turn:assistant")
+            } else {
+                continue;
+            };
             if content.len() > 15 {
                 embed_texts.push(content.to_string());
                 entries.push(MemEntry {
@@ -1860,8 +2374,7 @@ impl MenteDB {
         provider: Option<String>,
     ) -> PyResult<PyObject> {
         let config = build_extraction_config_from_env(provider.as_deref())?;
-        let http_provider =
-            HttpExtractionProvider::new(config.clone()).map_err(to_pyerr)?;
+        let http_provider = HttpExtractionProvider::new(config.clone()).map_err(to_pyerr)?;
         let pipeline = ExtractionPipeline::new(http_provider, config.clone());
 
         // Release the GIL during the HTTP call so other threads can run
@@ -1892,10 +2405,13 @@ impl MenteDB {
             let dict = pyo3::types::PyDict::new(py);
             dict.set_item("content", entity.to_content())?;
             dict.set_item("memory_type", "entity")?;
-            dict.set_item("tags", vec![
-                format!("entity_type:{}", entity.entity_type),
-                format!("entity_name:{}", entity.name),
-            ])?;
+            dict.set_item(
+                "tags",
+                vec![
+                    format!("entity_type:{}", entity.entity_type),
+                    format!("entity_name:{}", entity.name),
+                ],
+            )?;
             dict.set_item("confidence", 0.85)?;
             dict.set_item("embedding_key", entity.embedding_key())?;
             // Store entity attributes as a nested dict
@@ -1911,14 +2427,19 @@ impl MenteDB {
         // Also include user AND assistant turns for episodic storage
         for line in conversation.lines() {
             let trimmed = line.trim();
-            let (content, role_tag) =
-                if let Some(rest) = trimmed.strip_prefix("User:").or_else(|| trimmed.strip_prefix("user:")) {
-                    (rest.trim(), "turn:user")
-                } else if let Some(rest) = trimmed.strip_prefix("Assistant:").or_else(|| trimmed.strip_prefix("assistant:")) {
-                    (rest.trim(), "turn:assistant")
-                } else {
-                    continue;
-                };
+            let (content, role_tag) = if let Some(rest) = trimmed
+                .strip_prefix("User:")
+                .or_else(|| trimmed.strip_prefix("user:"))
+            {
+                (rest.trim(), "turn:user")
+            } else if let Some(rest) = trimmed
+                .strip_prefix("Assistant:")
+                .or_else(|| trimmed.strip_prefix("assistant:"))
+            {
+                (rest.trim(), "turn:assistant")
+            } else {
+                continue;
+            };
             if content.len() > 15 {
                 let dict = pyo3::types::PyDict::new(py);
                 dict.set_item("content", content)?;
@@ -1937,13 +2458,13 @@ impl MenteDB {
     /// Uses batch embedding (1 API call for all memories) for speed.
     #[pyo3(signature = (memories, agent_id=None))]
     fn store_extracted(
-        &mut self,
+        &self,
         memories: Vec<Py<pyo3::types::PyDict>>,
         agent_id: Option<&str>,
     ) -> PyResult<PyObject> {
         let db = self
             .db
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
         let debug = std::env::var("MENTEDB_DEBUG").is_ok();
 
@@ -1971,20 +2492,24 @@ impl MenteDB {
         Python::with_gil(|py| {
             for mem_ref in &memories {
                 let mem_dict = mem_ref.bind(py);
-                let content: String = mem_dict.get_item("content")?
+                let content: String = mem_dict
+                    .get_item("content")?
                     .map(|v| v.extract())
                     .transpose()?
                     .unwrap_or_default();
-                let memory_type: String = mem_dict.get_item("memory_type")?
+                let memory_type: String = mem_dict
+                    .get_item("memory_type")?
                     .map(|v| v.extract())
                     .transpose()?
                     .unwrap_or_else(|| "semantic".to_string());
-                let mut tags: Vec<String> = mem_dict.get_item("tags")?
+                let mut tags: Vec<String> = mem_dict
+                    .get_item("tags")?
                     .map(|v| v.extract())
                     .transpose()?
                     .unwrap_or_default();
                 // Parse context categories and merge as context: tags
-                let context: Vec<String> = mem_dict.get_item("context")?
+                let context: Vec<String> = mem_dict
+                    .get_item("context")?
                     .map(|v| v.extract())
                     .transpose()?
                     .unwrap_or_default();
@@ -1994,35 +2519,46 @@ impl MenteDB {
                         tags.push(ctx_tag);
                     }
                 }
-                let confidence: f32 = mem_dict.get_item("confidence")?
+                let confidence: f32 = mem_dict
+                    .get_item("confidence")?
                     .map(|v| v.extract())
                     .transpose()?
                     .unwrap_or(0.5);
-                let embed_key: String = mem_dict.get_item("embedding_key")?
+                let embed_key: String = mem_dict
+                    .get_item("embedding_key")?
                     .map(|v| v.extract())
                     .transpose()?
                     .unwrap_or_else(|| content.clone());
 
                 // Parse entity-specific fields if present
-                let entity_name: Option<String> = mem_dict.get_item("entity_name")?
+                let entity_name: Option<String> = mem_dict
+                    .get_item("entity_name")?
                     .map(|v| v.extract())
                     .transpose()?;
-                let entity_type: Option<String> = mem_dict.get_item("entity_type")?
+                let entity_type: Option<String> = mem_dict
+                    .get_item("entity_type")?
                     .map(|v| v.extract())
                     .transpose()?;
-                let entity_attributes: Option<std::collections::HashMap<String, String>> =
-                    mem_dict.get_item("entity_attributes")?
-                        .map(|v| v.extract())
-                        .transpose()?;
+                let entity_attributes: Option<std::collections::HashMap<String, String>> = mem_dict
+                    .get_item("entity_attributes")?
+                    .map(|v| v.extract())
+                    .transpose()?;
 
                 // Optional timestamp override (microseconds since epoch)
-                let created_at: Option<u64> = mem_dict.get_item("created_at")?
+                let created_at: Option<u64> = mem_dict
+                    .get_item("created_at")?
                     .and_then(|v| v.extract().ok());
 
                 parsed.push(ParsedMemory {
-                    content, memory_type, tags, confidence, embed_key,
+                    content,
+                    memory_type,
+                    tags,
+                    confidence,
+                    embed_key,
                     created_at,
-                    entity_name, entity_type, entity_attributes,
+                    entity_name,
+                    entity_type,
+                    entity_attributes,
                 });
             }
             Ok::<_, PyErr>(())
@@ -2039,27 +2575,32 @@ impl MenteDB {
         // Phase 1.5: Enrich embed keys with entity categories for semantic discoverability.
         // Build entity name → categories map from entity entries in this batch.
         {
-            let mut entity_cats: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            let mut entity_cats: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
             for mem in &parsed {
                 if let (Some(name), Some(attrs)) = (&mem.entity_name, &mem.entity_attributes)
-                    && let Some(cat) = attrs.get("category") {
-                        let cats: Vec<String> = cat.split(',')
-                            .map(|c| c.trim().to_lowercase().replace('_', " "))
-                            .filter(|c| !c.is_empty())
-                            .collect();
-                        if !cats.is_empty() {
-                            entity_cats.insert(name.to_lowercase(), cats);
-                        }
+                    && let Some(cat) = attrs.get("category")
+                {
+                    let cats: Vec<String> = cat
+                        .split(',')
+                        .map(|c| c.trim().to_lowercase().replace('_', " "))
+                        .filter(|c| !c.is_empty())
+                        .collect();
+                    if !cats.is_empty() {
+                        entity_cats.insert(name.to_lowercase(), cats);
                     }
+                }
             }
             // For entity entries, ensure their embed_key includes categories
             if !entity_cats.is_empty() {
                 for mem in &mut parsed {
                     if let Some(ref name) = mem.entity_name
                         && let Some(cats) = entity_cats.get(&name.to_lowercase())
-                            && !mem.embed_key.contains("[categories:") {
-                                mem.embed_key.push_str(&format!(" [categories: {}]", cats.join(", ")));
-                            }
+                        && !mem.embed_key.contains("[categories:")
+                    {
+                        mem.embed_key
+                            .push_str(&format!(" [categories: {}]", cats.join(", ")));
+                    }
                 }
             }
         }
@@ -2084,17 +2625,21 @@ impl MenteDB {
         let mut entity_ids: Vec<(String, String, MemoryId)> = Vec::new(); // (name, type, id)
 
         // Build an index of existing entity nodes for resolution
-        let mut existing_entities: std::collections::HashMap<String, MemoryId> = std::collections::HashMap::new();
+        let mut existing_entities: std::collections::HashMap<String, MemoryId> =
+            std::collections::HashMap::new();
         for mid in db.memory_ids() {
             if let Ok(node) = db.get_memory(mid)
-                && node.tags.iter().any(|t| t.starts_with("entity_name:")) {
-                    let key = node.tags.iter()
-                        .filter(|t| t.starts_with("entity_name:") || t.starts_with("entity_type:"))
-                        .map(|t| t.to_lowercase())
-                        .collect::<Vec<_>>()
-                        .join("|");
-                    existing_entities.insert(key, mid);
-                }
+                && node.tags.iter().any(|t| t.starts_with("entity_name:"))
+            {
+                let key = node
+                    .tags
+                    .iter()
+                    .filter(|t| t.starts_with("entity_name:") || t.starts_with("entity_type:"))
+                    .map(|t| t.to_lowercase())
+                    .collect::<Vec<_>>()
+                    .join("|");
+                existing_entities.insert(key, mid);
+            }
         }
 
         for (mem, emb) in parsed.into_iter().zip(embeddings.into_iter()) {
@@ -2102,8 +2647,20 @@ impl MenteDB {
 
             // Entity resolution: check if this entity already exists
             if is_entity {
-                let entity_key = [format!("entity_name:{}", mem.entity_name.as_ref().unwrap().to_lowercase()),
-                    format!("entity_type:{}", mem.entity_type.as_ref().unwrap_or(&"unknown".to_string()).to_lowercase())].join("|");
+                let entity_key = [
+                    format!(
+                        "entity_name:{}",
+                        mem.entity_name.as_ref().unwrap().to_lowercase()
+                    ),
+                    format!(
+                        "entity_type:{}",
+                        mem.entity_type
+                            .as_ref()
+                            .unwrap_or(&"unknown".to_string())
+                            .to_lowercase()
+                    ),
+                ]
+                .join("|");
 
                 if let Some(&existing_id) = existing_entities.get(&entity_key) {
                     // Merge attributes into existing entity
@@ -2148,18 +2705,41 @@ impl MenteDB {
                             && let (Ok(y), Ok(m), Ok(d)) = (
                                 parts[0].parse::<i64>(),
                                 parts[1].parse::<i64>(),
-                                parts[2].split_whitespace().next().unwrap_or("1").split('(').next().unwrap_or("1").trim().parse::<i64>(),
-                            ) {
-                                // Approximate: days since epoch * microseconds per day
-                                let days = (y - 1970) * 365 + (y - 1969) / 4 + match m {
-                                    1 => 0, 2 => 31, 3 => 59, 4 => 90, 5 => 120, 6 => 151,
-                                    7 => 181, 8 => 212, 9 => 243, 10 => 273, 11 => 304, 12 => 334,
+                                parts[2]
+                                    .split_whitespace()
+                                    .next()
+                                    .unwrap_or("1")
+                                    .split('(')
+                                    .next()
+                                    .unwrap_or("1")
+                                    .trim()
+                                    .parse::<i64>(),
+                            )
+                        {
+                            // Approximate: days since epoch * microseconds per day
+                            let days = (y - 1970) * 365
+                                + (y - 1969) / 4
+                                + match m {
+                                    1 => 0,
+                                    2 => 31,
+                                    3 => 59,
+                                    4 => 90,
+                                    5 => 120,
+                                    6 => 151,
+                                    7 => 181,
+                                    8 => 212,
+                                    9 => 243,
+                                    10 => 273,
+                                    11 => 304,
+                                    12 => 334,
                                     _ => 0,
-                                } + d - 1;
-                                let ts = (days as u64) * 86_400_000_000;
-                                node.created_at = ts;
-                                node.accessed_at = ts;
-                            }
+                                }
+                                + d
+                                - 1;
+                            let ts = (days as u64) * 86_400_000_000;
+                            node.created_at = ts;
+                            node.accessed_at = ts;
+                        }
                         break;
                     }
                 }
@@ -2194,8 +2774,11 @@ impl MenteDB {
             // Track entity nodes for graph edge creation
             if let (Some(name), Some(etype)) = (mem.entity_name, mem.entity_type) {
                 existing_entities.insert(
-                    [format!("entity_name:{}", name.to_lowercase()),
-                        format!("entity_type:{}", etype.to_lowercase())].join("|"),
+                    [
+                        format!("entity_name:{}", name.to_lowercase()),
+                        format!("entity_type:{}", etype.to_lowercase()),
+                    ]
+                    .join("|"),
                     id,
                 );
                 entity_ids.push((name, etype, id));
@@ -2209,16 +2792,20 @@ impl MenteDB {
         // Use the entity's "relationship" attribute as the edge label.
 
         // Pre-load entity categories for tag propagation
-        let mut entity_categories: std::collections::HashMap<MemoryId, Vec<String>> = std::collections::HashMap::new();
+        let mut entity_categories: std::collections::HashMap<MemoryId, Vec<String>> =
+            std::collections::HashMap::new();
         for (_name, _etype, entity_id) in &entity_ids {
             if let Ok(node) = db.get_memory(*entity_id)
-                && let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
-                    let cats: Vec<String> = cat.split(',')
-                        .map(|s| s.trim().to_lowercase().replace(' ', "_"))
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                    entity_categories.insert(*entity_id, cats);
-                }
+                && let Some(mentedb_core::memory::AttributeValue::String(cat)) =
+                    node.attributes.get("category")
+            {
+                let cats: Vec<String> = cat
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase().replace(' ', "_"))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                entity_categories.insert(*entity_id, cats);
+            }
         }
 
         for (entity_name, _etype, entity_id) in &entity_ids {
@@ -2240,17 +2827,26 @@ impl MenteDB {
                     _ => None,
                 })
             });
-            let cats = entity_categories.get(entity_id).cloned().unwrap_or_default();
+            let cats = entity_categories
+                .get(entity_id)
+                .cloned()
+                .unwrap_or_default();
 
             for sid in &stored_ids {
                 let mem_id = parse_memory_id(sid)?;
-                if mem_id == *entity_id { continue; }
+                if mem_id == *entity_id {
+                    continue;
+                }
                 if let Ok(mut mem_node) = db.get_memory(mem_id) {
                     // Skip other entity nodes
-                    if mem_node.tags.iter().any(|t| t.starts_with("entity_name:")) { continue; }
+                    if mem_node.tags.iter().any(|t| t.starts_with("entity_name:")) {
+                        continue;
+                    }
 
                     let content_lower = mem_node.content.to_lowercase();
-                    let mentions = match_patterns.iter().any(|p| content_lower.contains(p.as_str()));
+                    let mentions = match_patterns
+                        .iter()
+                        .any(|p| content_lower.contains(p.as_str()));
                     if mentions {
                         let edge = MemoryEdge {
                             source: mem_id,
@@ -2287,24 +2883,29 @@ impl MenteDB {
         // so we split and index each category individually.
         {
             // Build category → entity_id index (split comma-separated categories)
-            let mut category_index: std::collections::HashMap<String, Vec<MemoryId>> = std::collections::HashMap::new();
+            let mut category_index: std::collections::HashMap<String, Vec<MemoryId>> =
+                std::collections::HashMap::new();
             for (_name, _etype, eid) in &entity_ids {
                 if let Ok(node) = db.get_memory(*eid)
-                    && let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
-                        for single_cat in cat.split(',') {
-                            let trimmed = single_cat.trim().to_lowercase();
-                            if !trimmed.is_empty() {
-                                category_index.entry(trimmed).or_default().push(*eid);
-                            }
+                    && let Some(mentedb_core::memory::AttributeValue::String(cat)) =
+                        node.attributes.get("category")
+                {
+                    for single_cat in cat.split(',') {
+                        let trimmed = single_cat.trim().to_lowercase();
+                        if !trimmed.is_empty() {
+                            category_index.entry(trimmed).or_default().push(*eid);
                         }
                     }
+                }
             }
             // Connect entities within the same category
             for (category, ids) in &category_index {
-                if ids.len() < 2 { continue; }
+                if ids.len() < 2 {
+                    continue;
+                }
                 let label = format!("same_category:{}", category);
                 for i in 0..ids.len() {
-                    for j in (i+1)..ids.len() {
+                    for j in (i + 1)..ids.len() {
                         let edge = MemoryEdge {
                             source: ids[i],
                             target: ids[j],
@@ -2318,7 +2919,13 @@ impl MenteDB {
                         let _ = db.relate(edge);
                     }
                 }
-                if debug { eprintln!("[store_extracted] Connected {} entities in category '{}'", ids.len(), category); }
+                if debug {
+                    eprintln!(
+                        "[store_extracted] Connected {} entities in category '{}'",
+                        ids.len(),
+                        category
+                    );
+                }
             }
         }
 
@@ -2331,58 +2938,87 @@ impl MenteDB {
 
     /// Run consolidation: gist extraction for entities with many connected memories.
     /// Creates Derived summary nodes linked to entities via Derived edges.
-    fn consolidate(&mut self, min_memories: usize) -> PyResult<Vec<String>> {
-        let db = self.db.as_mut().ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+    fn consolidate(&self, min_memories: usize) -> PyResult<Vec<String>> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
         let debug = std::env::var("MENTEDB_DEBUG").is_ok();
-        let rt = tokio::runtime::Runtime::new().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let rt =
+            tokio::runtime::Runtime::new().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
         // Set up LLM provider for gist generation
         let config = build_extraction_config_from_env(None)?;
-        let http_provider = mentedb_extraction::provider::HttpExtractionProvider::new(config.clone())
-            .map_err(to_pyerr)?;
+        let http_provider =
+            mentedb_extraction::provider::HttpExtractionProvider::new(config.clone())
+                .map_err(to_pyerr)?;
 
         let min_memories = if min_memories == 0 { 5 } else { min_memories };
         let mut gist_ids = Vec::new();
 
         // Find all entity nodes by scanning graph node IDs
         let all_node_ids: Vec<MemoryId> = db.graph().graph().node_ids().to_vec();
-        let entity_nodes: Vec<MemoryNode> = all_node_ids.iter()
+        let entity_nodes: Vec<MemoryNode> = all_node_ids
+            .iter()
             .filter_map(|id| db.get_memory(*id).ok())
             .filter(|m| m.tags.iter().any(|t| t.starts_with("entity_name:")))
             .filter(|m| !m.tags.iter().any(|t| t == "gist"))
             .collect();
 
-        if debug { eprintln!("[consolidate] Found {} entity nodes", entity_nodes.len()); }
+        if debug {
+            eprintln!("[consolidate] Found {} entity nodes", entity_nodes.len());
+        }
 
         for entity in &entity_nodes {
-            let entity_name = entity.attributes.get("entity_name")
-                .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+            let entity_name = entity
+                .attributes
+                .get("entity_name")
+                .and_then(|v| match v {
+                    mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()),
+                    _ => None,
+                })
                 .unwrap_or_default();
 
             // Get connected memories via PartOf edges
             let (neighbor_ids, _edges) = db.graph().get_context_subgraph(entity.id, 1);
-            let connected_memories: Vec<String> = neighbor_ids.iter()
+            let connected_memories: Vec<String> = neighbor_ids
+                .iter()
                 .filter(|nid| **nid != entity.id)
                 .filter_map(|nid| db.get_memory(*nid).ok())
                 .filter(|m| !m.tags.iter().any(|t| t.starts_with("entity_name:")))
                 .map(|m| m.content.clone())
                 .collect();
 
-            if connected_memories.len() < min_memories { continue; }
+            if connected_memories.len() < min_memories {
+                continue;
+            }
 
             // Check if gist already exists for this entity
             let has_gist = neighbor_ids.iter().any(|nid| {
-                db.get_memory(*nid).ok().map(|m| m.tags.iter().any(|t| t == "gist")).unwrap_or(false)
+                db.get_memory(*nid)
+                    .ok()
+                    .map(|m| m.tags.iter().any(|t| t == "gist"))
+                    .unwrap_or(false)
             });
-            if has_gist { continue; }
+            if has_gist {
+                continue;
+            }
 
-            if debug { eprintln!("[consolidate] Creating gist for '{}' ({} memories)", entity_name, connected_memories.len()); }
+            if debug {
+                eprintln!(
+                    "[consolidate] Creating gist for '{}' ({} memories)",
+                    entity_name,
+                    connected_memories.len()
+                );
+            }
 
             let gist_prompt = format!(
                 "Summarize everything known about '{}' based on these memories. Be factual and complete. \
                  Include all specific details (names, dates, amounts, relationships).\n\n{}",
                 entity_name,
-                connected_memories.iter().enumerate()
+                connected_memories
+                    .iter()
+                    .enumerate()
                     .map(|(i, c)| format!("[{}] {}", i, c))
                     .collect::<Vec<_>>()
                     .join("\n")
@@ -2392,7 +3028,12 @@ impl MenteDB {
             match rt.block_on(http_provider.call_text_with_retry(&gist_prompt, gist_system)) {
                 Ok(gist_text) => {
                     let gist_content = gist_text.trim().to_string();
-                    if debug { eprintln!("[consolidate] Gist: {}", &gist_content[..std::cmp::min(gist_content.len(), 100)]); }
+                    if debug {
+                        eprintln!(
+                            "[consolidate] Gist: {}",
+                            &gist_content[..std::cmp::min(gist_content.len(), 100)]
+                        );
+                    }
 
                     let gist_emb = if let Some(ref embedder) = self.embedder {
                         embedder.embed(&gist_content).map_err(to_pyerr)?
@@ -2406,7 +3047,10 @@ impl MenteDB {
                         gist_content,
                         gist_emb,
                     );
-                    gist_node.tags = vec!["gist".to_string(), format!("gist_for:{}", entity_name.to_lowercase())];
+                    gist_node.tags = vec![
+                        "gist".to_string(),
+                        format!("gist_for:{}", entity_name.to_lowercase()),
+                    ];
                     gist_node.confidence = 0.9;
                     let gist_id = gist_node.id;
                     db.store(gist_node).map_err(to_pyerr)?;
@@ -2425,23 +3069,33 @@ impl MenteDB {
                     let _ = db.relate(edge);
                     gist_ids.push(gist_id.to_string());
                 }
-                Err(e) => if debug { eprintln!("[consolidate] LLM call failed for '{}': {e}", entity_name); },
+                Err(e) => {
+                    if debug {
+                        eprintln!("[consolidate] LLM call failed for '{}': {e}", entity_name);
+                    }
+                }
             }
         }
 
-        if debug { eprintln!("[consolidate] Created {} gist nodes", gist_ids.len()); }
+        if debug {
+            eprintln!("[consolidate] Created {} gist nodes", gist_ids.len());
+        }
         Ok(gist_ids)
     }
 
     /// State resolution: for entities with conflicting edge labels, keep latest and mark older edges.
     /// E.g., if user moved from NYC to SF, the "lives_in:NYC" edge gets valid_until set.
-    fn resolve_states(&mut self) -> PyResult<usize> {
-        let db = self.db.as_mut().ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+    fn resolve_states(&self) -> PyResult<usize> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
         let debug = std::env::var("MENTEDB_DEBUG").is_ok();
         let mut resolved_count = 0usize;
 
         let all_node_ids: Vec<MemoryId> = db.graph().graph().node_ids().to_vec();
-        let entity_nodes: Vec<MemoryNode> = all_node_ids.iter()
+        let entity_nodes: Vec<MemoryNode> = all_node_ids
+            .iter()
             .filter_map(|id| db.get_memory(*id).ok())
             .filter(|m| m.tags.iter().any(|t| t.starts_with("entity_name:")))
             .collect();
@@ -2449,9 +3103,10 @@ impl MenteDB {
         for entity in &entity_nodes {
             // Get all outgoing edges from this entity
             let outgoing = db.graph().graph().outgoing(entity.id);
-            
+
             // Group edges by their relationship label prefix (e.g., "lives_in", "works_at")
-            let mut label_groups: std::collections::HashMap<String, Vec<(MemoryId, u64, f32)>> = std::collections::HashMap::new();
+            let mut label_groups: std::collections::HashMap<String, Vec<(MemoryId, u64, f32)>> =
+                std::collections::HashMap::new();
             for (target_id, data) in &outgoing {
                 if let Some(ref label) = data.label {
                     // Extract relationship type (before the colon or full label)
@@ -2461,21 +3116,38 @@ impl MenteDB {
                         label.as_str()
                     };
                     // Only resolve state-like relationships
-                    let stateful = matches!(rel_type,
-                        "lives_in" | "works_at" | "has_role" | "married_to" | "dating" |
-                        "owns" | "uses" | "drives" | "studies_at" | "located_in" |
-                        "employed_by" | "salary" | "title" | "status"
+                    let stateful = matches!(
+                        rel_type,
+                        "lives_in"
+                            | "works_at"
+                            | "has_role"
+                            | "married_to"
+                            | "dating"
+                            | "owns"
+                            | "uses"
+                            | "drives"
+                            | "studies_at"
+                            | "located_in"
+                            | "employed_by"
+                            | "salary"
+                            | "title"
+                            | "status"
                     );
                     if stateful {
-                        label_groups.entry(rel_type.to_string()).or_default()
-                            .push((*target_id, data.created_at, data.weight));
+                        label_groups.entry(rel_type.to_string()).or_default().push((
+                            *target_id,
+                            data.created_at,
+                            data.weight,
+                        ));
                     }
                 }
             }
 
             // For each relationship type with multiple edges, keep latest
             for (rel_type, mut edges) in label_groups {
-                if edges.len() < 2 { continue; }
+                if edges.len() < 2 {
+                    continue;
+                }
                 edges.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by created_at descending
                 let latest_time = edges[0].1;
 
@@ -2495,63 +3167,100 @@ impl MenteDB {
                     let _ = db.relate(superseded);
                     resolved_count += 1;
                     if debug {
-                        let entity_name = entity.attributes.get("entity_name")
-                            .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                        let entity_name = entity
+                            .attributes
+                            .get("entity_name")
+                            .and_then(|v| match v {
+                                mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()),
+                                _ => None,
+                            })
                             .unwrap_or_default();
-                        eprintln!("[resolve_states] Superseded '{}' edge for '{}'", rel_type, entity_name);
+                        eprintln!(
+                            "[resolve_states] Superseded '{}' edge for '{}'",
+                            rel_type, entity_name
+                        );
                     }
                 }
             }
         }
 
-        if debug { eprintln!("[resolve_states] Resolved {} conflicting states", resolved_count); }
+        if debug {
+            eprintln!(
+                "[resolve_states] Resolved {} conflicting states",
+                resolved_count
+            );
+        }
         Ok(resolved_count)
     }
 
     /// Embedding-based entity resolution: merge near-duplicate entities.
     /// Cosine >0.85 auto-merge, 0.7-0.85 merge if same entity_type, <0.7 keep separate.
-    fn resolve_entities(&mut self) -> PyResult<usize> {
-        let db = self.db.as_mut().ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+    fn resolve_entities(&self) -> PyResult<usize> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
         let debug = std::env::var("MENTEDB_DEBUG").is_ok();
         let mut merge_count = 0usize;
 
         let all_node_ids: Vec<MemoryId> = db.graph().graph().node_ids().to_vec();
-        let entity_nodes: Vec<MemoryNode> = all_node_ids.iter()
+        let entity_nodes: Vec<MemoryNode> = all_node_ids
+            .iter()
             .filter_map(|id| db.get_memory(*id).ok())
             .filter(|m| m.tags.iter().any(|t| t.starts_with("entity_name:")))
             .collect();
 
-        if entity_nodes.len() < 2 { return Ok(0); }
+        if entity_nodes.len() < 2 {
+            return Ok(0);
+        }
 
         // Build list of (id, name, type, embedding)
-        let entities: Vec<(MemoryId, String, String, Vec<f32>)> = entity_nodes.iter()
+        let entities: Vec<(MemoryId, String, String, Vec<f32>)> = entity_nodes
+            .iter()
             .map(|m| {
-                let name = m.attributes.get("entity_name")
-                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                let name = m
+                    .attributes
+                    .get("entity_name")
+                    .and_then(|v| match v {
+                        mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
                     .unwrap_or_default();
-                let etype = m.attributes.get("entity_type")
-                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                let etype = m
+                    .attributes
+                    .get("entity_type")
+                    .and_then(|v| match v {
+                        mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
                     .unwrap_or_default();
                 (m.id, name, etype, m.embedding.clone())
             })
             .collect();
 
-        let mut merged_into: std::collections::HashMap<MemoryId, MemoryId> = std::collections::HashMap::new();
+        let mut merged_into: std::collections::HashMap<MemoryId, MemoryId> =
+            std::collections::HashMap::new();
 
         for i in 0..entities.len() {
-            if merged_into.contains_key(&entities[i].0) { continue; }
-            for j in (i+1)..entities.len() {
-                if merged_into.contains_key(&entities[j].0) { continue; }
+            if merged_into.contains_key(&entities[i].0) {
+                continue;
+            }
+            for j in (i + 1)..entities.len() {
+                if merged_into.contains_key(&entities[j].0) {
+                    continue;
+                }
 
                 let sim = cosine_similarity(&entities[i].3, &entities[j].3);
-                let should_merge = sim > 0.85
-                    || (sim > 0.7 && entities[i].2.eq_ignore_ascii_case(&entities[j].2));
+                let should_merge =
+                    sim > 0.85 || (sim > 0.7 && entities[i].2.eq_ignore_ascii_case(&entities[j].2));
 
                 if should_merge {
                     // Merge j into i: redirect j's edges to i
                     let j_outgoing = db.graph().graph().outgoing(entities[j].0);
                     for (target, data) in j_outgoing {
-                        if target == entities[i].0 { continue; }
+                        if target == entities[i].0 {
+                            continue;
+                        }
                         let edge = MemoryEdge {
                             source: entities[i].0,
                             target,
@@ -2566,7 +3275,9 @@ impl MenteDB {
                     }
                     let j_incoming = db.graph().graph().incoming(entities[j].0);
                     for (source, data) in j_incoming {
-                        if source == entities[i].0 { continue; }
+                        if source == entities[i].0 {
+                            continue;
+                        }
                         let edge = MemoryEdge {
                             source,
                             target: entities[i].0,
@@ -2585,57 +3296,96 @@ impl MenteDB {
                     merge_count += 1;
 
                     if debug {
-                        eprintln!("[resolve_entities] Merged '{}' into '{}' (sim={:.3})",
-                            entities[j].1, entities[i].1, sim);
+                        eprintln!(
+                            "[resolve_entities] Merged '{}' into '{}' (sim={:.3})",
+                            entities[j].1, entities[i].1, sim
+                        );
                     }
                 }
             }
         }
 
-        if debug { eprintln!("[resolve_entities] Merged {} duplicate entities", merge_count); }
+        if debug {
+            eprintln!(
+                "[resolve_entities] Merged {} duplicate entities",
+                merge_count
+            );
+        }
         Ok(merge_count)
     }
 
     /// Generate community summaries for clusters of related entities.
     /// Groups entities by shared categories, creates a summary node per cluster.
     /// These summaries are searchable at a higher level of abstraction.
-    fn build_communities(&mut self) -> PyResult<Vec<String>> {
+    fn build_communities(&self) -> PyResult<Vec<String>> {
         // Allow skipping via env var for benchmarking
         if std::env::var("MENTEDB_SKIP_COMMUNITIES").is_ok() {
             return Ok(vec![]);
         }
-        let db = self.db.as_mut().ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
         let debug = std::env::var("MENTEDB_DEBUG").is_ok();
-        let rt = tokio::runtime::Runtime::new().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let rt =
+            tokio::runtime::Runtime::new().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let config = build_extraction_config_from_env(None)?;
-        let http_provider = mentedb_extraction::provider::HttpExtractionProvider::new(config.clone())
-            .map_err(to_pyerr)?;
+        let http_provider =
+            mentedb_extraction::provider::HttpExtractionProvider::new(config.clone())
+                .map_err(to_pyerr)?;
 
         // Build category → entity list index
         let all_node_ids: Vec<MemoryId> = db.graph().graph().node_ids().to_vec();
-        let mut category_entities: std::collections::HashMap<String, Vec<(String, String, String)>> = std::collections::HashMap::new();
+        let mut category_entities: std::collections::HashMap<
+            String,
+            Vec<(String, String, String)>,
+        > = std::collections::HashMap::new();
 
         for nid in &all_node_ids {
             if let Ok(node) = db.get_memory(*nid) {
-                if !node.tags.iter().any(|t| t.starts_with("entity_name:")) { continue; }
-                if node.tags.iter().any(|t| t == "community_summary") { continue; }
+                if !node.tags.iter().any(|t| t.starts_with("entity_name:")) {
+                    continue;
+                }
+                if node.tags.iter().any(|t| t == "community_summary") {
+                    continue;
+                }
 
-                let name = node.attributes.get("entity_name")
-                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                let name = node
+                    .attributes
+                    .get("entity_name")
+                    .and_then(|v| match v {
+                        mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
                     .unwrap_or_default();
-                let relationship = node.attributes.get("relationship")
-                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                let relationship = node
+                    .attributes
+                    .get("relationship")
+                    .and_then(|v| match v {
+                        mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
                     .unwrap_or_else(|| "unknown".to_string());
-                let etype = node.attributes.get("entity_type")
-                    .and_then(|v| match v { mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()), _ => None })
+                let etype = node
+                    .attributes
+                    .get("entity_type")
+                    .and_then(|v| match v {
+                        mentedb_core::memory::AttributeValue::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
                     .unwrap_or_default();
 
-                if let Some(mentedb_core::memory::AttributeValue::String(cat)) = node.attributes.get("category") {
+                if let Some(mentedb_core::memory::AttributeValue::String(cat)) =
+                    node.attributes.get("category")
+                {
                     for single_cat in cat.split(',') {
                         let trimmed = single_cat.trim().to_lowercase();
                         if !trimmed.is_empty() {
-                            category_entities.entry(trimmed).or_default()
-                                .push((name.clone(), relationship.clone(), etype.clone()));
+                            category_entities.entry(trimmed).or_default().push((
+                                name.clone(),
+                                relationship.clone(),
+                                etype.clone(),
+                            ));
                         }
                     }
                 }
@@ -2645,19 +3395,27 @@ impl MenteDB {
         let mut community_ids = Vec::new();
 
         for (category, entities) in &category_entities {
-            if entities.len() < 2 { continue; }
+            if entities.len() < 2 {
+                continue;
+            }
 
             // Check if community summary already exists for this category
             let community_tag = format!("community:{}", category);
             let already_exists = all_node_ids.iter().any(|nid| {
-                db.get_memory(*nid).ok()
+                db.get_memory(*nid)
+                    .ok()
                     .map(|m| m.tags.iter().any(|t| t == &community_tag))
                     .unwrap_or(false)
             });
-            if already_exists { continue; }
+            if already_exists {
+                continue;
+            }
 
-            let entity_list = entities.iter()
-                .map(|(name, rel, etype)| format!("- {} ({}) — user relationship: {}", name, etype, rel))
+            let entity_list = entities
+                .iter()
+                .map(|(name, rel, etype)| {
+                    format!("- {} ({}) — user relationship: {}", name, etype, rel)
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             let readable_cat = category.replace('_', " ");
@@ -2669,12 +3427,19 @@ impl MenteDB {
                  when someone searches for '{}'.",
                 readable_cat, entity_list, readable_cat
             );
-            let system = "You create concise factual summaries. List every item mentioned. Be complete.";
+            let system =
+                "You create concise factual summaries. List every item mentioned. Be complete.";
 
             match rt.block_on(http_provider.call_text_with_retry(&prompt, system)) {
                 Ok(summary) => {
                     let summary_text = summary.trim().to_string();
-                    if debug { eprintln!("[community] {}: {}", category, &summary_text[..std::cmp::min(summary_text.len(), 120)]); }
+                    if debug {
+                        eprintln!(
+                            "[community] {}: {}",
+                            category,
+                            &summary_text[..std::cmp::min(summary_text.len(), 120)]
+                        );
+                    }
 
                     let emb = if let Some(ref embedder) = self.embedder {
                         embedder.embed(&summary_text).map_err(to_pyerr)?
@@ -2694,17 +3459,26 @@ impl MenteDB {
                     db.store(node).map_err(to_pyerr)?;
                     community_ids.push(node_id.to_string());
                 }
-                Err(e) => if debug { eprintln!("[community] LLM failed for '{}': {e}", category); },
+                Err(e) => {
+                    if debug {
+                        eprintln!("[community] LLM failed for '{}': {e}", category);
+                    }
+                }
             }
         }
 
-        if debug { eprintln!("[community] Created {} community summaries", community_ids.len()); }
+        if debug {
+            eprintln!(
+                "[community] Created {} community summaries",
+                community_ids.len()
+            );
+        }
         Ok(community_ids)
     }
 
     /// Flush and close the database.
     fn close(&mut self) -> PyResult<()> {
-        if let Some(mut db) = self.db.take() {
+        if let Some(db) = self.db.take() {
             db.close().map_err(to_pyerr)?;
         }
         Ok(())
@@ -2836,10 +3610,7 @@ impl StreamAlertPy {
                 memory_id: memory_id.to_string(),
                 message: format!("AI said: {ai_said}; stored: {stored}"),
             },
-            RustStreamAlert::Forgotten {
-                memory_id,
-                summary,
-            } => Self {
+            RustStreamAlert::Forgotten { memory_id, summary } => Self {
                 alert_type: "forgotten".to_string(),
                 memory_id: memory_id.to_string(),
                 message: summary,
@@ -3000,11 +3771,17 @@ fn hash_embedding(text: &str, dims: usize) -> Vec<f32> {
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() { return 0.0; }
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if na == 0.0 || nb == 0.0 { 0.0 } else { dot / (na * nb) }
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na * nb)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3031,8 +3808,8 @@ fn build_extraction_config_from_env(provider_override: Option<&str>) -> PyResult
     let api_key = std::env::var("MENTEDB_LLM_API_KEY").ok();
     let api_url = std::env::var("MENTEDB_LLM_BASE_URL")
         .unwrap_or_else(|_| provider.default_url().to_string());
-    let model = std::env::var("MENTEDB_LLM_MODEL")
-        .unwrap_or_else(|_| provider.default_model().to_string());
+    let model =
+        std::env::var("MENTEDB_LLM_MODEL").unwrap_or_else(|_| provider.default_model().to_string());
     let quality_threshold = std::env::var("MENTEDB_EXTRACTION_QUALITY_THRESHOLD")
         .ok()
         .and_then(|v| v.parse().ok())

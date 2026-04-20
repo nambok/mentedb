@@ -126,16 +126,17 @@ impl SalienceIndex {
                 .collect(),
         };
         let data =
-            serde_json::to_vec(&snapshot).map_err(|e| MenteError::Serialization(e.to_string()))?;
+            bincode::serialize(&snapshot).map_err(|e| MenteError::Serialization(e.to_string()))?;
         std::fs::write(path, data)?;
         Ok(())
     }
 
-    /// Load the salience index from a JSON file.
+    /// Load the salience index from a file (bincode, with JSON fallback for migration).
     pub fn load(path: &std::path::Path) -> MenteResult<Self> {
         let data = std::fs::read(path)?;
-        let snapshot: SalienceSnapshot =
-            serde_json::from_slice(&data).map_err(|e| MenteError::Serialization(e.to_string()))?;
+        let snapshot: SalienceSnapshot = bincode::deserialize(&data)
+            .or_else(|_| serde_json::from_slice(&data))
+            .map_err(|e| MenteError::Serialization(e.to_string()))?;
 
         let mut tree = BTreeMap::new();
         for (salience, ids) in snapshot.entries {

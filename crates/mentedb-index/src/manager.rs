@@ -46,29 +46,35 @@ impl IndexManager {
         }
     }
 
-    /// Save all indexes to the given directory.
+    /// Save all indexes to the given directory (bincode format).
     pub fn save(&self, dir: &Path) -> MenteResult<()> {
         std::fs::create_dir_all(dir)?;
-        self.hnsw.save(&dir.join("hnsw.json"))?;
-        self.bm25.save(&dir.join("bm25.json"))?;
-        self.bitmap.save(&dir.join("bitmap.json"))?;
-        self.temporal.save(&dir.join("temporal.json"))?;
-        self.salience.save(&dir.join("salience.json"))?;
+        self.hnsw.save(&dir.join("hnsw.bin"))?;
+        self.bm25.save(&dir.join("bm25.bin"))?;
+        self.bitmap.save(&dir.join("bitmap.bin"))?;
+        self.temporal.save(&dir.join("temporal.bin"))?;
+        self.salience.save(&dir.join("salience.bin"))?;
         Ok(())
     }
 
-    /// Load all indexes from the given directory.
+    /// Load all indexes from the given directory. Tries `.bin` first, falls back to `.json`.
     pub fn load(dir: &Path) -> MenteResult<Self> {
-        let hnsw = HnswIndex::load(&dir.join("hnsw.json"), HnswConfig::default().ef_search)?;
-        let bm25_path = dir.join("bm25.json");
-        let bm25 = if bm25_path.exists() {
-            Bm25Index::load(&bm25_path)?
+        let hnsw_path = Self::resolve_path(dir, "hnsw");
+        let hnsw = HnswIndex::load(&hnsw_path, HnswConfig::default().ef_search)?;
+
+        let bm25_bin = dir.join("bm25.bin");
+        let bm25_json = dir.join("bm25.json");
+        let bm25 = if bm25_bin.exists() {
+            Bm25Index::load(&bm25_bin)?
+        } else if bm25_json.exists() {
+            Bm25Index::load(&bm25_json)?
         } else {
             Bm25Index::new()
         };
-        let bitmap = BitmapIndex::load(&dir.join("bitmap.json"))?;
-        let temporal = TemporalIndex::load(&dir.join("temporal.json"))?;
-        let salience = SalienceIndex::load(&dir.join("salience.json"))?;
+
+        let bitmap = BitmapIndex::load(&Self::resolve_path(dir, "bitmap"))?;
+        let temporal = TemporalIndex::load(&Self::resolve_path(dir, "temporal"))?;
+        let salience = SalienceIndex::load(&Self::resolve_path(dir, "salience"))?;
         Ok(Self {
             hnsw,
             bm25,
@@ -76,6 +82,16 @@ impl IndexManager {
             temporal,
             salience,
         })
+    }
+
+    /// Resolve index file path: prefer `.bin`, fall back to `.json`.
+    fn resolve_path(dir: &Path, name: &str) -> std::path::PathBuf {
+        let bin = dir.join(format!("{name}.bin"));
+        if bin.exists() {
+            bin
+        } else {
+            dir.join(format!("{name}.json"))
+        }
     }
 
     /// Index a memory node across all indexes.

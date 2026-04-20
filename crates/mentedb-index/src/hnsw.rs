@@ -408,27 +408,28 @@ impl HnswIndex {
     /// Serialize the index to bytes for persistence.
     pub fn serialize(&self) -> MenteResult<Vec<u8>> {
         let inner = self.inner.read();
-        serde_json::to_vec(&*inner).map_err(|e| MenteError::Serialization(e.to_string()))
+        bincode::serialize(&*inner).map_err(|e| MenteError::Serialization(e.to_string()))
     }
 
-    /// Deserialize an index from bytes.
+    /// Deserialize an index from bytes (bincode, with JSON fallback for migration).
     pub fn deserialize(data: &[u8], ef_search: usize) -> MenteResult<Self> {
-        let inner: HnswInner =
-            serde_json::from_slice(data).map_err(|e| MenteError::Serialization(e.to_string()))?;
+        let inner: HnswInner = bincode::deserialize(data)
+            .or_else(|_| serde_json::from_slice(data))
+            .map_err(|e| MenteError::Serialization(e.to_string()))?;
         Ok(Self {
             ef_search,
             inner: RwLock::new(inner),
         })
     }
 
-    /// Save the index to a JSON file.
+    /// Save the index to a binary file.
     pub fn save(&self, path: &std::path::Path) -> MenteResult<()> {
         let data = self.serialize()?;
         std::fs::write(path, data)?;
         Ok(())
     }
 
-    /// Load the index from a JSON file.
+    /// Load the index from a file (bincode or JSON).
     pub fn load(path: &std::path::Path, ef_search: usize) -> MenteResult<Self> {
         let data = std::fs::read(path)?;
         Self::deserialize(&data, ef_search)

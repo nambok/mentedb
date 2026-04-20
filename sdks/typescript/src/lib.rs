@@ -110,7 +110,7 @@ impl MenteDB {
     /// Store a memory and return its UUID.
     #[napi]
     pub fn store(
-        &mut self,
+        &self,
         content: String,
         memory_type: String,
         embedding: Vec<f64>,
@@ -137,7 +137,7 @@ impl MenteDB {
 
     /// Recall memories using an MQL query string.
     #[napi]
-    pub fn recall(&mut self, query: String) -> Result<RecallResult> {
+    pub fn recall(&self, query: String) -> Result<RecallResult> {
         let window = self.inner.recall(&query).map_err(mente_err)?;
         let text = window
             .blocks
@@ -157,7 +157,7 @@ impl MenteDB {
 
     /// Vector similarity search returning the top-k results.
     #[napi]
-    pub fn search(&mut self, embedding: Vec<f64>, k: u32) -> Result<Vec<SearchResult>> {
+    pub fn search(&self, embedding: Vec<f64>, k: u32) -> Result<Vec<SearchResult>> {
         let emb: Vec<f32> = embedding.iter().map(|&v| v as f32).collect();
         let hits = self
             .inner
@@ -175,7 +175,7 @@ impl MenteDB {
     /// Create a typed, weighted edge between two memories.
     #[napi]
     pub fn relate(
-        &mut self,
+        &self,
         source: String,
         target: String,
         edge_type: String,
@@ -206,7 +206,7 @@ impl MenteDB {
 
     /// Remove a memory by ID.
     #[napi]
-    pub fn forget(&mut self, memory_id: String) -> Result<()> {
+    pub fn forget(&self, memory_id: String) -> Result<()> {
         let id = MemoryId(parse_uuid(&memory_id)?);
         self.inner.forget(id).map_err(mente_err)
     }
@@ -217,7 +217,7 @@ impl MenteDB {
     /// or pass `provider` ("openai", "anthropic", "ollama") explicitly.
     #[napi]
     pub fn ingest(
-        &mut self,
+        &self,
         conversation: String,
         provider: Option<String>,
         agent_id: Option<String>,
@@ -265,7 +265,7 @@ impl MenteDB {
 
     /// Flush and close the database.
     #[napi]
-    pub fn close(&mut self) -> Result<()> {
+    pub fn close(&self) -> Result<()> {
         self.inner.close().map_err(mente_err)
     }
 }

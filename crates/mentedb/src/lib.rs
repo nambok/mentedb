@@ -115,7 +115,7 @@ impl MenteDb {
         let index_dir = path.join("indexes");
         let graph_dir = path.join("graph");
 
-        let index = if index_dir.join("hnsw.json").exists() {
+        let index = if index_dir.join("hnsw.bin").exists() || index_dir.join("hnsw.json").exists() {
             debug!("Loading indexes from {}", index_dir.display());
             IndexManager::load(&index_dir)?
         } else {
@@ -223,11 +223,7 @@ impl MenteDb {
     /// Returns the top-k most similar memory IDs with their scores.
     /// Memories that have been superseded, contradicted, or temporally
     /// invalidated are automatically excluded from results.
-    pub fn recall_similar(
-        &self,
-        embedding: &[f32],
-        k: usize,
-    ) -> MenteResult<Vec<(MemoryId, f32)>> {
+    pub fn recall_similar(&self, embedding: &[f32], k: usize) -> MenteResult<Vec<(MemoryId, f32)>> {
         self.recall_similar_filtered(embedding, k, None, None)
     }
 

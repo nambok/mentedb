@@ -153,7 +153,7 @@ struct BitmapSnapshot {
 }
 
 impl BitmapIndex {
-    /// Save the bitmap index to a JSON file.
+    /// Save the bitmap index to a binary file.
     pub fn save(&self, path: &std::path::Path) -> MenteResult<()> {
         let inner = self.inner.read();
         let mut tag_bitmaps = Vec::new();
@@ -169,16 +169,17 @@ impl BitmapIndex {
             offset_to_id: inner.offset_to_id.clone(),
         };
         let data =
-            serde_json::to_vec(&snapshot).map_err(|e| MenteError::Serialization(e.to_string()))?;
+            bincode::serialize(&snapshot).map_err(|e| MenteError::Serialization(e.to_string()))?;
         std::fs::write(path, data)?;
         Ok(())
     }
 
-    /// Load the bitmap index from a JSON file.
+    /// Load the bitmap index from a file (bincode, with JSON fallback for migration).
     pub fn load(path: &std::path::Path) -> MenteResult<Self> {
         let data = std::fs::read(path)?;
-        let snapshot: BitmapSnapshot =
-            serde_json::from_slice(&data).map_err(|e| MenteError::Serialization(e.to_string()))?;
+        let snapshot: BitmapSnapshot = bincode::deserialize(&data)
+            .or_else(|_| serde_json::from_slice(&data))
+            .map_err(|e| MenteError::Serialization(e.to_string()))?;
 
         let mut tag_bitmaps = HashMap::default();
         for (tag, bytes) in snapshot.tag_bitmaps {
