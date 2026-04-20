@@ -84,7 +84,7 @@ async fn process_message(inbound: &WsInbound, state: &AppState) -> WsOutbound {
     match inbound.msg_type.as_str() {
         "query" => {
             let query = inbound.data.as_str().unwrap_or("");
-            let mut db = state.db.write().await;
+            let db = state.db.read().await;
             match db.recall(query) {
                 Ok(window) => {
                     let memory_count: usize = window.blocks.iter().map(|b| b.memories.len()).sum();

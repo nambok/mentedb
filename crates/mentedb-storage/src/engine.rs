@@ -7,6 +7,7 @@ use mentedb_core::MemoryNode;
 use mentedb_core::error::{MenteError, MenteResult};
 
 use fs2::FileExt;
+use parking_lot::Mutex;
 use tracing::info;
 
 use crate::buffer::BufferPool;
@@ -19,10 +20,13 @@ const DEFAULT_BUFFER_POOL_SIZE: usize = 1024;
 ///
 /// Coordinates page allocation, caching, and write-ahead logging to provide
 /// crash-safe, page-oriented storage for memory nodes.
+///
+/// All internal state is protected by fine-grained locks so every public method
+/// takes `&self`, enabling concurrent reads from multiple threads.
 pub struct StorageEngine {
-    page_manager: PageManager,
+    page_manager: Mutex<PageManager>,
     buffer_pool: BufferPool,
-    wal: Wal,
+    wal: Mutex<Wal>,
     /// Exclusive lock file — held for the lifetime of the engine to prevent concurrent access.
     _lock_file: File,
 }
@@ -49,10 +53,10 @@ impl StorageEngine {
         let buffer_pool = BufferPool::new(DEFAULT_BUFFER_POOL_SIZE);
         let wal = Wal::open(path)?;
 
-        let mut engine = Self {
-            page_manager,
+        let engine = Self {
+            page_manager: Mutex::new(page_manager),
             buffer_pool,
-            wal,
+            wal: Mutex::new(wal),
             _lock_file: lock_file,
         };
 
@@ -70,21 +74,22 @@ impl StorageEngine {
     ///
     /// For each `PageWrite` entry the serialized data is written back to its page.
     /// After replay the WAL is truncated. Returns the number of entries replayed.
-    pub fn recover(&mut self) -> MenteResult<usize> {
-        let entries = self.wal.iterate()?;
+    pub fn recover(&self) -> MenteResult<usize> {
+        let mut wal = self.wal.lock();
+        let entries = wal.iterate()?;
         let mut count = 0usize;
+        let mut pm = self.page_manager.lock();
 
         for entry in &entries {
             match entry.entry_type {
                 WalEntryType::PageWrite => {
                     let page_id = PageId(entry.page_id);
 
-                    // Ensure the page file is large enough for this page id.
-                    while self.page_manager.page_count() <= entry.page_id {
-                        self.page_manager.allocate_page()?;
+                    while pm.page_count() <= entry.page_id {
+                        pm.allocate_page()?;
                     }
 
-                    let mut page = self.page_manager.read_page(page_id)?;
+                    let mut page = pm.read_page(page_id)?;
                     let copy_len = entry.data.len().min(PAGE_DATA_SIZE);
                     page.data[..copy_len].copy_from_slice(&entry.data[..copy_len]);
                     if copy_len < PAGE_DATA_SIZE {
@@ -96,20 +101,17 @@ impl StorageEngine {
                     page.header.free_space = (PAGE_DATA_SIZE - copy_len) as u16;
                     page.header.checksum = page.compute_checksum();
 
-                    self.page_manager.write_page(page_id, &page)?;
+                    pm.write_page(page_id, &page)?;
                     count += 1;
                 }
-                WalEntryType::Checkpoint | WalEntryType::Commit => {
-                    // No page data to replay for these entry types.
-                }
+                WalEntryType::Checkpoint | WalEntryType::Commit => {}
             }
         }
 
         if count > 0 {
-            self.page_manager.sync()?;
-            // Truncate the entire WAL — all entries have been applied.
-            let next_lsn = self.wal.next_lsn();
-            self.wal.truncate(next_lsn)?;
+            pm.sync()?;
+            let next_lsn = wal.next_lsn();
+            wal.truncate(next_lsn)?;
             info!(count, "WAL recovery replayed entries");
         }
 
@@ -117,10 +119,11 @@ impl StorageEngine {
     }
 
     /// Gracefully shut down: flush dirty pages, sync files.
-    pub fn close(&mut self) -> MenteResult<()> {
-        self.buffer_pool.flush_all(&mut self.page_manager)?;
-        self.page_manager.sync()?;
-        self.wal.sync()?;
+    pub fn close(&self) -> MenteResult<()> {
+        let mut pm = self.page_manager.lock();
+        self.buffer_pool.flush_all(&mut pm)?;
+        pm.sync()?;
+        self.wal.lock().sync()?;
         info!("storage engine closed");
         Ok(())
     }
@@ -128,28 +131,29 @@ impl StorageEngine {
     // ---- low-level page operations ----
 
     /// Allocate a fresh page.
-    pub fn allocate_page(&mut self) -> MenteResult<PageId> {
-        self.page_manager.allocate_page()
+    pub fn allocate_page(&self) -> MenteResult<PageId> {
+        self.page_manager.lock().allocate_page()
     }
 
     /// Read a page through the buffer pool.
-    pub fn read_page(&mut self, page_id: PageId) -> MenteResult<Box<Page>> {
-        self.buffer_pool.fetch_page(page_id, &mut self.page_manager)
+    pub fn read_page(&self, page_id: PageId) -> MenteResult<Box<Page>> {
+        self.buffer_pool
+            .fetch_page(page_id, &mut self.page_manager.lock())
     }
 
     /// Write data into a page with WAL protection.
-    pub fn write_page(&mut self, page_id: PageId, data: &[u8]) -> MenteResult<()> {
-        // WAL-first: log before modifying the page.
-        let lsn = self.wal.append(WalEntryType::PageWrite, page_id.0, data)?;
+    pub fn write_page(&self, page_id: PageId, data: &[u8]) -> MenteResult<()> {
+        let lsn = self
+            .wal
+            .lock()
+            .append(WalEntryType::PageWrite, page_id.0, data)?;
 
-        // Load the page into the buffer pool (or get cached copy).
-        let mut page = self
-            .buffer_pool
-            .fetch_page(page_id, &mut self.page_manager)?;
+        let mut pm = self.page_manager.lock();
+        let mut page = self.buffer_pool.fetch_page(page_id, &mut pm)?;
+        drop(pm); // release page_manager lock while we work on the page
 
         let copy_len = data.len().min(PAGE_DATA_SIZE);
         page.data[..copy_len].copy_from_slice(&data[..copy_len]);
-        // Zero out remaining space if data is shorter than existing content.
         if copy_len < PAGE_DATA_SIZE {
             page.data[copy_len..].fill(0);
         }
@@ -158,10 +162,8 @@ impl StorageEngine {
         page.header.free_space = (PAGE_DATA_SIZE - copy_len) as u16;
         page.header.checksum = page.compute_checksum();
 
-        // Push modified page back into the buffer pool.
         if self.buffer_pool.update_page(page_id, &page).is_err() {
-            // Not cached (shouldn't happen after fetch, but be safe).
-            self.page_manager.write_page(page_id, &page)?;
+            self.page_manager.lock().write_page(page_id, &page)?;
         }
         self.buffer_pool.unpin_page(page_id, true).ok();
 
@@ -173,11 +175,10 @@ impl StorageEngine {
     /// Serialize and store a [`MemoryNode`] into a single page.
     ///
     /// Returns the [`PageId`] where the node was stored.
-    pub fn store_memory(&mut self, node: &MemoryNode) -> MenteResult<PageId> {
+    pub fn store_memory(&self, node: &MemoryNode) -> MenteResult<PageId> {
         let serialized =
             serde_json::to_vec(node).map_err(|e| MenteError::Serialization(e.to_string()))?;
 
-        // 4 bytes for the length prefix.
         if serialized.len() + 4 > PAGE_DATA_SIZE {
             return Err(MenteError::CapacityExceeded(format!(
                 "memory node serialized to {} bytes (max {})",
@@ -188,7 +189,6 @@ impl StorageEngine {
 
         let page_id = self.allocate_page()?;
 
-        // Layout: [length: u32 LE][JSON bytes]
         let mut buf = Vec::with_capacity(4 + serialized.len());
         buf.extend_from_slice(&(serialized.len() as u32).to_le_bytes());
         buf.extend_from_slice(&serialized);
@@ -204,9 +204,8 @@ impl StorageEngine {
     }
 
     /// Load and deserialize a [`MemoryNode`] from the given page.
-    pub fn load_memory(&mut self, page_id: PageId) -> MenteResult<MemoryNode> {
+    pub fn load_memory(&self, page_id: PageId) -> MenteResult<MemoryNode> {
         let page = self.read_page(page_id)?;
-        // Unpin immediately — we copy the data we need.
         self.buffer_pool.unpin_page(page_id, false).ok();
 
         let len = u32::from_le_bytes(page.data[..4].try_into().unwrap()) as usize;
@@ -223,13 +222,15 @@ impl StorageEngine {
     // ---- durability ----
 
     /// Checkpoint: flush all dirty pages, sync to disk, and truncate the WAL.
-    pub fn checkpoint(&mut self) -> MenteResult<()> {
-        self.buffer_pool.flush_all(&mut self.page_manager)?;
-        self.page_manager.sync()?;
+    pub fn checkpoint(&self) -> MenteResult<()> {
+        let mut pm = self.page_manager.lock();
+        self.buffer_pool.flush_all(&mut pm)?;
+        pm.sync()?;
 
-        let lsn = self.wal.append(WalEntryType::Checkpoint, 0, &[])?;
-        self.wal.sync()?;
-        self.wal.truncate(lsn)?;
+        let mut wal = self.wal.lock();
+        let lsn = wal.append(WalEntryType::Checkpoint, 0, &[])?;
+        wal.sync()?;
+        wal.truncate(lsn)?;
 
         info!(lsn, "checkpoint complete");
         Ok(())
@@ -238,10 +239,9 @@ impl StorageEngine {
     /// Scan all pages and return (MemoryId, PageId) pairs for every valid memory node.
     ///
     /// Used to rebuild the page map on startup.
-    pub fn scan_all_memories(&mut self) -> Vec<(mentedb_core::types::MemoryId, PageId)> {
-        let count = self.page_manager.page_count();
+    pub fn scan_all_memories(&self) -> Vec<(mentedb_core::types::MemoryId, PageId)> {
+        let count = self.page_manager.lock().page_count();
         let mut results = Vec::new();
-        // Page 0 is the header page, start from 1
         for i in 1..count {
             let page_id = PageId(i);
             if let Ok(node) = self.load_memory(page_id) {
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_allocate_write_read() {
-        let (_dir, mut engine) = setup();
+        let (_dir, engine) = setup();
 
         let pid = engine.allocate_page().unwrap();
         engine.write_page(pid, b"hello storage engine").unwrap();
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn test_store_and_load_memory() {
-        let (_dir, mut engine) = setup();
+        let (_dir, engine) = setup();
 
         let node = MemoryNode::new(
             AgentId::new(),
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_checkpoint() {
-        let (_dir, mut engine) = setup();
+        let (_dir, engine) = setup();
 
         let node = MemoryNode::new(
             AgentId::new(),
@@ -310,7 +310,6 @@ mod tests {
         let pid = engine.store_memory(&node).unwrap();
         engine.checkpoint().unwrap();
 
-        // Data should still be readable after checkpoint.
         let loaded = engine.load_memory(pid).unwrap();
         assert_eq!(loaded.content, "checkpoint test");
     }
@@ -320,7 +319,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let pid;
         {
-            let mut engine = StorageEngine::open(dir.path()).unwrap();
+            let engine = StorageEngine::open(dir.path()).unwrap();
             let node = MemoryNode::new(
                 AgentId::new(),
                 MemoryType::Procedural,
@@ -331,7 +330,7 @@ mod tests {
             engine.close().unwrap();
         }
         {
-            let mut engine = StorageEngine::open(dir.path()).unwrap();
+            let engine = StorageEngine::open(dir.path()).unwrap();
             let loaded = engine.load_memory(pid).unwrap();
             assert_eq!(loaded.content, "persist across close");
         }
@@ -343,7 +342,7 @@ mod tests {
         let mut ids = Vec::new();
         let mut contents = Vec::new();
         {
-            let mut engine = StorageEngine::open(dir.path()).unwrap();
+            let engine = StorageEngine::open(dir.path()).unwrap();
             for i in 0..3 {
                 let content = format!("crash-recovery-{i}");
                 let node = MemoryNode::new(
@@ -357,12 +356,10 @@ mod tests {
                 contents.push(content);
             }
             // Simulate crash: sync the WAL but do NOT call close/checkpoint.
-            engine.wal.sync().unwrap();
-            // Drop without close — dirty pages may not be flushed.
+            engine.wal.lock().sync().unwrap();
         }
         {
-            // Reopen — WAL replay should recover the writes.
-            let mut engine = StorageEngine::open(dir.path()).unwrap();
+            let engine = StorageEngine::open(dir.path()).unwrap();
             for (pid, expected) in ids.iter().zip(contents.iter()) {
                 let loaded = engine.load_memory(*pid).unwrap();
                 assert_eq!(&loaded.content, expected);
@@ -376,7 +373,7 @@ mod tests {
         let pid;
         let content = "idempotent-check".to_string();
         {
-            let mut engine = StorageEngine::open(dir.path()).unwrap();
+            let engine = StorageEngine::open(dir.path()).unwrap();
             let node = MemoryNode::new(
                 AgentId::new(),
                 MemoryType::Semantic,
@@ -384,13 +381,11 @@ mod tests {
                 vec![1.0, 2.0],
             );
             pid = engine.store_memory(&node).unwrap();
-            // Proper shutdown — checkpoint flushes pages and truncates WAL.
             engine.checkpoint().unwrap();
             engine.close().unwrap();
         }
         {
-            // Reopen after clean shutdown — WAL should be empty, no duplicate data.
-            let mut engine = StorageEngine::open(dir.path()).unwrap();
+            let engine = StorageEngine::open(dir.path()).unwrap();
             let loaded = engine.load_memory(pid).unwrap();
             assert_eq!(loaded.content, content);
         }
@@ -402,8 +397,7 @@ mod tests {
         let mut ids = Vec::new();
         let mut contents = Vec::new();
         {
-            let mut engine = StorageEngine::open(dir.path()).unwrap();
-            // Store 3 memories then checkpoint.
+            let engine = StorageEngine::open(dir.path()).unwrap();
             for i in 0..3 {
                 let content = format!("checkpointed-{i}");
                 let node = MemoryNode::new(
@@ -418,7 +412,6 @@ mod tests {
             }
             engine.checkpoint().unwrap();
 
-            // Store 2 more without checkpoint (will only be in WAL).
             for i in 3..5 {
                 let content = format!("unckeckpointed-{i}");
                 let node = MemoryNode::new(
@@ -432,11 +425,10 @@ mod tests {
                 contents.push(content);
             }
             // Simulate crash — sync WAL but don't close.
-            engine.wal.sync().unwrap();
+            engine.wal.lock().sync().unwrap();
         }
         {
-            let mut engine = StorageEngine::open(dir.path()).unwrap();
-            // All 5 memories should be present: 3 from checkpoint, 2 from WAL replay.
+            let engine = StorageEngine::open(dir.path()).unwrap();
             for (pid, expected) in ids.iter().zip(contents.iter()) {
                 let loaded = engine.load_memory(*pid).unwrap();
                 assert_eq!(&loaded.content, expected);

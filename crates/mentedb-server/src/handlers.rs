@@ -48,7 +48,7 @@ pub async fn stats(State(state): State<Arc<AppState>>) -> Result<impl IntoRespon
     let uptime = state.start_time.elapsed().as_secs();
 
     // Scan to count memories (no public count method on MenteDb).
-    let mut db = state.db.write().await;
+    let db = state.db.read().await;
     let memory_count = match db.recall("RECALL memories LIMIT 10000") {
         Ok(window) => window
             .blocks
@@ -194,7 +194,7 @@ pub async fn get_memory(
 
     // PointLookup exists in QueryPlan but is not reachable via MQL syntax,
     // so we scan and filter client-side until MenteDb exposes a public get(id).
-    let mut db = state.db.write().await;
+    let db = state.db.read().await;
     let window = db.recall("RECALL memories LIMIT 1000").map_err(|e| {
         error!("recall failed: {e}");
         ApiError::NotFound(format!("memory {id} not found"))
@@ -288,7 +288,7 @@ pub async fn recall_memories(
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::BadRequest("missing 'query' field".into()))?;
 
-    let mut db = state.db.write().await;
+    let db = state.db.read().await;
     let window = db.recall(query).map_err(|e| {
         error!("recall failed: {e}");
         ApiError::Internal(format!("recall failed: {e}"))
@@ -314,7 +314,7 @@ pub async fn search_similar(
     let embedding = parse_embedding(&req, true)?;
     let k = req.get("k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
-    let mut db = state.db.write().await;
+    let db = state.db.read().await;
     let results = db.recall_similar(&embedding, k).map_err(|e| {
         error!("search failed: {e}");
         ApiError::Internal(format!("search failed: {e}"))

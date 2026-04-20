@@ -105,7 +105,7 @@ impl MenteDb {
     /// Opens (or creates) a MenteDB instance at the given path.
     pub fn open(path: &Path) -> MenteResult<Self> {
         info!("Opening MenteDB at {}", path.display());
-        let mut storage = StorageEngine::open(path)?;
+        let storage = StorageEngine::open(path)?;
 
         let index_dir = path.join("indexes");
         let graph_dir = path.join("graph");
@@ -203,7 +203,7 @@ impl MenteDb {
     /// Parses the query, builds an execution plan, runs it against the
     /// appropriate indexes/graph, and assembles the results into a
     /// token-budget-aware context window.
-    pub fn recall(&mut self, query: &str) -> MenteResult<ContextWindow> {
+    pub fn recall(&self, query: &str) -> MenteResult<ContextWindow> {
         debug!("Recalling with query: {}", query);
         let plan = Mql::parse(query)?;
 
@@ -219,7 +219,7 @@ impl MenteDb {
     /// Memories that have been superseded, contradicted, or temporally
     /// invalidated are automatically excluded from results.
     pub fn recall_similar(
-        &mut self,
+        &self,
         embedding: &[f32],
         k: usize,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
@@ -228,7 +228,7 @@ impl MenteDb {
 
     /// Vector similarity search with optional tag and time range filters.
     pub fn recall_similar_filtered(
-        &mut self,
+        &self,
         embedding: &[f32],
         k: usize,
         tags: Option<&[&str]>,
@@ -247,7 +247,7 @@ impl MenteDb {
     /// Superseded/contradicted memories are excluded unless the edge itself
     /// was not yet valid at that time.
     pub fn recall_similar_at(
-        &mut self,
+        &self,
         embedding: &[f32],
         k: usize,
         at: Timestamp,
@@ -261,7 +261,7 @@ impl MenteDb {
     /// Superseded/contradicted memories are excluded unless the edge itself
     /// was not yet valid at that time. Optionally filters by tags and time range.
     pub fn recall_similar_filtered_at(
-        &mut self,
+        &self,
         embedding: &[f32],
         k: usize,
         at: Timestamp,
@@ -277,7 +277,7 @@ impl MenteDb {
     /// results via Reciprocal Rank Fusion (RRF) for better recall on
     /// exact entity names, dates, and specific terms.
     pub fn recall_hybrid_at(
-        &mut self,
+        &self,
         embedding: &[f32],
         query_text: Option<&str>,
         k: usize,
@@ -329,7 +329,7 @@ impl MenteDb {
     /// on different semantic aspects of a query.
     /// When `query_texts` is provided, each search also runs BM25 matching.
     pub fn recall_similar_multi(
-        &mut self,
+        &self,
         embeddings: &[Vec<f32>],
         k: usize,
         tags: Option<&[&str]>,
@@ -343,7 +343,7 @@ impl MenteDb {
     /// Each query text is searched via both BM25 and vector, then all results
     /// are merged via RRF.
     pub fn recall_hybrid_multi(
-        &mut self,
+        &self,
         embeddings: &[Vec<f32>],
         query_texts: Option<&[String]>,
         k: usize,
@@ -401,7 +401,7 @@ impl MenteDb {
     }
 
     /// Retrieves a single memory by its ID.
-    pub fn get_memory(&mut self, id: MemoryId) -> MenteResult<MemoryNode> {
+    pub fn get_memory(&self, id: MemoryId) -> MenteResult<MemoryNode> {
         let page_id = self
             .page_map
             .get(&id)
@@ -467,7 +467,7 @@ impl MenteDb {
     }
 
     /// Executes a query plan against the indexes and graph, returning scored memories.
-    fn execute_plan(&mut self, plan: &QueryPlan) -> MenteResult<Vec<ScoredMemory>> {
+    fn execute_plan(&self, plan: &QueryPlan) -> MenteResult<Vec<ScoredMemory>> {
         match plan {
             QueryPlan::VectorSearch { query, k, .. } => {
                 let hits = self.index.hybrid_search(query, None, None, *k);
@@ -517,7 +517,7 @@ impl MenteDb {
     }
 
     /// Loads MemoryNodes from storage and pairs them with their search scores.
-    fn load_scored_memories(&mut self, hits: &[(MemoryId, f32)]) -> MenteResult<Vec<ScoredMemory>> {
+    fn load_scored_memories(&self, hits: &[(MemoryId, f32)]) -> MenteResult<Vec<ScoredMemory>> {
         let mut scored = Vec::with_capacity(hits.len());
         for &(id, score) in hits {
             if let Some(&page_id) = self.page_map.get(&id)

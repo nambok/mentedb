@@ -261,7 +261,7 @@ impl MemoryService for MemoryServiceImpl {
         authenticate_grpc_request(&self.state, &request)?;
         let req = request.into_inner();
 
-        let mut db = self.state.db.write().await;
+        let db = self.state.db.read().await;
         let window = db.recall(&req.query).map_err(|e| {
             error!("gRPC recall failed: {e}");
             Status::internal(format!("recall failed: {e}"))
@@ -288,7 +288,7 @@ impl MemoryService for MemoryServiceImpl {
             return Err(Status::invalid_argument("missing embedding vector"));
         }
 
-        let mut db = self.state.db.write().await;
+        let db = self.state.db.read().await;
         let results = db.recall_similar(&req.embedding, k).map_err(|e| {
             error!("gRPC search failed: {e}");
             Status::internal(format!("search failed: {e}"))
