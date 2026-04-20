@@ -242,7 +242,7 @@ impl MemoryService for MemoryServiceImpl {
             valid_until: req.valid_until,
         };
 
-        let mut db = self.state.db.write().await;
+        let db = &*self.state.db;
         db.store(node).map_err(|e| {
             error!("gRPC store failed: {e}");
             Status::internal(format!("store failed: {e}"))
@@ -261,7 +261,7 @@ impl MemoryService for MemoryServiceImpl {
         authenticate_grpc_request(&self.state, &request)?;
         let req = request.into_inner();
 
-        let db = self.state.db.read().await;
+        let db = &*self.state.db;
         let window = db.recall(&req.query).map_err(|e| {
             error!("gRPC recall failed: {e}");
             Status::internal(format!("recall failed: {e}"))
@@ -288,7 +288,7 @@ impl MemoryService for MemoryServiceImpl {
             return Err(Status::invalid_argument("missing embedding vector"));
         }
 
-        let db = self.state.db.read().await;
+        let db = &*self.state.db;
         let results = db.recall_similar(&req.embedding, k).map_err(|e| {
             error!("gRPC search failed: {e}");
             Status::internal(format!("search failed: {e}"))
@@ -313,7 +313,7 @@ impl MemoryService for MemoryServiceImpl {
         let req = request.into_inner();
         let id = MemoryId(parse_uuid_field(&req.id, "id")?);
 
-        let mut db = self.state.db.write().await;
+        let db = &*self.state.db;
         db.forget(id).map_err(|e| {
             error!("gRPC forget failed: {e}");
             Status::internal(format!("forget failed: {e}"))
@@ -351,7 +351,7 @@ impl MemoryService for MemoryServiceImpl {
             label: None,
         };
 
-        let mut db = self.state.db.write().await;
+        let db = &*self.state.db;
         db.relate(edge).map_err(|e| {
             error!("gRPC relate failed: {e}");
             Status::internal(format!("relate failed: {e}"))
@@ -451,13 +451,12 @@ mod tests {
     use mentedb::MenteDb;
     use std::time::Instant;
     use tempfile::TempDir;
-    use tokio::sync::RwLock;
 
     fn make_test_state() -> (Arc<AppState>, TempDir) {
         let tmp = TempDir::new().unwrap();
         let db = MenteDb::open(tmp.path()).unwrap();
         let state = Arc::new(AppState {
-            db: Arc::new(RwLock::new(db)),
+            db: Arc::new(db),
             spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
             jwt_secret: None,
             admin_key: None,
@@ -767,7 +766,7 @@ mod tests {
         let db = MenteDb::open(tmp.path()).unwrap();
         (
             Arc::new(AppState {
-                db: Arc::new(RwLock::new(db)),
+                db: Arc::new(db),
                 spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
                 jwt_secret: Some(secret.into()),
                 admin_key: Some("ak".into()),

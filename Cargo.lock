@@ -2219,6 +2219,7 @@ dependencies = [
  "mentedb-index",
  "mentedb-query",
  "mentedb-storage",
+ "parking_lot",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",

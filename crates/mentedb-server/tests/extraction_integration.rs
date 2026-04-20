@@ -22,7 +22,7 @@ fn test_state(
     let tmp = TempDir::new().unwrap();
     let db = MenteDb::open(tmp.path()).unwrap();
     let state = Arc::new(AppState {
-        db: Arc::new(RwLock::new(db)),
+        db: Arc::new(db),
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: None,
         admin_key: None,

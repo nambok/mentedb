@@ -908,7 +908,7 @@ impl MenteDB {
                         let (neighbor_ids, edges) = db.graph().get_context_subgraph(mem_id, 1);
                         // Hebbian learning: strengthen traversed edges
                         for edge in &edges {
-                            db.graph_mut().strengthen_edge(edge.source, edge.target, 0.02);
+                            db.graph().strengthen_edge(edge.source, edge.target, 0.02);
                         }
                         for nid in neighbor_ids {
                             let nid_str = nid.to_string();

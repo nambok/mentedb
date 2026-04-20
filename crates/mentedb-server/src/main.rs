@@ -20,7 +20,6 @@ use axum::middleware;
 use mentedb::MenteDb;
 use mentedb_extraction::{ExtractionConfig, LlmProvider};
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
 use tonic::transport::Server as TonicServer;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
@@ -263,7 +262,7 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&data_dir)?;
 
     let db = MenteDb::open(&data_dir)?;
-    let db = Arc::new(RwLock::new(db));
+    let db = Arc::new(db);
 
     let auth_mode = if jwt_secret.is_some() {
         "enabled"
@@ -349,7 +348,6 @@ async fn main() -> Result<()> {
 
     grpc_handle.abort();
 
-    let mut db = db.write().await;
     db.close()?;
     info!("MenteDB server stopped");
 

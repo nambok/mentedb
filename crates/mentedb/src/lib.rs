@@ -50,6 +50,7 @@ use mentedb_graph::GraphManager;
 use mentedb_index::IndexManager;
 use mentedb_query::{Mql, QueryPlan};
 use mentedb_storage::StorageEngine;
+use parking_lot::RwLock;
 use tracing::{debug, info};
 
 // Re-export sub-crates for direct access.
@@ -87,12 +88,16 @@ use std::collections::HashMap;
 ///
 /// `MenteDb` coordinates storage, indexing, graph relationships, query parsing,
 /// and context assembly into a single coherent API.
+///
+/// All internal state is protected by fine-grained locks, so every public method
+/// takes `&self`. This allows `Arc<MenteDb>` to be shared across threads without
+/// an external `RwLock`.
 pub struct MenteDb {
     storage: StorageEngine,
     index: IndexManager,
     graph: GraphManager,
     /// Maps memory IDs to their storage page IDs for retrieval.
-    page_map: HashMap<MemoryId, PageId>,
+    page_map: RwLock<HashMap<MemoryId, PageId>>,
     /// Expected embedding dimension (0 = no validation).
     embedding_dim: usize,
     /// Database directory path for persistence.
@@ -138,7 +143,7 @@ impl MenteDb {
             storage,
             index,
             graph,
-            page_map,
+            page_map: RwLock::new(page_map),
             embedding_dim: 0,
             path: path.to_path_buf(),
             embedder: None,
@@ -175,7 +180,7 @@ impl MenteDb {
     ///
     /// The node is persisted to storage, added to all indexes, and registered
     /// in the graph for relationship traversal.
-    pub fn store(&mut self, node: MemoryNode) -> MenteResult<()> {
+    pub fn store(&self, node: MemoryNode) -> MenteResult<()> {
         let id = node.id;
         debug!("Storing memory {}", id);
 
@@ -191,7 +196,7 @@ impl MenteDb {
         }
 
         let page_id = self.storage.store_memory(&node)?;
-        self.page_map.insert(id, page_id);
+        self.page_map.write().insert(id, page_id);
         self.index.index_memory(&node);
         self.graph.add_memory(id);
 
@@ -296,10 +301,10 @@ impl MenteDb {
             self.index
                 .hybrid_search_with_query(embedding, query_text, tags, time_range, k * 3);
         let graph = self.graph.graph();
+        let pm = self.page_map.read();
         let filtered: Vec<(MemoryId, f32)> = results
             .into_iter()
             .filter(|(id, _)| {
-                // Skip memories with active Supersedes/Contradicts edges at this timestamp
                 let incoming = graph.incoming(*id);
                 let has_active_supersede = incoming.iter().any(|(_, e)| {
                     (e.edge_type == EdgeType::Supersedes || e.edge_type == EdgeType::Contradicts)
@@ -308,8 +313,7 @@ impl MenteDb {
                 !has_active_supersede
             })
             .filter(|(id, _)| {
-                // Skip memories that are not temporally valid at this timestamp
-                if let Some(&page_id) = self.page_map.get(id)
+                if let Some(&page_id) = pm.get(id)
                     && let Ok(node) = self.storage.load_memory(page_id)
                 {
                     node.is_valid_at(at)
@@ -378,23 +382,23 @@ impl MenteDb {
     ///
     /// The memory remains in storage for historical queries but is excluded
     /// from current recall results.
-    pub fn invalidate_memory(&mut self, id: MemoryId, at: Timestamp) -> MenteResult<()> {
+    pub fn invalidate_memory(&self, id: MemoryId, at: Timestamp) -> MenteResult<()> {
         debug!("Invalidating memory {} at {}", id, at);
         let page_id = self
             .page_map
+            .read()
             .get(&id)
             .copied()
             .ok_or(MenteError::MemoryNotFound(id))?;
         let mut node = self.storage.load_memory(page_id)?;
         node.invalidate(at);
-        // Re-store the updated node
         let new_page_id = self.storage.store_memory(&node)?;
-        self.page_map.insert(id, new_page_id);
+        self.page_map.write().insert(id, new_page_id);
         Ok(())
     }
 
     /// Adds a typed, weighted edge between two memories in the graph.
-    pub fn relate(&mut self, edge: MemoryEdge) -> MenteResult<()> {
+    pub fn relate(&self, edge: MemoryEdge) -> MenteResult<()> {
         debug!("Relating {} -> {}", edge.source, edge.target);
         self.graph.add_relationship(&edge)?;
         Ok(())
@@ -404,6 +408,7 @@ impl MenteDb {
     pub fn get_memory(&self, id: MemoryId) -> MenteResult<MemoryNode> {
         let page_id = self
             .page_map
+            .read()
             .get(&id)
             .copied()
             .ok_or(MenteError::MemoryNotFound(id))?;
@@ -412,27 +417,26 @@ impl MenteDb {
 
     /// Returns all memory IDs currently stored in the database.
     pub fn memory_ids(&self) -> Vec<MemoryId> {
-        self.page_map.keys().copied().collect()
+        self.page_map.read().keys().copied().collect()
     }
 
     /// Returns the number of memories currently stored.
     pub fn memory_count(&self) -> usize {
-        self.page_map.len()
+        self.page_map.read().len()
     }
 
     /// Removes a memory from storage, indexes, and the graph.
-    pub fn forget(&mut self, id: MemoryId) -> MenteResult<()> {
+    pub fn forget(&self, id: MemoryId) -> MenteResult<()> {
         debug!("Forgetting memory {}", id);
 
-        // Load the node so we can clean up indexes properly.
-        if let Some(&page_id) = self.page_map.get(&id)
+        if let Some(&page_id) = self.page_map.read().get(&id)
             && let Ok(node) = self.storage.load_memory(page_id)
         {
             self.index.remove_memory(id, &node);
         }
 
         self.graph.remove_memory(id);
-        self.page_map.remove(&id);
+        self.page_map.write().remove(&id);
         Ok(())
     }
 
@@ -442,12 +446,13 @@ impl MenteDb {
     }
 
     /// Returns a mutable reference to the underlying graph manager.
+    #[deprecated(note = "GraphManager now uses interior mutability; use graph() instead")]
     pub fn graph_mut(&mut self) -> &mut GraphManager {
         &mut self.graph
     }
 
     /// Flushes all data and closes the database.
-    pub fn close(&mut self) -> MenteResult<()> {
+    pub fn close(&self) -> MenteResult<()> {
         info!("Closing MenteDB");
         self.flush()?;
         self.storage.close()?;
@@ -458,7 +463,7 @@ impl MenteDb {
     ///
     /// Call this periodically to ensure cross-session persistence.
     /// Unlike `close()`, the database remains usable after flushing.
-    pub fn flush(&mut self) -> MenteResult<()> {
+    pub fn flush(&self) -> MenteResult<()> {
         debug!("Flushing MenteDB to disk");
         self.index.save(&self.path.join("indexes"))?;
         self.graph.save(&self.path.join("graph"))?;
@@ -488,10 +493,11 @@ impl MenteDb {
             }
             QueryPlan::GraphTraversal { start, depth, .. } => {
                 let (ids, _edges) = self.graph.get_context_subgraph(*start, *depth);
+                let pm = self.page_map.read();
                 let scored: Vec<ScoredMemory> = ids
                     .iter()
                     .filter_map(|id| {
-                        self.page_map.get(id).and_then(|&pid| {
+                        pm.get(id).and_then(|&pid| {
                             self.storage.load_memory(pid).ok().map(|node| ScoredMemory {
                                 memory: node,
                                 score: 1.0,
@@ -504,9 +510,11 @@ impl MenteDb {
             QueryPlan::PointLookup { id } => {
                 let page_id = self
                     .page_map
+                    .read()
                     .get(id)
+                    .copied()
                     .ok_or(MenteError::MemoryNotFound(*id))?;
-                let node = self.storage.load_memory(*page_id)?;
+                let node = self.storage.load_memory(page_id)?;
                 Ok(vec![ScoredMemory {
                     memory: node,
                     score: 1.0,
@@ -518,9 +526,10 @@ impl MenteDb {
 
     /// Loads MemoryNodes from storage and pairs them with their search scores.
     fn load_scored_memories(&self, hits: &[(MemoryId, f32)]) -> MenteResult<Vec<ScoredMemory>> {
+        let pm = self.page_map.read();
         let mut scored = Vec::with_capacity(hits.len());
         for &(id, score) in hits {
-            if let Some(&page_id) = self.page_map.get(&id)
+            if let Some(&page_id) = pm.get(&id)
                 && let Ok(node) = self.storage.load_memory(page_id)
             {
                 scored.push(ScoredMemory {

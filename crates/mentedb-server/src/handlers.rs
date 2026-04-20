@@ -48,7 +48,7 @@ pub async fn stats(State(state): State<Arc<AppState>>) -> Result<impl IntoRespon
     let uptime = state.start_time.elapsed().as_secs();
 
     // Scan to count memories (no public count method on MenteDb).
-    let db = state.db.read().await;
+    let db = &*state.db;
     let memory_count = match db.recall("RECALL memories LIMIT 10000") {
         Ok(window) => window
             .blocks
@@ -145,7 +145,7 @@ pub async fn store_memory(
         valid_until: req.get("valid_until").and_then(|v| v.as_u64()),
     };
 
-    let mut db = state.db.write().await;
+    let db = &*state.db;
     db.store(node).map_err(|e| {
         error!("store failed: {e}");
         ApiError::Internal(format!("store failed: {e}"))
@@ -155,7 +155,7 @@ pub async fn store_memory(
     if state.auto_extract && state.extraction_config.is_some() && looks_like_conversation(&content)
     {
         let extraction_config = state.extraction_config.clone().unwrap();
-        match run_extraction(&extraction_config, &content, agent_id, space_id, &mut db).await {
+        match run_extraction(&extraction_config, &content, agent_id, space_id, db).await {
             Ok(extract_stats) => {
                 return Ok((
                     StatusCode::CREATED,
@@ -194,7 +194,7 @@ pub async fn get_memory(
 
     // PointLookup exists in QueryPlan but is not reachable via MQL syntax,
     // so we scan and filter client-side until MenteDb exposes a public get(id).
-    let db = state.db.read().await;
+    let db = &*state.db;
     let window = db.recall("RECALL memories LIMIT 1000").map_err(|e| {
         error!("recall failed: {e}");
         ApiError::NotFound(format!("memory {id} not found"))
@@ -235,7 +235,7 @@ pub async fn forget_memory(
         .parse()
         .map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
 
-    let mut db = state.db.write().await;
+    let db = &*state.db;
     if let Some(Extension(ref authed)) = agent {
         let tid: AgentId = authed
             .agent_id
@@ -288,7 +288,7 @@ pub async fn recall_memories(
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::BadRequest("missing 'query' field".into()))?;
 
-    let db = state.db.read().await;
+    let db = &*state.db;
     let window = db.recall(query).map_err(|e| {
         error!("recall failed: {e}");
         ApiError::Internal(format!("recall failed: {e}"))
@@ -314,7 +314,7 @@ pub async fn search_similar(
     let embedding = parse_embedding(&req, true)?;
     let k = req.get("k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
-    let db = state.db.read().await;
+    let db = &*state.db;
     let results = db.recall_similar(&embedding, k).map_err(|e| {
         error!("search failed: {e}");
         ApiError::Internal(format!("search failed: {e}"))
@@ -372,7 +372,7 @@ pub async fn create_edge(
             .map(|s| s.to_string()),
     };
 
-    let mut db = state.db.write().await;
+    let db = &*state.db;
     db.relate(edge).map_err(|e| {
         error!("relate failed: {e}");
         ApiError::Internal(format!("relate failed: {e}"))
@@ -423,9 +423,8 @@ pub async fn ingest_conversation(
         None => SpaceId::nil(),
     };
 
-    let mut db = state.db.write().await;
     let stats =
-        run_extraction(extraction_config, conversation, agent_id, space_id, &mut db).await?;
+        run_extraction(extraction_config, conversation, agent_id, space_id, &state.db).await?;
 
     Ok((StatusCode::OK, Json(stats)))
 }
@@ -436,7 +435,7 @@ async fn run_extraction(
     conversation: &str,
     agent_id: AgentId,
     space_id: SpaceId,
-    db: &mut mentedb::MenteDb,
+    db: &mentedb::MenteDb,
 ) -> Result<Value, ApiError> {
     let provider = HttpExtractionProvider::new(config.clone()).map_err(|e| {
         error!("extraction provider init failed: {e}");

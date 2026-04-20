@@ -33,7 +33,7 @@ fn build_test_app_with_auth() -> (axum::Router, TempDir) {
     let tmp = TempDir::new().unwrap();
     let db = MenteDb::open(tmp.path()).unwrap();
     let state = Arc::new(AppState {
-        db: Arc::new(RwLock::new(db)),
+        db: Arc::new(db),
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: Some(JWT_SECRET.to_string()),
         admin_key: Some(ADMIN_KEY.to_string()),
@@ -53,7 +53,7 @@ fn build_test_app_no_auth() -> (axum::Router, TempDir) {
     let tmp = TempDir::new().unwrap();
     let db = MenteDb::open(tmp.path()).unwrap();
     let state = Arc::new(AppState {
-        db: Arc::new(RwLock::new(db)),
+        db: Arc::new(db),
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: None,
         admin_key: None,
@@ -73,7 +73,7 @@ fn build_test_app_rate_limited(max_tokens: u32) -> (axum::Router, TempDir) {
     let tmp = TempDir::new().unwrap();
     let db = MenteDb::open(tmp.path()).unwrap();
     let state = Arc::new(AppState {
-        db: Arc::new(RwLock::new(db)),
+        db: Arc::new(db),
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: None,
         admin_key: None,
@@ -98,7 +98,7 @@ fn build_test_app_with_auth_no_admin_key() -> (axum::Router, TempDir) {
     let tmp = TempDir::new().unwrap();
     let db = MenteDb::open(tmp.path()).unwrap();
     let state = Arc::new(AppState {
-        db: Arc::new(RwLock::new(db)),
+        db: Arc::new(db),
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: Some(JWT_SECRET.to_string()),
         admin_key: None,
