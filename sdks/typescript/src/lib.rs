@@ -5,10 +5,10 @@ use mentedb_cognitive::stream::CognitionStream as RustCognitionStream;
 use mentedb_cognitive::trajectory::{
     DecisionState, TrajectoryNode, TrajectoryTracker as RustTrajectoryTracker,
 };
+use mentedb_core::MemoryEdge;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::{MemoryNode, MemoryType};
 use mentedb_core::types::{AgentId, MemoryId};
-use mentedb_core::MemoryEdge;
 use mentedb_extraction::{
     ExtractionConfig, ExtractionPipeline, HttpExtractionProvider, LlmProvider,
     map_extraction_type_to_memory_type,
@@ -29,9 +29,7 @@ fn parse_memory_type(s: &str) -> Result<MemoryType> {
         "anti_pattern" => Ok(MemoryType::AntiPattern),
         "reasoning" => Ok(MemoryType::Reasoning),
         "correction" => Ok(MemoryType::Correction),
-        other => Err(Error::from_reason(format!(
-            "Unknown memory type: {other}"
-        ))),
+        other => Err(Error::from_reason(format!("Unknown memory type: {other}"))),
     }
 }
 
@@ -45,9 +43,7 @@ fn parse_edge_type(s: &str) -> Result<EdgeType> {
         "supersedes" => Ok(EdgeType::Supersedes),
         "derived" => Ok(EdgeType::Derived),
         "part_of" => Ok(EdgeType::PartOf),
-        other => Err(Error::from_reason(format!(
-            "Unknown edge type: {other}"
-        ))),
+        other => Err(Error::from_reason(format!("Unknown edge type: {other}"))),
     }
 }
 
@@ -125,8 +121,8 @@ impl MenteDB {
         let emb: Vec<f32> = embedding.iter().map(|&v| v as f32).collect();
 
         let aid = match agent_id {
-            Some(ref s) => parse_uuid(s)?,
-            None => AgentId::nil().into(),
+            Some(ref s) => AgentId(parse_uuid(s)?),
+            None => AgentId::nil(),
         };
 
         let mut node = MemoryNode::new(aid, mt, content, emb);
@@ -150,11 +146,7 @@ impl MenteDB {
             .map(|m| m.memory.content.as_str())
             .collect::<Vec<_>>()
             .join("\n\n");
-        let memory_count: u32 = window
-            .blocks
-            .iter()
-            .map(|b| b.memories.len() as u32)
-            .sum();
+        let memory_count: u32 = window.blocks.iter().map(|b| b.memories.len() as u32).sum();
 
         Ok(RecallResult {
             text,
@@ -191,8 +183,8 @@ impl MenteDB {
         valid_from: Option<i64>,
         valid_until: Option<i64>,
     ) -> Result<()> {
-        let src = parse_uuid(&source)?;
-        let tgt = parse_uuid(&target)?;
+        let src = MemoryId(parse_uuid(&source)?);
+        let tgt = MemoryId(parse_uuid(&target)?);
         let et = parse_edge_type(&edge_type)?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -215,7 +207,7 @@ impl MenteDB {
     /// Remove a memory by ID.
     #[napi]
     pub fn forget(&mut self, memory_id: String) -> Result<()> {
-        let id: MemoryId = parse_uuid(&memory_id)?;
+        let id = MemoryId(parse_uuid(&memory_id)?);
         self.inner.forget(id).map_err(mente_err)
     }
 
@@ -236,8 +228,7 @@ impl MenteDB {
             .map_err(|e| Error::from_reason(format!("{e}")))?;
         let pipeline = ExtractionPipeline::new(http_provider, config.clone());
 
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| Error::from_reason(format!("{e}")))?;
+        let rt = tokio::runtime::Runtime::new().map_err(|e| Error::from_reason(format!("{e}")))?;
         let all_memories = rt
             .block_on(pipeline.extract_from_conversation(&conversation))
             .map_err(|e| Error::from_reason(format!("{e}")))?;
@@ -247,8 +238,8 @@ impl MenteDB {
         let rejected_low_quality = (total - quality_passed.len()) as u32;
 
         let aid = match agent_id {
-            Some(ref s) => parse_uuid(s)?,
-            None => AgentId::nil().into(),
+            Some(ref s) => AgentId(parse_uuid(s)?),
+            None => AgentId::nil(),
         };
 
         let mut stored_ids = Vec::new();
@@ -303,8 +294,8 @@ fn build_ts_extraction_config(provider_override: Option<&str>) -> Result<Extract
     let api_key = std::env::var("MENTEDB_LLM_API_KEY").ok();
     let api_url = std::env::var("MENTEDB_LLM_BASE_URL")
         .unwrap_or_else(|_| provider.default_url().to_string());
-    let model = std::env::var("MENTEDB_LLM_MODEL")
-        .unwrap_or_else(|_| provider.default_model().to_string());
+    let model =
+        std::env::var("MENTEDB_LLM_MODEL").unwrap_or_else(|_| provider.default_model().to_string());
     let quality_threshold = std::env::var("MENTEDB_EXTRACTION_QUALITY_THRESHOLD")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -320,6 +311,7 @@ fn build_ts_extraction_config(provider_override: Option<&str>) -> Result<Extract
         deduplication_threshold: 0.85,
         enable_contradiction_check: true,
         enable_deduplication: true,
+        extraction_passes: 1,
     })
 }
 

@@ -1,5 +1,6 @@
 """CrewAI tool for querying MenteDB with MQL."""
-from typing import Optional
+
+from mentedb import MenteDB
 
 
 class MenteDBTool:
@@ -26,7 +27,9 @@ class MenteDBTool:
 
     def __init__(self, data_dir: str = "./mentedb-data"):
         self.data_dir = data_dir
+        self._db = MenteDB(data_dir)
 
     def run(self, query: str) -> str:
         """Execute an MQL query and return assembled context."""
-        return f"[MenteDB query result for: {query}]"
+        result = self._db.recall(query)
+        return result.text if result else ""

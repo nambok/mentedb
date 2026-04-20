@@ -1,5 +1,9 @@
-from mentedb.client import MenteDB
 from mentedb.types import MemoryType, EdgeType, RecallResult, SearchResult
 
-__version__ = "0.1.0"
+try:
+    from mentedb.client import MenteDB
+except ImportError:
+    MenteDB = None  # type: ignore[assignment,misc]
+
+__version__ = "0.3.1"
 __all__ = ["MenteDB", "MemoryType", "EdgeType", "RecallResult", "SearchResult"]

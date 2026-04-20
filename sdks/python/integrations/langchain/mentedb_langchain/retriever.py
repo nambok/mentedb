@@ -1,6 +1,8 @@
 """LangChain retriever backed by MenteDB vector search."""
 from typing import List, Optional
 
+from mentedb import MenteDB
+
 
 class MenteDBRetriever:
     """LangChain compatible retriever using MenteDB hybrid search.
@@ -26,12 +28,25 @@ class MenteDBRetriever:
         self.k = k
         self.tags = tags
         self.agent_id = agent_id
+        self._db = MenteDB(data_dir)
 
     def get_relevant_documents(self, query: str) -> list:
-        """Retrieve relevant memories as LangChain Documents."""
-        # Would build MQL query with optional tag filters
-        # RECALL memories WHERE content ~> query AND tag IN tags LIMIT k
-        return []
+        """Retrieve relevant memories as dicts with id, content, and score."""
+        results = self._db.search_text(query, k=self.k, tags=self.tags)
+        docs = []
+        for r in results:
+            mem = self._db.get_memory(r.id)
+            if mem:
+                docs.append({
+                    "page_content": mem["content"],
+                    "metadata": {
+                        "id": r.id,
+                        "score": r.score,
+                        "memory_type": mem.get("memory_type", ""),
+                        "tags": mem.get("tags", []),
+                    },
+                })
+        return docs
 
     async def aget_relevant_documents(self, query: str) -> list:
         """Async version of get_relevant_documents."""

@@ -1,6 +1,8 @@
 """LangChain memory backed by MenteDB."""
 from typing import Any, Dict, List, Optional
 
+from mentedb import MenteDB
+
 
 class MenteDBMemory:
     """LangChain compatible memory that stores conversation context in MenteDB.
@@ -10,13 +12,11 @@ class MenteDBMemory:
 
         memory = MenteDBMemory(data_dir="./agent-memory", agent_id="my-agent")
 
-        # Store a conversation turn
         memory.save_context(
             inputs={"input": "What database should I use?"},
             outputs={"output": "I recommend PostgreSQL for your use case."}
         )
 
-        # Load relevant memories for next turn
         context = memory.load_memory_variables({"input": "Tell me more about that database"})
     """
 
@@ -28,9 +28,7 @@ class MenteDBMemory:
         self.agent_id = agent_id
         self.token_budget = token_budget
         self.return_messages = return_messages
-        # Will import mentedb when available
-        # from mentedb import MenteDB
-        # self._db = MenteDB(data_dir)
+        self._db = MenteDB(data_dir)
 
     @property
     def memory_variables(self) -> List[str]:
@@ -39,17 +37,27 @@ class MenteDBMemory:
     def load_memory_variables(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Load relevant memories based on the current input."""
         query = inputs.get("input", "")
-        # Would use MQL: RECALL memories WHERE content ~> query LIMIT budget
-        return {self.memory_key: f"[MenteDB context for: {query}]"}
+        if not query:
+            return {self.memory_key: ""}
+        results = self._db.search_text(query, k=10)
+        if not results:
+            return {self.memory_key: ""}
+        texts = []
+        for r in results:
+            mem = self._db.get_memory(r.id)
+            if mem:
+                texts.append(mem["content"])
+        return {self.memory_key: "\n".join(texts)}
 
     def save_context(self, inputs: Dict[str, Any], outputs: Dict[str, str]) -> None:
         """Save a conversation turn as episodic memory."""
         input_text = inputs.get("input", "")
         output_text = outputs.get("output", "")
         content = f"User: {input_text}\nAssistant: {output_text}"
-        # Would store via mentedb
-        pass
+        self._db.store(content, memory_type="episodic", agent_id=self.agent_id)
 
     def clear(self) -> None:
-        """Clear all memories for this agent."""
-        pass
+        """Clear all memories by closing and reopening."""
+        self._db.close()
+        self._db = MenteDB(self.data_dir)
+
