@@ -54,6 +54,10 @@ use parking_lot::RwLock;
 use tracing::{debug, info};
 
 // Re-export sub-crates for direct access.
+
+/// Engine version, derived from Cargo.toml at compile time.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Cognitive pipeline: speculative caching, trajectory tracking, inference.
 pub use mentedb_cognitive as cognitive;
 /// Context assembly engine.
