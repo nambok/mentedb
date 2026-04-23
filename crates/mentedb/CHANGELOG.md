@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1](https://github.com/nambok/mentedb/compare/mentedb-v0.6.0...mentedb-v0.6.1) - 2026-04-23
+
+### Added
+
+- export VERSION const from mentedb crate
+
 ## [0.6.0](https://github.com/nambok/mentedb/compare/mentedb-v0.5.2...mentedb-v0.6.0) - 2026-04-20
 
 ### Added
