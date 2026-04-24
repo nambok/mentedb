@@ -672,7 +672,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "mentedb"
-version = "0.5.2"
+version = "0.6.1"
 dependencies = [
  "mentedb-cognitive",
  "mentedb-context",
@@ -690,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-cognitive"
-version = "0.5.2"
+version = "0.6.1"
 dependencies = [
  "ahash",
  "crossbeam",
@@ -705,7 +705,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-context"
-version = "0.5.2"
+version = "0.6.1"
 dependencies = [
  "ahash",
  "mentedb-core",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-core"
-version = "0.5.2"
+version = "0.6.1"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -732,7 +732,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-embedding"
-version = "0.5.2"
+version = "0.6.1"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-extraction"
-version = "0.5.2"
+version = "0.6.1"
 dependencies = [
  "mentedb-cognitive",
  "mentedb-core",
@@ -760,7 +760,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-graph"
-version = "0.5.2"
+version = "0.6.1"
 dependencies = [
  "ahash",
  "bincode",
@@ -775,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-index"
-version = "0.5.2"
+version = "0.6.1"
 dependencies = [
  "ahash",
  "bincode",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-query"
-version = "0.5.2"
+version = "0.6.1"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-storage"
-version = "0.5.2"
+version = "0.6.1"
 dependencies = [
  "ahash",
  "bincode",
@@ -1227,9 +1227,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.12"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8279bb85272c9f10811ae6a6c547ff594d6a7f3c6c6b02ee9726d1d0dcfcdd06"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "ring",
  "rustls-pki-types",
