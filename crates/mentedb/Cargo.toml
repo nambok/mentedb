@@ -29,6 +29,7 @@ tempfile = { workspace = true }
 criterion = { workspace = true }
 uuid = { workspace = true }
 mentedb-consolidation = { workspace = true }
+serde_json = { workspace = true }
 
 [[bench]]
 name = "storage_bench"
