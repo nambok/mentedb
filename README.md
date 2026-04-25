@@ -450,6 +450,40 @@ Candle provides good quality for zero-config local use. OpenAI offers higher acc
 
 Context assembly stays sub-millisecond even at 10,000 memories.
 
+### Token Efficiency
+
+MenteDB's context assembler uses purpose-built serialization formats instead of dumping raw JSON into context windows. Measured by [`token_efficiency`](crates/mentedb/examples/token_efficiency.rs):
+
+**Format comparison** (25 memories, same content):
+
+| Format | Tokens | vs Raw JSON |
+|--------|-------:|------------:|
+| Raw JSON | 947 | — |
+| Structured (markdown) | 576 | 1.6x fewer |
+| **Compact (pipe-delimited)** | **414** | **2.3x fewer** |
+
+**Multi-turn delta serving** (20-turn conversation):
+
+| Metric | Tokens |
+|--------|-------:|
+| Full retrieval (cumulative) | 9,863 |
+| Delta serving (cumulative) | 2,004 |
+| **Savings** | **79.7%** |
+
+Delta serving only sends memories that changed since the last turn. Early turns have overhead from the delta header, but by turn 10+ savings exceed 85% per turn.
+
+**Memory density** (memories that fit within a serialized output budget):
+
+| Budget | Compact | Structured | Raw JSON |
+|-------:|--------:|-----------:|---------:|
+| 4,096 | 223 | 166 | 218 |
+| 8,192 | 448 | 333 | 436 |
+
+```bash
+# Run it yourself
+cargo run --example token_efficiency -p mentedb
+```
+
 ### Running Benchmarks
 
 ```bash
