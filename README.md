@@ -10,6 +10,44 @@ MenteDB is a purpose built database engine for AI agent memory. Not a wrapper ar
 
 > *mente* (Spanish): mind, intellect
 
+## Installation
+
+### Docker (fastest)
+
+```bash
+docker run -p 6677:6677 \
+  -e MENTEDB_LLM_PROVIDER=openai \
+  -e MENTEDB_LLM_API_KEY=sk-... \
+  -v mentedb-data:/data \
+  ghcr.io/nambok/mentedb:latest
+```
+
+### Rust (from source)
+
+```bash
+cargo install mentedb-server
+mentedb-server --data-dir ./data
+```
+
+### Python SDK
+
+```bash
+pip install mentedb
+```
+
+### TypeScript SDK
+
+```bash
+npm install mentedb
+```
+
+### Integrations
+
+```bash
+pip install mentedb-langchain  # LangChain memory provider
+pip install mentedb-crewai     # CrewAI memory provider
+```
+
 ## Quick Start
 
 **Just remember a conversation:**
@@ -180,7 +218,7 @@ Bidirectional streaming for real time cognition updates. Proto file at `crates/m
 
 ### 4. SDKs
 
-**Python:**
+**Python:** `pip install mentedb`
 ```python
 from mentedb import MenteDb
 
@@ -190,7 +228,7 @@ db.ingest("User: I switched to Vim\nAssistant: Got it!")
 results = db.recall("RECALL memories WHERE tag = 'preferences' LIMIT 5")
 ```
 
-**TypeScript:**
+**TypeScript:** `npm install mentedb`
 ```typescript
 import { MenteDb } from 'mentedb';
 
@@ -198,6 +236,22 @@ const db = new MenteDb('./agent-memory');
 await db.store({ content: 'User prefers TypeScript', memoryType: 'semantic', agentId: 'my-agent' });
 await db.ingest('User: I switched to Neovim\nAssistant: Noted!');
 const results = await db.recall("RECALL memories WHERE tag = 'editor' LIMIT 5");
+```
+
+**LangChain:** `pip install mentedb-langchain`
+```python
+from mentedb_langchain import MenteDBChatMessageHistory
+
+history = MenteDBChatMessageHistory(data_dir="./memory", agent_id="my-agent")
+history.add_user_message("I prefer dark mode")
+history.add_ai_message("Noted!")
+```
+
+**CrewAI:** `pip install mentedb-crewai`
+```python
+from mentedb_crewai import MenteDBStorage
+
+storage = MenteDBStorage(data_dir="./memory")
 ```
 
 ## Architecture
@@ -483,11 +537,18 @@ CONSOLIDATE WHERE type = episodic AND accessed < "2024-01-01"
 ## Docker
 
 ```bash
-docker build -t mentedb .
-docker run -p 6677:8080 \
+# Using the published image
+docker run -p 6677:6677 \
   -e MENTEDB_JWT_SECRET=your-secret \
   -e MENTEDB_LLM_PROVIDER=openai \
   -e MENTEDB_LLM_API_KEY=sk-... \
+  -v mentedb-data:/data \
+  ghcr.io/nambok/mentedb:latest
+
+# Or build from source
+docker build -t mentedb .
+docker run -p 6677:6677 \
+  -e MENTEDB_JWT_SECRET=your-secret \
   -v mentedb-data:/data \
   mentedb
 ```
