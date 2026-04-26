@@ -181,14 +181,15 @@ pub async fn get_memory(
         .map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
 
     let db = &*state.db;
-    let node = db.get_memory(id).map_err(|_| {
-        ApiError::NotFound(format!("memory {id} not found"))
-    })?;
+    let node = db
+        .get_memory(id)
+        .map_err(|_| ApiError::NotFound(format!("memory {id} not found")))?;
 
     if let Some(Extension(ref authed)) = agent {
-        let tid: AgentId = authed.agent_id.parse().map_err(|_| {
-            ApiError::Internal("token contains invalid agent_id UUID".into())
-        })?;
+        let tid: AgentId = authed
+            .agent_id
+            .parse()
+            .map_err(|_| ApiError::Internal("token contains invalid agent_id UUID".into()))?;
         if node.agent_id != tid {
             return Err(ApiError::Forbidden(
                 "memory belongs to a different agent".into(),
