@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/nambok/mentedb/compare/mentedb-context-v0.7.2...mentedb-context-v0.8.0) - 2026-04-26
+
+### Other
+
+- fix READMEs — process_turn as primary API, remove deprecated ingest, fix class names
+- rewrite quick start around process_turn
+
 ## [0.7.2](https://github.com/nambok/mentedb/compare/mentedb-context-v0.7.1...mentedb-context-v0.7.2) - 2026-04-26
 
 ### Other
