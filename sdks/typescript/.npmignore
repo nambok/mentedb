@@ -5,5 +5,7 @@ Cargo.lock
 build.rs
 __tests__/
 tsconfig.json
-*.node
 .cargo/
+npm/client.ts
+npm/index.ts
+npm/types.ts

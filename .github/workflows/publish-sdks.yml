@@ -45,8 +45,55 @@ jobs:
         with:
           packages-dir: dist/
 
+  build-npm:
+    name: Build npm native (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: mentedb.linux-x64-gnu.node
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: mentedb.darwin-arm64.node
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: mentedb.darwin-x64.node
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: mentedb.win32-x64-msvc.node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install protobuf compiler (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y protobuf-compiler
+      - name: Install protobuf compiler (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+      - name: Install protobuf compiler (Windows)
+        if: runner.os == 'Windows'
+        run: choco install protoc -y
+      - name: Install napi-rs CLI
+        run: npm install -g @napi-rs/cli
+      - name: Build native module
+        working-directory: sdks/typescript
+        run: napi build --release --platform --target ${{ matrix.target }}
+      - name: Upload native artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.target }}
+          path: sdks/typescript/${{ matrix.artifact }}
+
   publish-npm:
     name: Publish to npm
+    needs: build-npm
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -57,12 +104,39 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-      - run: cd sdks/typescript && npm publish --access public --provenance
+      - name: Download all native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          merge-multiple: true
+          path: sdks/typescript/
+      - name: Verify native binaries
+        working-directory: sdks/typescript
+        run: |
+          echo "Built native binaries:"
+          ls -la *.node
+          EXPECTED=4
+          ACTUAL=$(ls *.node | wc -l | tr -d ' ')
+          if [ "$ACTUAL" -ne "$EXPECTED" ]; then
+            echo "❌ Expected $EXPECTED .node files, found $ACTUAL"
+            exit 1
+          fi
+          echo "✅ All $EXPECTED platform binaries present"
+      - name: Install dependencies
+        working-directory: sdks/typescript
+        run: npm install
+      - name: Compile TypeScript
+        working-directory: sdks/typescript
+        run: npx tsc
+      - name: Publish to npm
+        working-directory: sdks/typescript
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-integrations:
     name: Publish LangChain & CrewAI
+    needs: upload-pypi
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -102,6 +176,8 @@ jobs:
           TAG="${{ github.event.release.tag_name }}"
           VERSION="${TAG#mentedb-v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -110,6 +186,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ghcr.io/nambok/mentedb:latest

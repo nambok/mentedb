@@ -672,7 +672,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "mentedb"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "mentedb-cognitive",
  "mentedb-consolidation",
@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-cognitive"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ahash",
  "crossbeam",
@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-consolidation"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ahash",
  "mentedb-core",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-context"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ahash",
  "mentedb-core",
@@ -729,7 +729,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-embedding"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -756,7 +756,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-extraction"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "mentedb-cognitive",
  "mentedb-core",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-graph"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ahash",
  "bincode",
@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-index"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ahash",
  "bincode",
@@ -825,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-query"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -836,7 +836,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-storage"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ahash",
  "bincode",

@@ -46,17 +46,8 @@ pub async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 /// Returns database statistics (memory count, index size, etc.).
 pub async fn stats(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
     let uptime = state.start_time.elapsed().as_secs();
-
-    // Scan to count memories (no public count method on MenteDb).
     let db = &*state.db;
-    let memory_count = match db.recall("RECALL memories LIMIT 10000") {
-        Ok(window) => window
-            .blocks
-            .iter()
-            .map(|b| b.memories.len())
-            .sum::<usize>(),
-        Err(_) => 0,
-    };
+    let memory_count = db.memory_count();
 
     Ok(Json(json!({
         "memory_count": memory_count,
@@ -189,33 +180,24 @@ pub async fn get_memory(
         .parse()
         .map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
 
-    // PointLookup exists in QueryPlan but is not reachable via MQL syntax,
-    // so we scan and filter client-side until MenteDb exposes a public get(id).
     let db = &*state.db;
-    let window = db.recall("RECALL memories LIMIT 1000").map_err(|e| {
-        error!("recall failed: {e}");
-        ApiError::NotFound(format!("memory {id} not found"))
-    })?;
+    let node = db
+        .get_memory(id)
+        .map_err(|_| ApiError::NotFound(format!("memory {id} not found")))?;
 
-    for block in &window.blocks {
-        for scored in &block.memories {
-            if scored.memory.id == id {
-                if let Some(Extension(ref authed)) = agent {
-                    let tid: AgentId = authed.agent_id.parse().map_err(|_| {
-                        ApiError::Internal("token contains invalid agent_id UUID".into())
-                    })?;
-                    if scored.memory.agent_id != tid {
-                        return Err(ApiError::Forbidden(
-                            "memory belongs to a different agent".into(),
-                        ));
-                    }
-                }
-                return Ok(Json(memory_node_to_json(&scored.memory)));
-            }
+    if let Some(Extension(ref authed)) = agent {
+        let tid: AgentId = authed
+            .agent_id
+            .parse()
+            .map_err(|_| ApiError::Internal("token contains invalid agent_id UUID".into()))?;
+        if node.agent_id != tid {
+            return Err(ApiError::Forbidden(
+                "memory belongs to a different agent".into(),
+            ));
         }
     }
 
-    Err(ApiError::NotFound(format!("memory {id} not found")))
+    Ok(Json(memory_node_to_json(&node)))
 }
 
 // ---------------------------------------------------------------------------
