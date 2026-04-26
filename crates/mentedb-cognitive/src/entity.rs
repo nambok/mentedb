@@ -1,12 +1,12 @@
 use crate::llm::{CognitiveLlmService, EntityCandidate, EntityMergeGroup, LlmJudge};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
 
-const SNAPSHOT_VERSION: u32 = 1;
-const MIN_SUBSTRING_LEN: usize = 3;
-const SUBSTRING_CONFIDENCE: f32 = 0.7;
+const SNAPSHOT_VERSION: u32 = 2;
+const MIN_WORD_LEN: usize = 2;
+const WORD_MATCH_CONFIDENCE: f32 = 0.7;
 
 /// Resolves entity references to canonical names using a three-tier strategy:
 ///
@@ -22,6 +22,9 @@ pub struct EntityResolver {
     aliases: HashMap<String, String>,
     /// Tracks confidence for each learned merge.
     confidence: HashMap<String, f32>,
+    /// Pairs of entity names confirmed to be DIFFERENT (negative cache).
+    /// Stored as sorted (a, b) tuples to avoid (A,B) vs (B,A) duplication.
+    negative_pairs: HashSet<(String, String)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -29,6 +32,8 @@ struct Snapshot {
     version: u32,
     aliases: HashMap<String, String>,
     confidence: HashMap<String, f32>,
+    #[serde(default)]
+    negative_pairs: Vec<(String, String)>,
 }
 
 /// Result of resolving an entity reference.
@@ -56,6 +61,7 @@ impl EntityResolver {
         Self {
             aliases: HashMap::new(),
             confidence: HashMap::new(),
+            negative_pairs: HashSet::new(),
         }
     }
 
@@ -195,10 +201,16 @@ impl EntityResolver {
         self.aliases.len()
     }
 
-    /// Rule-based matching: check if the input is a substring of a known
-    /// canonical or vice versa. Handles "Alice" matching "Alice Smith".
+    /// Rule-based matching: check if the input's words are a subset of a known
+    /// canonical's words or vice versa. Handles "Alice" matching "Alice Smith"
+    /// but correctly rejects "Java" matching "JavaScript".
     fn rule_based_match(&self, normalized: &str) -> Option<(String, f32)> {
-        if normalized.len() < MIN_SUBSTRING_LEN {
+        if normalized.len() < MIN_WORD_LEN {
+            return None;
+        }
+
+        let input_words: HashSet<&str> = normalized.split_whitespace().collect();
+        if input_words.is_empty() {
             return None;
         }
 
@@ -208,12 +220,49 @@ impl EntityResolver {
                 continue;
             }
 
-            // "alice" is a substring of "alice smith"
-            if canonical.contains(normalized) || normalized.contains(canonical.as_str()) {
-                return Some((canonical.clone(), SUBSTRING_CONFIDENCE));
+            let canon_words: HashSet<&str> = canonical.split_whitespace().collect();
+
+            // "alice" ⊂ {"alice", "smith"} → match
+            // "java" ⊄ {"javascript"} → no match (correct!)
+            if input_words.is_subset(&canon_words) || canon_words.is_subset(&input_words) {
+                return Some((canonical.clone(), WORD_MATCH_CONFIDENCE));
             }
         }
         None
+    }
+
+    /// Check if two entity names are known to be different (negative cache).
+    pub fn is_known_different(&self, a: &str, b: &str) -> bool {
+        self.negative_pairs.contains(&Self::negative_key(a, b))
+    }
+
+    /// Mark two entity names as confirmed different (negative cache).
+    pub fn mark_different(&mut self, a: &str, b: &str) {
+        self.negative_pairs.insert(Self::negative_key(a, b));
+    }
+
+    /// Returns the set of entity names that are NOT yet resolved
+    /// (no cache hit, no rule-based match). These need LLM resolution.
+    pub fn unresolved_names(&self, names: &[String]) -> Vec<String> {
+        names
+            .iter()
+            .filter(|name| {
+                let resolved = self.resolve(name);
+                resolved.source == ResolutionSource::Identity
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Number of negative-cached pairs.
+    pub fn negative_count(&self) -> usize {
+        self.negative_pairs.len()
+    }
+
+    fn negative_key(a: &str, b: &str) -> (String, String) {
+        let na = normalize_entity(a);
+        let nb = normalize_entity(b);
+        if na <= nb { (na, nb) } else { (nb, na) }
     }
 
     /// Save the alias table to a JSON file.
@@ -222,6 +271,7 @@ impl EntityResolver {
             version: SNAPSHOT_VERSION,
             aliases: self.aliases.clone(),
             confidence: self.confidence.clone(),
+            negative_pairs: self.negative_pairs.iter().cloned().collect(),
         };
         let json = serde_json::to_string(&snapshot)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -251,6 +301,9 @@ impl EntityResolver {
         }
         for (alias, conf) in snapshot.confidence {
             self.confidence.entry(alias).or_insert(conf);
+        }
+        for pair in snapshot.negative_pairs {
+            self.negative_pairs.insert(pair);
         }
         Ok(())
     }
@@ -307,27 +360,85 @@ mod tests {
     }
 
     #[test]
-    fn test_rule_based_substring_match() {
+    fn test_rule_based_word_match() {
         let mut resolver = EntityResolver::new();
         resolver.add_alias("alice smith", "alice smith", 1.0);
 
-        // "alice" is a substring of "alice smith"
+        // "alice" is a word subset of "alice smith" → match
         let result = resolver.resolve("Alice");
         assert_eq!(result.canonical, "alice smith");
         assert_eq!(result.source, ResolutionSource::RuleBased);
-        assert_eq!(result.confidence, SUBSTRING_CONFIDENCE);
+        assert_eq!(result.confidence, WORD_MATCH_CONFIDENCE);
     }
 
     #[test]
-    fn test_short_names_skip_substring_match() {
+    fn test_word_match_rejects_java_javascript() {
+        let mut resolver = EntityResolver::new();
+        resolver.add_alias("javascript", "javascript", 1.0);
+
+        // "java" is NOT a word match for "javascript" — different words
+        let result = resolver.resolve("Java");
+        assert_eq!(result.canonical, "java");
+        assert_eq!(result.source, ResolutionSource::Identity);
+    }
+
+    #[test]
+    fn test_short_names_skip_word_match() {
         let mut resolver = EntityResolver::new();
         resolver.add_alias("db", "database", 1.0);
 
-        // "db" is too short for substring matching (< 3 chars)
         let result = resolver.resolve("db");
         // Should hit cache directly since we added it as an alias
         assert_eq!(result.canonical, "database");
         assert_eq!(result.source, ResolutionSource::Cache);
+    }
+
+    #[test]
+    fn test_negative_cache() {
+        let mut resolver = EntityResolver::new();
+
+        assert!(!resolver.is_known_different("Python", "python snake"));
+
+        resolver.mark_different("Python", "python snake");
+        assert!(resolver.is_known_different("Python", "python snake"));
+        // Order shouldn't matter
+        assert!(resolver.is_known_different("python snake", "Python"));
+    }
+
+    #[test]
+    fn test_negative_cache_persistence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("entities.json");
+
+        let mut resolver = EntityResolver::new();
+        resolver.mark_different("Python", "Monty Python");
+        resolver.add_alias("alice", "alice smith", 0.9);
+        resolver.save(&path).unwrap();
+
+        let mut loaded = EntityResolver::new();
+        loaded.load(&path).unwrap();
+
+        assert!(loaded.is_known_different("Python", "Monty Python"));
+        assert_eq!(
+            loaded.get_canonical("alice"),
+            Some(&"alice smith".to_string())
+        );
+    }
+
+    #[test]
+    fn test_unresolved_names() {
+        let mut resolver = EntityResolver::new();
+        resolver.add_alias("alice", "alice smith", 0.9);
+        resolver.add_alias("bob", "bob jones", 0.9);
+
+        let names = vec![
+            "Alice".to_string(),
+            "Bob".to_string(),
+            "Charlie".to_string(),
+            "NYC".to_string(),
+        ];
+        let unresolved = resolver.unresolved_names(&names);
+        assert_eq!(unresolved, vec!["Charlie".to_string(), "NYC".to_string()]);
     }
 
     #[test]

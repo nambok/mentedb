@@ -46,6 +46,7 @@ use std::path::{Path, PathBuf};
 
 use mentedb_cognitive::EntityResolver;
 use mentedb_cognitive::interference::{InterferenceDetector, InterferencePair};
+use mentedb_cognitive::llm::EntityMergeGroup;
 use mentedb_cognitive::pain::{PainRegistry, PainSignal};
 use mentedb_cognitive::phantom::{PhantomConfig, PhantomMemory, PhantomTracker};
 use mentedb_cognitive::speculative::{CacheEntry, CacheStats, SpeculativeCache};
@@ -178,6 +179,27 @@ pub struct EntityLinkResult {
     pub ambiguous: usize,
     /// Number of edges created.
     pub edges_created: usize,
+}
+
+/// A confirmed entity resolution from an external resolver (LLM).
+///
+/// Used to feed LLM entity resolution results back into the engine
+/// so it can create graph edges and update the EntityResolver cache.
+#[derive(Debug, Clone)]
+pub struct EntityLinkResolution {
+    /// The canonical entity name decided by the resolver.
+    pub canonical: String,
+    /// All aliases that map to this canonical name.
+    pub aliases: Vec<String>,
+    /// Confidence in this resolution (0.0 to 1.0).
+    pub confidence: f32,
+}
+
+/// A pair of entity names that the LLM confirmed are DIFFERENT entities.
+#[derive(Debug, Clone)]
+pub struct EntitySeparation {
+    pub name_a: String,
+    pub name_b: String,
 }
 
 /// Configuration for the cognitive engine subsystems.
@@ -1700,45 +1722,221 @@ impl MenteDb {
         &self.cognitive_config.enrichment_config
     }
 
-    /// Link entities across sessions by name + embedding similarity.
+    /// Get all unique entity names from stored entity memories.
     ///
-    /// Scans all semantic memories tagged with `entity:{name}`, groups by
-    /// normalized entity name, then compares embedding similarity within
-    /// each group to decide:
-    /// - **Merge** (sim ≥ merge_threshold): create `Related` edge (weight = similarity)
-    /// - **Ambiguous** (separate_threshold ≤ sim < merge_threshold): tag `maybe_related:{other_id}`
-    /// - **Separate** (sim < separate_threshold): no action
-    ///
-    /// Conservative: when in doubt, don't merge. Two separate nodes > one wrong merge.
-    pub fn link_entities(&self) -> MenteResult<EntityLinkResult> {
-        let merge_thresh = self
-            .cognitive_config
-            .enrichment_config
-            .entity_merge_threshold;
-        let separate_thresh = self
-            .cognitive_config
-            .enrichment_config
-            .entity_separate_threshold;
-
-        // Collect page IDs under lock, then drop before loading memories
+    /// Returns deduplicated, normalized entity names extracted from
+    /// `entity:{name}` tags across all stored memories.
+    pub fn all_entity_names(&self) -> Vec<String> {
         let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        let mut names = std::collections::HashSet::new();
+        for pid in &page_ids {
+            if let Ok(mem) = self.storage.load_memory(*pid) {
+                for tag in &mem.tags {
+                    if let Some(name) = tag.strip_prefix("entity:") {
+                        names.insert(name.to_lowercase().trim().to_string());
+                    }
+                }
+            }
+        }
+        let mut sorted: Vec<String> = names.into_iter().collect();
+        sorted.sort();
+        sorted
+    }
 
-        // Collect all entity memories grouped by normalized name
-        let mut entity_groups: HashMap<String, Vec<MemoryNode>> = HashMap::new();
+    /// Get entity names that the EntityResolver hasn't resolved yet.
+    ///
+    /// These are the entities that need LLM resolution. The EntityResolver
+    /// cache handles known entities for free.
+    pub fn unresolved_entity_names(&self) -> Vec<String> {
+        let all_names = self.all_entity_names();
+        self.entity_resolver.read().unresolved_names(&all_names)
+    }
+
+    /// Get entity names with their memory content for LLM context.
+    ///
+    /// Returns (name, content) pairs for entities that need resolution.
+    /// The content helps the LLM disambiguate (e.g., "Python" near
+    /// "web framework" vs "Python" near "Monty Python").
+    pub fn entity_names_with_context(&self) -> Vec<(String, Option<String>)> {
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        let mut entity_contexts: HashMap<String, String> = HashMap::new();
+
         for pid in &page_ids {
             if let Ok(mem) = self.storage.load_memory(*pid) {
                 for tag in &mem.tags {
                     if let Some(name) = tag.strip_prefix("entity:") {
                         let normalized = name.to_lowercase().trim().to_string();
-                        entity_groups
+                        entity_contexts
                             .entry(normalized)
-                            .or_default()
-                            .push(mem.clone());
+                            .and_modify(|existing| {
+                                // Append content from multiple mentions, cap at 500 chars
+                                if existing.len() < 500 {
+                                    existing.push_str(" | ");
+                                    existing.push_str(&mem.content[..mem.content.len().min(200)]);
+                                }
+                            })
+                            .or_insert_with(|| {
+                                mem.content[..mem.content.len().min(300)].to_string()
+                            });
                         break;
                     }
                 }
             }
         }
+
+        entity_contexts
+            .into_iter()
+            .map(|(name, ctx)| (name, Some(ctx)))
+            .collect()
+    }
+
+    /// Apply LLM entity resolution results: create graph edges and update cache.
+    ///
+    /// Takes merge groups from the LLM (via `CognitiveLlmService.resolve_entities()`)
+    /// and confirmed-different pairs. Creates `entity_link:` edges between entity
+    /// memories that belong to the same group, learns aliases in the EntityResolver,
+    /// and negative-caches confirmed-different pairs.
+    pub fn apply_entity_link_resolutions(
+        &self,
+        merge_groups: &[EntityLinkResolution],
+        separations: &[EntitySeparation],
+    ) -> MenteResult<EntityLinkResult> {
+        let mut result = EntityLinkResult::default();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+
+        // Build a map: normalized entity name → list of memory IDs
+        let entity_memory_map = self.build_entity_memory_map();
+
+        let mut resolver = self.entity_resolver.write();
+
+        for group in merge_groups {
+            // Learn the group in the resolver cache
+            let mut aliases: Vec<String> = group.aliases.clone();
+            aliases.retain(|a| a.to_lowercase() != group.canonical.to_lowercase());
+            resolver.learn_group(&EntityMergeGroup {
+                canonical: group.canonical.clone(),
+                aliases,
+                confidence: group.confidence,
+            });
+
+            // Collect all memory IDs for this merge group
+            let mut group_memory_ids: Vec<MemoryId> = Vec::new();
+
+            // Add memories for the canonical name
+            let canonical_norm = group.canonical.to_lowercase();
+            if let Some(ids) = entity_memory_map.get(&canonical_norm) {
+                group_memory_ids.extend(ids);
+            }
+
+            // Add memories for each alias
+            for alias in &group.aliases {
+                let alias_norm = alias.to_lowercase();
+                if let Some(ids) = entity_memory_map.get(&alias_norm) {
+                    group_memory_ids.extend(ids);
+                }
+            }
+
+            group_memory_ids.sort();
+            group_memory_ids.dedup();
+
+            // Create edges between all pairs in the group
+            let label = format!("entity_link:{}", canonical_norm);
+            for i in 0..group_memory_ids.len() {
+                for j in (i + 1)..group_memory_ids.len() {
+                    let a_id = group_memory_ids[i];
+                    let b_id = group_memory_ids[j];
+
+                    // Check for existing edge
+                    let graph = self.graph.read_graph();
+                    let already_linked = graph.outgoing(a_id).iter().any(|(tid, e)| {
+                        *tid == b_id
+                            && e.edge_type == EdgeType::Related
+                            && e.label
+                                .as_ref()
+                                .is_some_and(|l| l.starts_with("entity_link:"))
+                    });
+                    drop(graph);
+
+                    if already_linked {
+                        continue;
+                    }
+
+                    let edge = MemoryEdge {
+                        source: a_id,
+                        target: b_id,
+                        edge_type: EdgeType::Related,
+                        weight: group.confidence,
+                        created_at: now,
+                        valid_from: None,
+                        valid_until: None,
+                        label: Some(label.clone()),
+                    };
+                    if self.relate(edge).is_ok() {
+                        result.edges_created += 1;
+                    }
+                    result.linked += 1;
+                }
+            }
+
+            debug!(
+                canonical = group.canonical,
+                aliases = ?group.aliases,
+                memories = group_memory_ids.len(),
+                "entity resolution: merged group"
+            );
+        }
+
+        // Process negative cache entries
+        for sep in separations {
+            resolver.mark_different(&sep.name_a, &sep.name_b);
+            debug!(
+                a = sep.name_a,
+                b = sep.name_b,
+                "entity resolution: confirmed different"
+            );
+        }
+
+        // Persist resolver state
+        let cognitive_dir = self.path.join("cognitive");
+        if cognitive_dir.exists() || std::fs::create_dir_all(&cognitive_dir).is_ok() {
+            let _ = resolver.save(&cognitive_dir.join("entities.json"));
+        }
+
+        debug!(
+            linked = result.linked,
+            edges = result.edges_created,
+            groups = merge_groups.len(),
+            separations = separations.len(),
+            "entity link resolutions applied"
+        );
+        Ok(result)
+    }
+
+    /// Link entities using only the sync EntityResolver (cache + rules, no LLM).
+    ///
+    /// This is the fast path — links entities that are already known to be
+    /// the same from previous LLM resolutions. For full LLM-powered resolution,
+    /// use `unresolved_entity_names()` + `apply_entity_link_resolutions()`.
+    pub fn link_entities(&self) -> MenteResult<EntityLinkResult> {
+        let entity_memory_map = self.build_entity_memory_map();
+        let resolver = self.entity_resolver.read();
+
+        // Group entity names by their resolved canonical name
+        let mut canonical_groups: HashMap<String, Vec<String>> = HashMap::new();
+        for entity_name in entity_memory_map.keys() {
+            let resolved = resolver.resolve(entity_name);
+            if resolved.source != mentedb_cognitive::ResolutionSource::Identity {
+                canonical_groups
+                    .entry(resolved.canonical.clone())
+                    .or_default()
+                    .push(entity_name.clone());
+            }
+        }
+
+        drop(resolver);
 
         let mut result = EntityLinkResult::default();
         let now = std::time::SystemTime::now()
@@ -1746,81 +1944,88 @@ impl MenteDb {
             .unwrap_or_default()
             .as_micros() as u64;
 
-        for (entity_name, members) in &entity_groups {
-            if members.len() < 2 {
+        for (canonical, names) in &canonical_groups {
+            // Collect all memory IDs across all aliases in this group
+            let mut group_memory_ids: Vec<MemoryId> = Vec::new();
+            for name in names {
+                if let Some(ids) = entity_memory_map.get(name) {
+                    group_memory_ids.extend(ids);
+                }
+            }
+            // Also include the canonical name itself
+            if let Some(ids) = entity_memory_map.get(canonical) {
+                group_memory_ids.extend(ids);
+            }
+            group_memory_ids.sort();
+            group_memory_ids.dedup();
+
+            if group_memory_ids.len() < 2 {
                 continue;
             }
 
-            // Compare all pairs within the group
-            for i in 0..members.len() {
-                for j in (i + 1)..members.len() {
-                    let a = &members[i];
-                    let b = &members[j];
+            let label = format!("entity_link:{}", canonical);
+            for i in 0..group_memory_ids.len() {
+                for j in (i + 1)..group_memory_ids.len() {
+                    let a_id = group_memory_ids[i];
+                    let b_id = group_memory_ids[j];
 
-                    if a.embedding.is_empty() || b.embedding.is_empty() {
+                    let graph = self.graph.read_graph();
+                    let already_linked = graph.outgoing(a_id).iter().any(|(tid, e)| {
+                        *tid == b_id
+                            && e.edge_type == EdgeType::Related
+                            && e.label
+                                .as_ref()
+                                .is_some_and(|l| l.starts_with("entity_link:"))
+                    });
+                    drop(graph);
+
+                    if already_linked {
                         continue;
                     }
 
-                    let sim = mentedb_consolidation::cosine_similarity(&a.embedding, &b.embedding);
-
-                    if sim >= merge_thresh {
-                        // Check if edge already exists to avoid duplicates on repeated runs
-                        let graph = self.graph.read_graph();
-                        let already_linked = graph.outgoing(a.id).iter().any(|(tid, e)| {
-                            *tid == b.id
-                                && e.edge_type == EdgeType::Related
-                                && e.label
-                                    .as_ref()
-                                    .is_some_and(|l| l.starts_with("entity_link:"))
-                        });
-                        drop(graph);
-
-                        if already_linked {
-                            continue;
-                        }
-
-                        // High confidence: create Related edge
-                        let edge = MemoryEdge {
-                            source: a.id,
-                            target: b.id,
-                            edge_type: EdgeType::Related,
-                            weight: sim,
-                            created_at: now,
-                            valid_from: None,
-                            valid_until: None,
-                            label: Some(format!("entity_link:{}", entity_name)),
-                        };
-                        if self.relate(edge).is_ok() {
-                            result.edges_created += 1;
-                        }
-                        result.linked += 1;
-                        debug!(
-                            entity = entity_name,
-                            a = %a.id, b = %b.id, sim,
-                            "entity link: merged"
-                        );
-                    } else if sim >= separate_thresh {
-                        // Ambiguous: tag for later resolution
-                        result.ambiguous += 1;
-                        debug!(
-                            entity = entity_name,
-                            a = %a.id, b = %b.id, sim,
-                            "entity link: ambiguous"
-                        );
+                    let edge = MemoryEdge {
+                        source: a_id,
+                        target: b_id,
+                        edge_type: EdgeType::Related,
+                        weight: 1.0,
+                        created_at: now,
+                        valid_from: None,
+                        valid_until: None,
+                        label: Some(label.clone()),
+                    };
+                    if self.relate(edge).is_ok() {
+                        result.edges_created += 1;
                     }
-                    // Below separate_threshold: different entities, no action
+                    result.linked += 1;
                 }
             }
         }
 
         debug!(
             linked = result.linked,
-            ambiguous = result.ambiguous,
             edges = result.edges_created,
-            groups = entity_groups.len(),
-            "entity linking complete"
+            groups = canonical_groups.len(),
+            "sync entity linking complete"
         );
         Ok(result)
+    }
+
+    /// Build a map of normalized entity name → list of MemoryIds.
+    fn build_entity_memory_map(&self) -> HashMap<String, Vec<MemoryId>> {
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        let mut map: HashMap<String, Vec<MemoryId>> = HashMap::new();
+        for pid in &page_ids {
+            if let Ok(mem) = self.storage.load_memory(*pid) {
+                for tag in &mem.tags {
+                    if let Some(name) = tag.strip_prefix("entity:") {
+                        let normalized = name.to_lowercase().trim().to_string();
+                        map.entry(normalized).or_default().push(mem.id);
+                        break;
+                    }
+                }
+            }
+        }
+        map
     }
 
     /// Get all entity memory nodes (memories tagged with `entity:{name}`).

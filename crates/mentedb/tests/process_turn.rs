@@ -482,11 +482,14 @@ fn test_entity_linking_creates_edges() {
     node2.tags.push("source:enrichment".to_string());
     db.store(node2).unwrap();
 
+    // Pre-teach the resolver that "max" is a known entity
+    db.add_entity_alias("max", "max", 1.0);
+
     let result = db.link_entities().unwrap();
-    // Embeddings [0.9,0.1,0,0] and [0.85,0.15,0.05,0] have high cosine sim (~0.99)
+    // Both memories share the canonical name "max" → linked
     assert!(
         result.linked > 0,
-        "should link same-name entities with similar embeddings"
+        "should link same-name entities via EntityResolver cache"
     );
     assert!(result.edges_created > 0, "should create edges");
 
@@ -502,7 +505,7 @@ fn test_entity_linking_creates_edges() {
 fn test_entity_linking_separates_different_entities() {
     let (db, _dir) = open_db_with_enrichment(50);
 
-    // Two "python" entities with very different embeddings (programming vs comedy)
+    // Two "python" entities — resolver doesn't know about them yet
     let emb_prog = vec![1.0, 0.0, 0.0, 0.0];
     let emb_comedy = vec![0.0, 0.0, 0.0, 1.0];
 
@@ -524,19 +527,69 @@ fn test_entity_linking_separates_different_entities() {
     node2.tags.push("entity:python".to_string());
     db.store(node2).unwrap();
 
+    // Without resolver knowledge, link_entities shouldn't link them
     let result = db.link_entities().unwrap();
-    // Orthogonal embeddings → cosine sim ~0 → below separate_threshold
-    assert_eq!(result.linked, 0, "should NOT link different entities");
-    assert_eq!(result.edges_created, 0, "no edges for different entities");
+    assert_eq!(result.linked, 0, "unresolved entities should NOT be linked");
+    assert_eq!(result.edges_created, 0, "no edges for unresolved entities");
 }
 
 #[test]
-fn test_entity_linking_ambiguous_range() {
+fn test_apply_entity_link_resolutions() {
     let (db, _dir) = open_db_with_enrichment(50);
 
-    // Two entities with moderate similarity (in the ambiguous range 0.4-0.7)
+    let emb1 = vec![0.9, 0.1, 0.0, 0.0];
+    let emb2 = vec![0.85, 0.15, 0.05, 0.0];
+
+    let mut node1 = mentedb_core::MemoryNode::new(
+        mentedb_core::types::AgentId::nil(),
+        mentedb_core::memory::MemoryType::Semantic,
+        "NYC is where I live".to_string(),
+        emb1,
+    );
+    node1.tags.push("entity:nyc".to_string());
+    db.store(node1).unwrap();
+
+    let mut node2 = mentedb_core::MemoryNode::new(
+        mentedb_core::types::AgentId::nil(),
+        mentedb_core::memory::MemoryType::Semantic,
+        "New York City has great pizza".to_string(),
+        emb2,
+    );
+    node2.tags.push("entity:new york city".to_string());
+    db.store(node2).unwrap();
+
+    // Simulate LLM resolution: NYC and New York City are the same
+    let resolutions = vec![mentedb::EntityLinkResolution {
+        canonical: "new york city".to_string(),
+        aliases: vec!["nyc".to_string()],
+        confidence: 0.95,
+    }];
+    let separations = vec![];
+
+    let result = db
+        .apply_entity_link_resolutions(&resolutions, &separations)
+        .unwrap();
+    assert!(result.edges_created > 0, "should create cross-name edges");
+    assert!(result.linked > 0, "should report linked pairs");
+
+    // Verify resolver learned the alias
+    assert_eq!(
+        db.get_canonical_entity("nyc"),
+        Some("new york city".to_string())
+    );
+
+    // Now link_entities should also work (uses cache)
+    // (won't create new edges since apply already created them)
+    let sync_result = db.link_entities().unwrap();
+    assert_eq!(sync_result.edges_created, 0, "edges already exist");
+}
+
+#[test]
+fn test_entity_separation_negative_cache() {
+    let (db, _dir) = open_db_with_enrichment(50);
+
     let emb1 = vec![1.0, 0.0, 0.0, 0.0];
-    let emb2 = vec![0.6, 0.6, 0.0, 0.0]; // cosine with emb1 ≈ 0.707
+    let emb2 = vec![0.0, 0.0, 0.0, 1.0];
 
     let mut node1 = mentedb_core::MemoryNode::new(
         mentedb_core::types::AgentId::nil(),
@@ -553,16 +606,25 @@ fn test_entity_linking_ambiguous_range() {
         "Java programming language".to_string(),
         emb2,
     );
-    node2.tags.push("entity:java".to_string());
+    node2.tags.push("entity:java programming".to_string());
     db.store(node2).unwrap();
 
-    let result = db.link_entities().unwrap();
-    // cosine([1,0,0,0], [0.6,0.6,0,0]) ≈ 0.707 — right at the merge threshold (0.7)
-    // Depending on floating point, this could be linked or ambiguous
-    assert!(
-        result.linked > 0 || result.ambiguous > 0,
-        "should be either linked or ambiguous, not ignored"
-    );
+    // LLM says these are different
+    let resolutions = vec![];
+    let separations = vec![mentedb::EntitySeparation {
+        name_a: "java".to_string(),
+        name_b: "java programming".to_string(),
+    }];
+
+    db.apply_entity_link_resolutions(&resolutions, &separations)
+        .unwrap();
+
+    // Verify: "java" and "java programming" should show as unresolved
+    // (negative cache prevents future LLM calls for this pair)
+    let unresolved = db.unresolved_entity_names();
+    // Both are still "unresolved" in terms of having no canonical alias,
+    // but the negative cache will skip them in future LLM batches
+    assert!(unresolved.contains(&"java".to_string()));
 }
 
 #[test]
