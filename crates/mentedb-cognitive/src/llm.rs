@@ -246,7 +246,7 @@ Respond with ONLY a JSON object:
 Given a category name and a list of entities the user has interacted with, create a concise summary that captures the user's relationship to this cluster of entities.
 
 Rules:
-- Mention EVERY entity by name — do not omit any
+- Mention the key entities by name — prioritize the most significant ones
 - Focus on the user's relationship to each (uses, likes, works with, etc.)
 - Keep it to 2-3 sentences maximum
 - The summary should be findable when someone searches for this topic
@@ -457,6 +457,12 @@ impl<J: LlmJudge> CognitiveLlmService<J> {
         }
 
         let user_prompt = sections.join("\n\n");
+
+        if user_prompt.is_empty() {
+            return Err(LlmJudgeError::ParseError(
+                "no facts or summaries provided for profile generation".into(),
+            ));
+        }
 
         let response = self
             .judge

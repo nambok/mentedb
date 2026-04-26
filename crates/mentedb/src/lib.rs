@@ -2072,7 +2072,7 @@ impl MenteDb {
                         .unwrap_or("general")
                         .to_lowercase();
 
-                    let context = mem.content[..mem.content.len().min(200)].to_string();
+                    let context: String = mem.content.chars().take(200).collect();
                     categories
                         .entry(entity_type)
                         .or_default()
@@ -2096,14 +2096,26 @@ impl MenteDb {
         summary: &str,
         member_names: &[String],
     ) -> MenteResult<MemoryId> {
+        if category.is_empty() {
+            return Err(MenteError::Storage(
+                "community category cannot be empty".into(),
+            ));
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+
         // Check if a community summary already exists for this category
         let community_tag = format!("community:{}", category);
         let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        let mut existing_id = None;
         for pid in &page_ids {
             if let Ok(mem) = self.storage.load_memory(*pid)
                 && mem.tags.iter().any(|t| t == &community_tag)
             {
-                // Update existing summary
+                // Update existing summary content
                 let mut updated = mem.clone();
                 updated.content = summary.to_string();
                 if let Some(ref embedder) = self.embedder {
@@ -2112,33 +2124,40 @@ impl MenteDb {
                         .unwrap_or_else(|_| updated.embedding.clone());
                 }
                 self.storage.store_memory(&updated)?;
-                return Ok(updated.id);
+                existing_id = Some(updated.id);
+                break;
             }
         }
 
-        // Create new community summary
-        let embedding = self
-            .embedder
-            .as_ref()
-            .and_then(|e| e.embed(summary).ok())
-            .unwrap_or_default();
+        let node_id = if let Some(id) = existing_id {
+            id
+        } else {
+            // Create new community summary
+            let embedding = self
+                .embedder
+                .as_ref()
+                .and_then(|e| e.embed(summary).ok())
+                .unwrap_or_default();
 
-        let mut node = MemoryNode::new(
-            mentedb_core::types::AgentId::new(),
-            MemoryType::Semantic,
-            summary.to_string(),
-            embedding,
-        );
-        node.tags = vec![
-            "community_summary".to_string(),
-            community_tag,
-            "source:enrichment".to_string(),
-        ];
-        node.confidence = 0.7;
-        let node_id = node.id;
-        self.store(node)?;
+            let mut node = MemoryNode::new(
+                mentedb_core::types::AgentId::new(),
+                MemoryType::Semantic,
+                summary.to_string(),
+                embedding,
+            );
+            node.tags = vec![
+                "community_summary".to_string(),
+                community_tag,
+                "source:enrichment".to_string(),
+            ];
+            node.confidence = 0.7;
+            let id = node.id;
+            self.store(node)?;
+            id
+        };
 
-        // Create Derived edges from summary to member entity memories
+        // (Re)create Derived edges from summary to member entity memories.
+        // On update this refreshes edges to reflect current membership.
         let entity_map = self.build_entity_memory_map();
         for name in member_names {
             let normalized = name.to_lowercase();
@@ -2149,7 +2168,7 @@ impl MenteDb {
                         target: *member_id,
                         edge_type: EdgeType::Derived,
                         weight: 0.8,
-                        created_at: mentedb_core::types::Timestamp::default(),
+                        created_at: now,
                         valid_from: None,
                         valid_until: None,
                         label: Some(format!("community_member:{}", category)),
@@ -2194,7 +2213,7 @@ impl MenteDb {
                         {
                             continue;
                         }
-                        facts.push(mem.content[..mem.content.len().min(300)].to_string());
+                        facts.push(mem.content.chars().take(300).collect());
                     }
                     _ => {}
                 }
