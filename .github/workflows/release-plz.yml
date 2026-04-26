@@ -134,6 +134,11 @@ jobs:
             --notes "Release mentedb v${VERSION}" \
             --latest
 
+          # GITHUB_TOKEN-created releases don't trigger other workflows,
+          # so we dispatch publish-sdks manually.
+          echo "🚀 Triggering SDK publish..."
+          gh workflow run publish-sdks.yml
+
   release-plz-pr:
     name: Release-plz PR
     runs-on: ubuntu-latest
