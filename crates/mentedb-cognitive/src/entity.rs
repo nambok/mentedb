@@ -209,7 +209,10 @@ impl EntityResolver {
             return None;
         }
 
-        let input_words: HashSet<&str> = normalized.split_whitespace().collect();
+        let input_words: HashSet<&str> = normalized
+            .split(|c: char| c.is_whitespace() || c == '-' || c == '_')
+            .filter(|w| !w.is_empty())
+            .collect();
         if input_words.is_empty() {
             return None;
         }
@@ -220,7 +223,10 @@ impl EntityResolver {
                 continue;
             }
 
-            let canon_words: HashSet<&str> = canonical.split_whitespace().collect();
+            let canon_words: HashSet<&str> = canonical
+                .split(|c: char| c.is_whitespace() || c == '-' || c == '_')
+                .filter(|w| !w.is_empty())
+                .collect();
 
             // "alice" ⊂ {"alice", "smith"} → match
             // "java" ⊄ {"javascript"} → no match (correct!)
@@ -380,6 +386,17 @@ mod tests {
         let result = resolver.resolve("Java");
         assert_eq!(result.canonical, "java");
         assert_eq!(result.source, ResolutionSource::Identity);
+    }
+
+    #[test]
+    fn test_hyphenated_names_match() {
+        let mut resolver = EntityResolver::new();
+        resolver.add_alias("gpt-4", "gpt-4", 1.0);
+
+        // "gpt 4" should match "gpt-4" via hyphen-aware word splitting
+        let result = resolver.resolve("gpt 4");
+        assert_eq!(result.canonical, "gpt-4");
+        assert_eq!(result.source, ResolutionSource::RuleBased);
     }
 
     #[test]

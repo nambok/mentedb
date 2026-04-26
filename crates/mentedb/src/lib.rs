@@ -1766,13 +1766,17 @@ impl MenteDb {
                 for tag in &mem.tags {
                     if let Some(name) = tag.strip_prefix("entity:") {
                         let normalized = name.to_lowercase().trim().to_string();
+                        // One entity tag per memory (enrichment creates separate memories per entity)
                         entity_contexts
                             .entry(normalized)
                             .and_modify(|existing| {
-                                // Append content from multiple mentions, cap at 500 chars
-                                if existing.len() < 500 {
+                                // Append content from multiple mentions, cap at ~500 chars
+                                if existing.len() < 300 {
                                     existing.push_str(" | ");
-                                    existing.push_str(&mem.content[..mem.content.len().min(200)]);
+                                    let remaining = 500usize.saturating_sub(existing.len());
+                                    existing.push_str(
+                                        &mem.content[..mem.content.len().min(remaining)],
+                                    );
                                 }
                             })
                             .or_insert_with(|| {
@@ -2019,6 +2023,7 @@ impl MenteDb {
                 for tag in &mem.tags {
                     if let Some(name) = tag.strip_prefix("entity:") {
                         let normalized = name.to_lowercase().trim().to_string();
+                        // One entity tag per memory (enrichment creates separate memories per entity)
                         map.entry(normalized).or_default().push(mem.id);
                         break;
                     }
