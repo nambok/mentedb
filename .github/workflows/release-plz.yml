@@ -92,11 +92,46 @@ jobs:
           echo "🎉 All crates published successfully"
       - name: Create git tags and GitHub releases
         uses: release-plz/action@v0.5
+        id: release-plz
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      # release-plz may skip releases if crates were already published
+      # by the manual step above. In that case, create the main mentedb
+      # release ourselves so publish-sdks.yml triggers.
+      - name: Create release if release-plz skipped it
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "mentedb") | .version')
+          TAG="mentedb-v${VERSION}"
+
+          # Check if this tag/release already exists
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "✅ Release $TAG already exists"
+            exit 0
+          fi
+
+          # Check if the version is actually on crates.io (i.e., was published)
+          published=$(curl -sf "https://crates.io/api/v1/crates/mentedb/$VERSION" \
+            | jq -r '.version.num // empty' 2>/dev/null || true)
+
+          if [ "$published" != "$VERSION" ]; then
+            echo "⏭️  mentedb $VERSION not on crates.io yet, skipping release"
+            exit 0
+          fi
+
+          echo "📦 Creating release $TAG (release-plz skipped it)"
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "Release mentedb v${VERSION}" \
+            --latest
 
   release-plz-pr:
     name: Release-plz PR
