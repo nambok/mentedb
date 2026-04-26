@@ -269,21 +269,81 @@ graph TD
     WAL --> PAGE
 ```
 
+## Cognitive Engine
+
+MenteDB isn't just a memory store — it's a cognitive engine that automatically maintains memory health. All cognitive features are wired into the core `MenteDb` facade and run automatically.
+
+### Write Inference (automatic on `store()`)
+
+Every time a memory is stored, the engine finds the 20 most similar existing memories and runs heuristic inference:
+
+| Cosine Similarity | Action | What happens |
+|-------------------|--------|-------------|
+| **> 0.95** | Contradiction detected | Creates `Contradicts` edge, flags conflict |
+| **> 0.85** | Supersedes old memory | Invalidates older memory (`valid_until` set), creates `Supersedes` edge |
+| **0.6 – 0.85** | Related | Creates `Related` edge with similarity as weight |
+| **< 0.6** | No action | Memories are independent |
+
+For `Correction` type memories, the engine also halves the confidence of the corrected memory and propagates belief changes through the knowledge graph.
+
+### Salience Decay (automatic on retrieval)
+
+Memory relevance decays over time using an exponential formula:
+
+```
+decayed = salience × 2^(-Δt / half_life) + boost × ln(1 + access_count)
+```
+
+- **Half-life:** 7 days (configurable)
+- **Access boost:** Frequently accessed memories resist decay
+- **Retrieval blending:** Final score = 70% similarity + 30% decayed salience
+- **Floor:** Memories never decay below 0.01
+
+### Memory Consolidation (on-demand)
+
+Similar memories can be merged into unified knowledge:
+
+```rust
+// Find clusters of similar, old memories eligible for merging
+let candidates = db.find_consolidation_candidates(2, 0.8)?;
+
+// Merge a cluster into a single Semantic memory
+let consolidated_id = db.consolidate_cluster(&memory_ids)?;
+// Source memories are invalidated (not deleted) with Derived edges
+```
+
+Eligibility: Episodic type, > 24 hours old, accessed > 2 times.
+
+### Configuration
+
+All cognitive features are enabled by default. Toggle individually:
+
+```rust
+use mentedb::{MenteDb, CognitiveConfig};
+
+let config = CognitiveConfig {
+    write_inference: true,   // auto-edges, contradiction detection
+    decay_on_recall: true,   // time-based salience decay
+    ..Default::default()
+};
+let db = MenteDb::open_with_config("./memory", config)?;
+```
+
 ## Crates
 
 MenteDB is organized as a Cargo workspace with 13 crates:
 
 | Crate | Description |
 |-------|-------------|
-| `mentedb` | Facade crate, single public entry point |
+| `mentedb` | Facade crate with integrated cognitive engine (write inference, decay, consolidation) |
 | `mentedb-core` | Types (MemoryNode, MemoryEdge), newtype IDs, errors, config |
 | `mentedb-storage` | Page based storage engine with crash safe WAL, buffer pool, LZ4 |
 | `mentedb-index` | HNSW vector index (bounded, concurrent), roaring bitmaps, temporal index |
 | `mentedb-graph` | CSR/CSC knowledge graph with BFS/DFS and contradiction detection |
 | `mentedb-query` | MQL parser with AND/OR/NOT, ASC/DESC ordering |
 | `mentedb-context` | Attention aware context assembly, U curve ordering, delta tracking |
-| `mentedb-cognitive` | Belief propagation, pain signals, phantom memories, speculative cache |
-| `mentedb-consolidation` | Temporal decay, salience updates, archival |
+| `mentedb-cognitive` | Write inference, belief propagation, pain signals, phantom memories, speculative cache |
+| `mentedb-consolidation` | Temporal decay, memory consolidation, salience management, archival |
 | `mentedb-embedding` | Embedding provider abstraction |
 | `mentedb-extraction` | LLM powered memory extraction pipeline |
 | `mentedb-server` | REST + gRPC server with JWT auth, space ACLs, rate limiting |
