@@ -11,9 +11,9 @@
 use std::collections::HashSet;
 
 use mentedb_cognitive::llm::{CognitiveLlmService, LlmJudge};
+use mentedb_core::MemoryNode;
 use mentedb_core::memory::MemoryType;
 use mentedb_core::types::AgentId;
-use mentedb_core::MemoryNode;
 use mentedb_embedding::provider::EmbeddingProvider;
 use mentedb_extraction::{ExtractionConfig, ExtractionPipeline, HttpExtractionProvider};
 
@@ -134,7 +134,8 @@ pub async fn run_enrichment<J: LlmJudge>(
                             continue;
                         }
                     };
-                    let mut node = MemoryNode::new(AgentId::nil(), mem_type, mem.content.clone(), embedding);
+                    let mut node =
+                        MemoryNode::new(AgentId::nil(), mem_type, mem.content.clone(), embedding);
                     node.tags = mem.tags.clone();
                     node.confidence = mem.confidence;
                     nodes.push(node);
@@ -295,10 +296,7 @@ async fn run_llm_entity_linking<J: LlmJudge>(
 }
 
 /// Phase 3: Community detection — group entities by category, generate LLM summaries.
-async fn run_community_detection<J: LlmJudge>(
-    db: &MenteDb,
-    llm: &CognitiveLlmService<J>,
-) -> usize {
+async fn run_community_detection<J: LlmJudge>(db: &MenteDb, llm: &CognitiveLlmService<J>) -> usize {
     let communities = db.entity_communities();
     let existing_summaries: HashSet<String> = db
         .community_summaries()
@@ -318,10 +316,12 @@ async fn run_community_detection<J: LlmJudge>(
             continue;
         }
 
-        let entity_pairs: Vec<(String, String)> =
-            members.iter().take(20).cloned().collect();
+        let entity_pairs: Vec<(String, String)> = members.iter().take(20).cloned().collect();
 
-        match llm.generate_community_summary(category, &entity_pairs).await {
+        match llm
+            .generate_community_summary(category, &entity_pairs)
+            .await
+        {
             Ok(summary) => {
                 let member_names: Vec<String> =
                     entity_pairs.iter().map(|(n, _)| n.clone()).collect();
@@ -345,10 +345,7 @@ async fn run_community_detection<J: LlmJudge>(
 }
 
 /// Phase 4: User model generation — synthesize always-scoped profile.
-async fn run_user_model<J: LlmJudge>(
-    db: &MenteDb,
-    llm: &CognitiveLlmService<J>,
-) -> bool {
+async fn run_user_model<J: LlmJudge>(db: &MenteDb, llm: &CognitiveLlmService<J>) -> bool {
     let facts = db.profile_facts();
     let community_texts: Vec<String> = db
         .community_summaries()
