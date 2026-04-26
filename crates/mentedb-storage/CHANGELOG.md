@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.7.0...mentedb-storage-v0.7.1) - 2026-04-26
+
+### Fixed
+
+- sync SDK versions to 0.7.0 and add process_turn ([#69](https://github.com/nambok/mentedb/pull/69))
+
 ## [0.6.2](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.6.1...mentedb-storage-v0.6.2) - 2026-04-26
 
 ### Added
