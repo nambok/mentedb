@@ -1,3 +1,6 @@
+# Manual fallback: triggered by mentedb-v* tags.
+# Primary release flow is release-plz.yml → publish-sdks.yml.
+# This workflow is only needed if you create a tag manually.
 name: Release
 
 on:

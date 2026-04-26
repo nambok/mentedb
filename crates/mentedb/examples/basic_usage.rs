@@ -9,7 +9,7 @@ use mentedb_core::types::AgentId;
 
 fn main() -> MenteResult<()> {
     // Open (or create) a database at a local directory.
-    let mut db = MenteDb::open(Path::new("./example_data"))?;
+    let db = MenteDb::open(Path::new("./example_data"))?;
 
     // Create an agent identity for this example.
     let agent_id = AgentId::new();

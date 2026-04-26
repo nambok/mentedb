@@ -1,10 +1,14 @@
 use std::path::Path;
+use std::sync::Mutex;
 
 use mentedb::MenteDb;
+use mentedb::process_turn::ProcessTurnInput;
+use mentedb::CognitiveConfig;
 use mentedb_cognitive::stream::CognitionStream as RustCognitionStream;
 use mentedb_cognitive::trajectory::{
     DecisionState, TrajectoryNode, TrajectoryTracker as RustTrajectoryTracker,
 };
+use mentedb_context::DeltaTracker;
 use mentedb_core::MemoryEdge;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::{MemoryNode, MemoryType};
@@ -90,12 +94,66 @@ pub struct IngestResult {
 }
 
 // ---------------------------------------------------------------------------
+// ProcessTurn result types
+// ---------------------------------------------------------------------------
+
+#[napi(object)]
+pub struct JsContextItem {
+    pub id: String,
+    pub content: String,
+    pub score: f64,
+}
+
+#[napi(object)]
+pub struct JsPainWarning {
+    pub signal_id: String,
+    pub intensity: f64,
+    pub description: String,
+}
+
+#[napi(object)]
+pub struct JsDetectedAction {
+    pub action_type: String,
+    pub detail: String,
+}
+
+#[napi(object)]
+pub struct JsProactiveRecall {
+    pub memory_id: String,
+    pub content: String,
+    pub relevance: f64,
+    pub action_type: String,
+}
+
+#[napi(object)]
+pub struct JsProcessTurnResult {
+    pub context: Vec<JsContextItem>,
+    pub stored_ids: Vec<String>,
+    pub episodic_id: Option<String>,
+    pub pain_warnings: Vec<JsPainWarning>,
+    pub cache_hit: bool,
+    pub inference_actions: u32,
+    pub detected_actions: Vec<JsDetectedAction>,
+    pub proactive_recalls: Vec<JsProactiveRecall>,
+    pub correction_id: Option<String>,
+    pub sentiment: f64,
+    pub phantom_count: u32,
+    pub contradiction_count: u32,
+    pub predicted_topics: Vec<String>,
+    pub facts_extracted: u32,
+    pub edges_created: u32,
+    pub delta_added: Vec<String>,
+    pub delta_removed: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
 // MenteDB
 // ---------------------------------------------------------------------------
 
 #[napi]
 pub struct MenteDB {
     inner: MenteDb,
+    delta_tracker: Mutex<DeltaTracker>,
 }
 
 #[napi]
@@ -103,8 +161,12 @@ impl MenteDB {
     /// Open (or create) a MenteDB instance backed by the given directory.
     #[napi(constructor)]
     pub fn new(data_dir: String) -> Result<Self> {
-        let db = MenteDb::open(Path::new(&data_dir)).map_err(mente_err)?;
-        Ok(Self { inner: db })
+        let db = MenteDb::open_with_config(Path::new(&data_dir), CognitiveConfig::default())
+            .map_err(mente_err)?;
+        Ok(Self {
+            inner: db,
+            delta_tracker: Mutex::new(DeltaTracker::new()),
+        })
     }
 
     /// Store a memory and return its UUID.
@@ -260,6 +322,92 @@ impl MenteDB {
             rejected_duplicate: 0,
             contradictions: 0,
             stored_ids,
+        })
+    }
+
+    /// Process a conversation turn through the full cognitive pipeline.
+    ///
+    /// Returns context, stored memories, pain warnings, detected actions,
+    /// sentiment, phantom count, predictions, and more.
+    #[napi]
+    pub fn process_turn(
+        &self,
+        user_message: String,
+        assistant_response: Option<String>,
+        turn_id: u32,
+        project_context: Option<String>,
+        agent_id: Option<String>,
+    ) -> Result<JsProcessTurnResult> {
+        let aid = match agent_id {
+            Some(ref s) => Some(parse_uuid(s)?),
+            None => None,
+        };
+
+        let input = ProcessTurnInput {
+            user_message,
+            assistant_response,
+            turn_id: turn_id as u64,
+            project_context,
+            agent_id: aid,
+        };
+
+        let mut delta = self
+            .delta_tracker
+            .lock()
+            .map_err(|e| Error::from_reason(format!("lock poisoned: {e}")))?;
+
+        let result = self.inner.process_turn(&input, &mut delta).map_err(mente_err)?;
+
+        Ok(JsProcessTurnResult {
+            context: result
+                .context
+                .iter()
+                .map(|sm| JsContextItem {
+                    id: sm.memory.id.to_string(),
+                    content: sm.memory.content.clone(),
+                    score: sm.score as f64,
+                })
+                .collect(),
+            stored_ids: result.stored_ids.iter().map(|id| id.to_string()).collect(),
+            episodic_id: result.episodic_id.map(|id| id.to_string()),
+            pain_warnings: result
+                .pain_warnings
+                .iter()
+                .map(|pw| JsPainWarning {
+                    signal_id: pw.signal_id.to_string(),
+                    intensity: pw.intensity as f64,
+                    description: pw.description.clone(),
+                })
+                .collect(),
+            cache_hit: result.cache_hit,
+            inference_actions: result.inference_actions,
+            detected_actions: result
+                .detected_actions
+                .iter()
+                .map(|a| JsDetectedAction {
+                    action_type: a.action_type.clone(),
+                    detail: a.detail.clone(),
+                })
+                .collect(),
+            proactive_recalls: result
+                .proactive_recalls
+                .iter()
+                .map(|pr| JsProactiveRecall {
+                    memory_id: pr.memory_id.to_string(),
+                    content: pr.content.clone(),
+                    relevance: pr.relevance as f64,
+                    action_type: pr.action_type.clone(),
+                })
+                .collect(),
+            correction_id: result.correction_id.map(|id| id.to_string()),
+            sentiment: result.sentiment as f64,
+            phantom_count: result.phantom_count as u32,
+            contradiction_count: result.contradiction_count as u32,
+            predicted_topics: result.predicted_topics,
+            facts_extracted: result.facts_extracted as u32,
+            edges_created: result.edges_created,
+            delta_added: result.delta_added.iter().map(|id| id.to_string()).collect(),
+            delta_removed: result.delta_removed.iter().map(|id| id.to_string()).collect(),
         })
     }
 
