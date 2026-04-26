@@ -6,3 +6,6 @@ build.rs
 __tests__/
 tsconfig.json
 .cargo/
+npm/client.ts
+npm/index.ts
+npm/types.ts

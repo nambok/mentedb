@@ -122,6 +122,9 @@ jobs:
             exit 1
           fi
           echo "✅ All $EXPECTED platform binaries present"
+      - name: Install dependencies
+        working-directory: sdks/typescript
+        run: npm install
       - name: Compile TypeScript
         working-directory: sdks/typescript
         run: npx tsc

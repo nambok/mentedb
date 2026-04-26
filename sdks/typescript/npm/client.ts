@@ -51,7 +51,7 @@ export class MenteDB {
   private native: any;
 
   constructor(dataDir: string = './mentedb-data') {
-    this.native = new nativeBinding.MenteDB(dataDir);
+    this.native = new nativeBinding.MenteDb(dataDir);
   }
 
   /** Store a memory and return its UUID. */
