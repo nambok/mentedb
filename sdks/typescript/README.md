@@ -96,9 +96,9 @@ const next = tracker.predictNextTopics();
 | `recall(query)` | Recall memories via an MQL query. Returns `RecallResult`. |
 | `search(embedding, k)` | Vector similarity search. Returns `SearchResult[]`. |
 | `relate(source, target, edgeType?, weight?)` | Create a typed edge between two memories. |
-| `processTurn(userMessage, assistantResponse?, turnId?, projectContext?, agentId?)` | Process a conversation turn through the full cognitive pipeline. Returns context, actions, sentiment, predictions, and more. |
+| `processTurn(userMessage, assistantResponse?, turnId?, projectContext?, agentId?)` | **Primary API.** Process a conversation turn through the full cognitive pipeline. Returns context, actions, sentiment, predictions, and more. |
 | `forget(memoryId)` | Remove a memory by ID. |
-| `ingest(conversation, provider?, agentId?)` | Extract and store memories from a conversation via LLM. |
+| `ingest(conversation, provider?, agentId?)` | **Deprecated** — use `processTurn` instead. Extract and store memories from a conversation via LLM. |
 | `close()` | Flush and close the database. |
 
 ### `CognitionStream`

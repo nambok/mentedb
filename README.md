@@ -197,7 +197,7 @@ mentedb-mcp setup copilot
 
 See [mentedb-mcp](https://github.com/nambok/mentedb-mcp) for setup, configuration, and the full list of 32 tools.
 
-**Key tools:** `store_memory`, `search_memories`, `forget_all`, `ingest_conversation`, `assemble_context`, `relate_memories`, `write_inference`, `get_cognitive_state`, and 23 more covering knowledge graph, consolidation, and cognitive systems.
+**Key tools:** `process_turn` (the primary API — one call per turn), `store_memory`, `search_memories`, `forget_memory`, `assemble_context`, `relate_memories`, `write_inference`, `get_cognitive_state`, and 20+ more covering knowledge graph, consolidation, and cognitive systems.
 
 ### 2. REST API
 
@@ -209,11 +209,6 @@ cargo run -p mentedb-server -- --data-dir ./data --jwt-secret-file ./secret.key
 curl -X POST http://localhost:6677/v1/memories \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"agent_id": "...", "content": "User prefers dark mode", "memory_type": "semantic"}'
-
-# Ingest a conversation (automatic extraction)
-curl -X POST http://localhost:6677/v1/ingest \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"conversation": "...", "agent_id": "..."}'
 
 # Recall memories
 curl -X POST http://localhost:6677/v1/query \
@@ -229,38 +224,44 @@ Bidirectional streaming for real time cognition updates. Proto file at `crates/m
 
 **Python:** `pip install mentedb`
 ```python
-from mentedb import MenteDb
+from mentedb import MenteDB
 
-db = MenteDb("./agent-memory")
-db.store(content="User prefers Python", memory_type="semantic", agent_id="my-agent")
-db.ingest("User: I switched to Vim\nAssistant: Got it!")
-results = db.recall("RECALL memories WHERE tag = 'preferences' LIMIT 5")
+db = MenteDB("./agent-memory")
+result = db.process_turn(
+    user_message="I switched to Vim",
+    assistant_response="Got it!",
+    turn_id=0,
+)
+# result.context has relevant memories for your prompt
 ```
 
 **TypeScript:** `npm install mentedb`
 ```typescript
-import { MenteDb } from 'mentedb';
+import { MenteDB } from 'mentedb';
 
-const db = new MenteDb('./agent-memory');
-await db.store({ content: 'User prefers TypeScript', memoryType: 'semantic', agentId: 'my-agent' });
-await db.ingest('User: I switched to Neovim\nAssistant: Noted!');
-const results = await db.recall("RECALL memories WHERE tag = 'editor' LIMIT 5");
+const db = new MenteDB('./agent-memory');
+const result = await db.processTurn({
+  userMessage: 'I switched to Neovim',
+  assistantResponse: 'Noted!',
+  turnId: 0,
+});
+// result.context has relevant memories for your prompt
 ```
 
 **LangChain:** `pip install mentedb-langchain`
 ```python
-from mentedb_langchain import MenteDBChatMessageHistory
+from mentedb_langchain import MenteDBChatHistory
 
-history = MenteDBChatMessageHistory(data_dir="./memory", agent_id="my-agent")
+history = MenteDBChatHistory(data_dir="./memory", agent_id="my-agent")
 history.add_user_message("I prefer dark mode")
 history.add_ai_message("Noted!")
 ```
 
 **CrewAI:** `pip install mentedb-crewai`
 ```python
-from mentedb_crewai import MenteDBStorage
+from mentedb_crewai import MenteDBCrewMemory
 
-storage = MenteDBStorage(data_dir="./memory")
+memory = MenteDBCrewMemory(data_dir="./memory")
 ```
 
 ## Architecture

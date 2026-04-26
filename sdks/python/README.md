@@ -23,9 +23,21 @@ pip install mentedb
 ## Quick start
 
 ```python
-from mentedb import MenteDB, MemoryType, EdgeType
+from mentedb import MenteDB
 
 with MenteDB("./agent-memory") as db:
+    # process_turn — the primary API, one call does everything
+    result = db.process_turn(
+        user_message="The deployment failed because the config was missing",
+        assistant_response="I'll check the config setup.",
+        turn_id=0,
+    )
+    # result.context — relevant memories for your prompt
+    # result.facts_extracted — what was learned this turn
+    # result.contradiction_count — conflicting beliefs detected
+
+    # Or use low-level APIs directly:
+
     # Store a memory
     mid = db.store(
         "The deployment failed because the config was missing",
@@ -81,6 +93,7 @@ warnings = pain.check_triggers(["deploy"])
 
 | Method | Description |
 |--------|-------------|
+| `process_turn(user_message, assistant_response, turn_id, project_context, agent_id)` | **Primary API.** Process a conversation turn through the full cognitive pipeline |
 | `store(content, memory_type, embedding, agent_id, tags)` | Store a memory, returns its UUID |
 | `recall(query)` | Recall memories using MQL |
 | `search(embedding, k)` | Vector similarity search |
