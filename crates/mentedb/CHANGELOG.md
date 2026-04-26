@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/nambok/mentedb/compare/mentedb-v0.8.0...mentedb-v0.8.1) - 2026-04-26
+
+### Added
+
+- add community detection and user model generation (Phase 3 & 4)
+
+### Fixed
+
+- address code review findings for Phase 3 & 4
+
 ## [0.8.0](https://github.com/nambok/mentedb/compare/mentedb-v0.7.2...mentedb-v0.8.0) - 2026-04-26
 
 ### Fixed
