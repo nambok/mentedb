@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2](https://github.com/nambok/mentedb/compare/mentedb-index-v0.7.1...mentedb-index-v0.7.2) - 2026-04-26
+
+### Other
+
+- add installation section, update Docker and SDK examples
+
 ## [0.6.2](https://github.com/nambok/mentedb/compare/mentedb-index-v0.6.1...mentedb-index-v0.6.2) - 2026-04-26
 
 ### Added
