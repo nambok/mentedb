@@ -27,7 +27,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "napi": {
-    "name": "mentedb",
+    "binaryName": "mentedb",
     "triples": {}
   },
   "devDependencies": {
