@@ -1614,9 +1614,9 @@ impl MenteDb {
     /// sorted by creation time. These are the candidates for LLM extraction.
     pub fn enrichment_candidates(&self) -> Vec<MemoryNode> {
         let last_turn = *self.last_enrichment_turn.read();
-        let pm = self.page_map.read();
-        let mut candidates: Vec<MemoryNode> = pm
-            .values()
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        let mut candidates: Vec<MemoryNode> = page_ids
+            .iter()
             .filter_map(|pid| self.storage.load_memory(*pid).ok())
             .filter(|m| {
                 m.memory_type == mentedb_core::memory::MemoryType::Episodic
@@ -1719,11 +1719,13 @@ impl MenteDb {
             .cognitive_config
             .enrichment_config
             .entity_separate_threshold;
-        let pm = self.page_map.read();
+
+        // Collect page IDs under lock, then drop before loading memories
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
 
         // Collect all entity memories grouped by normalized name
         let mut entity_groups: HashMap<String, Vec<MemoryNode>> = HashMap::new();
-        for pid in pm.values() {
+        for pid in &page_ids {
             if let Ok(mem) = self.storage.load_memory(*pid) {
                 for tag in &mem.tags {
                     if let Some(name) = tag.strip_prefix("entity:") {
@@ -1823,8 +1825,9 @@ impl MenteDb {
 
     /// Get all entity memory nodes (memories tagged with `entity:{name}`).
     pub fn entity_memories(&self) -> Vec<MemoryNode> {
-        let pm = self.page_map.read();
-        pm.values()
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        page_ids
+            .iter()
             .filter_map(|pid| self.storage.load_memory(*pid).ok())
             .filter(|m| m.tags.iter().any(|t| t.starts_with("entity:")))
             .collect()
