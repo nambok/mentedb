@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.8.1...mentedb-cognitive-v0.8.2) - 2026-04-26
+
+### Other
+
+- Merge pull request #76 from nambok/feat/enrichment-phase3-4
+- add sleeptime enrichment to READMEs
+
 ## [0.8.1](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.8.0...mentedb-cognitive-v0.8.1) - 2026-04-26
 
 ### Added
