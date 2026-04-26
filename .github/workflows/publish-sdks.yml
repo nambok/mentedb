@@ -57,12 +57,26 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-      - run: cd sdks/typescript && npm publish --access public --provenance
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install protobuf compiler
+        run: sudo apt-get install -y protobuf-compiler
+      - name: Install napi-rs CLI
+        run: npm install -g @napi-rs/cli
+      - name: Build native module
+        working-directory: sdks/typescript
+        run: napi build --release
+      - name: Compile TypeScript
+        working-directory: sdks/typescript
+        run: npx tsc
+      - name: Publish to npm
+        working-directory: sdks/typescript
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-integrations:
     name: Publish LangChain & CrewAI
+    needs: upload-pypi
     runs-on: ubuntu-latest
     permissions:
       id-token: write
