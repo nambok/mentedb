@@ -98,6 +98,10 @@ pub use mentedb_storage as storage;
 /// Unified process_turn orchestration.
 pub mod process_turn;
 
+/// Sleeptime enrichment pipeline (requires `enrichment` feature).
+#[cfg(feature = "enrichment")]
+pub mod enrichment;
+
 /// Commonly used types, re-exported for convenience.
 pub mod prelude {
     pub use mentedb_core::edge::EdgeType;

@@ -20,10 +20,15 @@ mentedb-context = { workspace = true }
 mentedb-embedding = { workspace = true }
 mentedb-cognitive = { workspace = true }
 mentedb-consolidation = { workspace = true }
+mentedb-extraction = { workspace = true, optional = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 parking_lot.workspace = true
+
+[features]
+default = []
+enrichment = ["dep:mentedb-extraction"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -36,6 +36,12 @@ with MenteDB("./agent-memory") as db:
     # result.facts_extracted — what was learned this turn
     # result.contradiction_count — conflicting beliefs detected
 
+    # Sleeptime enrichment runs automatically after process_turn:
+    # - Extracts semantic facts from conversations
+    # - Links and deduplicates entities
+    # - Builds community summaries and user profile
+    # Requires LLM config: MENTEDB_OPENAI_API_KEY or MENTEDB_ANTHROPIC_API_KEY
+
     # Or use low-level APIs directly:
 
     # Store a memory
@@ -66,6 +72,14 @@ with MenteDB("./agent-memory") as db:
 
 The SDK also exposes MenteDB cognitive subsystems for real time stream
 monitoring, conversation trajectory tracking, and pain signal management.
+
+## Sleeptime Enrichment
+
+MenteDB automatically enriches memories in the background after `process_turn`. The pipeline extracts semantic facts, links and deduplicates entities, groups them into communities with summaries, and builds a user profile — all feeding back into future `process_turn` context retrieval.
+
+Requires an LLM provider: set `MENTEDB_OPENAI_API_KEY` or `MENTEDB_ANTHROPIC_API_KEY`. Without one, the engine works normally — enrichment just doesn't run.
+
+## Cognitive subsystems
 
 ```python
 from mentedb._mentedb_python import CognitionStream, TrajectoryTracker, PainRegistry

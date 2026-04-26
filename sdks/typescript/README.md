@@ -25,6 +25,20 @@ import { MenteDB, MemoryType, EdgeType } from 'mentedb';
 
 const db = new MenteDB('./my-agent-memory');
 
+// Primary API — one call does everything
+const result = await db.processTurn(
+  "I prefer using TypeScript for backend services",
+  "Noted! TypeScript is great for type-safe backends.",
+  0 // turn_id
+);
+
+console.log(result.context);     // relevant memories
+console.log(result.stored);      // number of new memories
+// Enrichment runs automatically — builds semantic facts,
+// entity graphs, and user profile over time
+
+// Low-level APIs:
+
 // Store a memory
 const id = db.store({
   content: 'The deploy key rotates every 90 days',
@@ -84,6 +98,12 @@ tracker.recordTurn('Token lifetime', 'decided:15 minutes');
 const resume = tracker.getResumeContext();
 const next = tracker.predictNextTopics();
 ```
+
+## Sleeptime Enrichment
+
+MenteDB automatically enriches memories in the background after `processTurn`. The pipeline extracts semantic facts, links and deduplicates entities, groups them into communities with summaries, and builds a user profile — all feeding back into future `processTurn` context retrieval.
+
+Requires an LLM provider: set `MENTEDB_OPENAI_API_KEY` or `MENTEDB_ANTHROPIC_API_KEY`. Without one, the engine works normally — enrichment just doesn't run.
 
 ## API reference
 
