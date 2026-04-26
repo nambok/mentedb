@@ -133,7 +133,7 @@ fn test_coding_assistant_workflow() {
     let ids: Vec<MemoryId> = vec![m1.id, m2.id, m3.id, m4.id, m5.id];
 
     {
-        let mut db = MenteDb::open(dir.path()).unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
         for m in [&m1, &m2, &m3, &m4, &m5] {
             db.store(m.clone()).unwrap();
         }
@@ -175,18 +175,14 @@ fn test_coding_assistant_workflow() {
 
     // ── Session 2 — reopen DB ──────────────────────────────────────────────
     {
-        let mut db = MenteDb::open(dir.path()).unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
 
-        let m_switch = {
-            // Use embedding similar to seed 3 (Vite memory) so inference engine detects the relationship
-            let m = MemoryNode::new(
-                agent_id,
-                MemoryType::Episodic,
-                "Switched from Vite to Webpack due to plugin compatibility".to_string(),
-                make_similar_embedding(3, 0.05),
-            );
-            m
-        };
+        let m_switch = MemoryNode::new(
+            agent_id,
+            MemoryType::Episodic,
+            "Switched from Vite to Webpack due to plugin compatibility".to_string(),
+            make_similar_embedding(3, 0.05),
+        );
         db.store(m_switch.clone()).unwrap();
         memories.push(m_switch.clone());
 
@@ -279,7 +275,7 @@ fn test_multi_agent_collaboration() {
     assert!(space_mgr.check_access(be_space.id, backend_agent.id, Permission::ReadWrite));
     assert!(space_mgr.check_access(fe_space.id, backend_agent.id, Permission::Read));
 
-    let mut db = MenteDb::open(dir.path()).unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
 
     // Frontend memories
     let fe_mems: Vec<MemoryNode> = vec![
@@ -412,7 +408,7 @@ fn test_multi_agent_collaboration() {
 #[test]
 fn test_knowledge_lifecycle() {
     let dir = tempdir().unwrap();
-    let mut db = MenteDb::open(dir.path()).unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
     let agent_id = AgentId::new();
     let now = now_us();
 
@@ -525,7 +521,7 @@ fn test_knowledge_lifecycle() {
 #[test]
 fn test_cognitive_safety_net() {
     let dir = tempdir().unwrap();
-    let mut db = MenteDb::open(dir.path()).unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
     let agent_id = AgentId::new();
 
     // ── Pain Registry ──────────────────────────────────────────────────────
@@ -646,7 +642,7 @@ fn test_cognitive_safety_net() {
 #[test]
 fn test_stream_cognition() {
     let dir = tempdir().unwrap();
-    let mut db = MenteDb::open(dir.path()).unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
     let agent_id = AgentId::new();
 
     // Store known facts
@@ -692,11 +688,7 @@ fn test_stream_cognition() {
         .any(|a| matches!(a, StreamAlert::Contradiction { .. }));
     // Stream cognition works on keyword matching — PostgreSQL vs MySQL
     // Whether it flags depends on the implementation's threshold
-    // We verify the stream is functional
-    assert!(
-        !contradiction_text.is_empty(),
-        "Contradiction text was fed to stream"
-    );
+    // We verify the stream processed tokens without panicking
 
     // Feed tokens that reinforce a known fact
     let reinforcement_text = "your team of 5 developers should coordinate on";
@@ -1004,7 +996,7 @@ fn test_context_assembly_quality() {
 #[test]
 fn test_gdpr_forget() {
     let dir = tempdir().unwrap();
-    let mut db = MenteDb::open(dir.path()).unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
     let agent_id = AgentId::new();
 
     // Store 10 memories

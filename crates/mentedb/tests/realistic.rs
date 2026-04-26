@@ -91,7 +91,7 @@ fn make_memory_at_time(
 #[test]
 fn test_multi_turn_coding_conversation() {
     let dir = tempdir().unwrap();
-    let mut db = MenteDb::open(dir.path()).unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
     let agent_id = AgentId::new();
     let provider = embedder();
 
@@ -306,7 +306,7 @@ fn test_multi_turn_coding_conversation() {
 #[test]
 fn test_customer_support_agent() {
     let dir = tempdir().unwrap();
-    let mut db = MenteDb::open(dir.path()).unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
     let agent_id = AgentId::new();
     let provider = embedder();
 
@@ -447,7 +447,7 @@ fn test_customer_support_agent() {
 #[test]
 fn test_research_assistant_knowledge_accumulation() {
     let dir = tempdir().unwrap();
-    let mut db = MenteDb::open(dir.path()).unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
     let agent_id = AgentId::new();
     let provider = embedder();
 
@@ -796,7 +796,7 @@ fn test_concurrent_multi_agent_writes() {
                     MemoryNode::new(agent_id, MemoryType::Episodic, content.clone(), embedding);
                 local_ids.push(node.id);
 
-                let mut db = db.lock().unwrap();
+                let db = db.lock().unwrap();
                 db.store(node).unwrap();
             }
 
@@ -828,7 +828,7 @@ fn test_concurrent_multi_agent_writes() {
     );
 
     // Verify the database can still recall after concurrent writes
-    let mut db = db.lock().unwrap();
+    let db = db.lock().unwrap();
     let query_emb = embed(&provider, "transformer attention mechanism");
     let results = db.recall_similar(&query_emb, 10).unwrap();
     assert!(
@@ -1004,7 +1004,7 @@ fn test_large_context_window_assembly() {
 #[test]
 fn test_contradiction_chain() {
     let dir = tempdir().unwrap();
-    let mut db = MenteDb::open(dir.path()).unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
     let agent_id = AgentId::new();
     let provider = embedder();
 

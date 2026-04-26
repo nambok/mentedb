@@ -19,6 +19,7 @@ mentedb-query = { workspace = true }
 mentedb-context = { workspace = true }
 mentedb-embedding = { workspace = true }
 mentedb-cognitive = { workspace = true }
+mentedb-consolidation = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
@@ -28,7 +29,6 @@ parking_lot.workspace = true
 tempfile = { workspace = true }
 criterion = { workspace = true }
 uuid = { workspace = true }
-mentedb-consolidation = { workspace = true }
 serde_json = { workspace = true }
 
 [[bench]]

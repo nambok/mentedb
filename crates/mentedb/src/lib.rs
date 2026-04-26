@@ -40,6 +40,11 @@
 
 use std::path::{Path, PathBuf};
 
+use mentedb_cognitive::write_inference::{
+    InferredAction, WriteInferenceConfig, WriteInferenceEngine,
+};
+use mentedb_consolidation::consolidation::{ConsolidationCandidate, ConsolidationEngine};
+use mentedb_consolidation::decay::{DecayConfig, DecayEngine};
 use mentedb_context::{AssemblyConfig, ContextAssembler, ContextWindow, ScoredMemory};
 use mentedb_core::edge::EdgeType;
 use mentedb_core::error::MenteResult;
@@ -51,7 +56,7 @@ use mentedb_index::IndexManager;
 use mentedb_query::{Mql, QueryPlan};
 use mentedb_storage::StorageEngine;
 use parking_lot::RwLock;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // Re-export sub-crates for direct access.
 
@@ -60,6 +65,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Cognitive pipeline: speculative caching, trajectory tracking, inference.
 pub use mentedb_cognitive as cognitive;
+/// Consolidation, decay, and memory lifecycle management.
+pub use mentedb_consolidation as consolidation;
 /// Context assembly engine.
 pub use mentedb_context as context;
 /// Core types: MemoryNode, MemoryEdge, errors, config.
@@ -88,10 +95,34 @@ use mentedb_storage::PageId;
 /// Mapping from MemoryId to the storage PageId where it lives.
 use std::collections::HashMap;
 
+/// Configuration for the cognitive engine subsystems.
+#[derive(Debug, Clone)]
+pub struct CognitiveConfig {
+    /// Whether write inference (auto-edges, contradiction detection) is enabled on store.
+    pub write_inference: bool,
+    /// Whether salience decay is applied during retrieval.
+    pub decay_on_recall: bool,
+    /// Configuration for the write inference engine.
+    pub inference_config: WriteInferenceConfig,
+    /// Configuration for the decay engine.
+    pub decay_config: DecayConfig,
+}
+
+impl Default for CognitiveConfig {
+    fn default() -> Self {
+        Self {
+            write_inference: true,
+            decay_on_recall: true,
+            inference_config: WriteInferenceConfig::default(),
+            decay_config: DecayConfig::default(),
+        }
+    }
+}
+
 /// The unified database facade for MenteDB.
 ///
 /// `MenteDb` coordinates storage, indexing, graph relationships, query parsing,
-/// and context assembly into a single coherent API.
+/// context assembly, and cognitive subsystems into a single coherent API.
 ///
 /// All internal state is protected by fine-grained locks, so every public method
 /// takes `&self`. This allows `Arc<MenteDb>` to be shared across threads without
@@ -108,11 +139,24 @@ pub struct MenteDb {
     path: PathBuf,
     /// Optional embedding provider for auto-embedding on store and search.
     embedder: Option<Box<dyn EmbeddingProvider>>,
+    /// Cognitive engine configuration.
+    cognitive_config: CognitiveConfig,
+    /// Write inference engine for auto-edge creation and contradiction detection.
+    write_inference: WriteInferenceEngine,
+    /// Decay engine for salience management.
+    decay: DecayEngine,
+    /// Consolidation engine for memory merging.
+    consolidation: ConsolidationEngine,
 }
 
 impl MenteDb {
     /// Opens (or creates) a MenteDB instance at the given path.
     pub fn open(path: &Path) -> MenteResult<Self> {
+        Self::open_with_config(path, CognitiveConfig::default())
+    }
+
+    /// Opens a MenteDB instance with custom cognitive configuration.
+    pub fn open_with_config(path: &Path, cognitive_config: CognitiveConfig) -> MenteResult<Self> {
         info!("Opening MenteDB at {}", path.display());
         let storage = StorageEngine::open(path)?;
 
@@ -143,6 +187,11 @@ impl MenteDb {
             info!(memories = page_map.len(), "rebuilt page map from storage");
         }
 
+        let write_inference =
+            WriteInferenceEngine::with_config(cognitive_config.inference_config.clone());
+        let decay = DecayEngine::new(cognitive_config.decay_config.clone());
+        let consolidation = ConsolidationEngine::new();
+
         Ok(Self {
             storage,
             index,
@@ -151,6 +200,10 @@ impl MenteDb {
             embedding_dim: 0,
             path: path.to_path_buf(),
             embedder: None,
+            cognitive_config,
+            write_inference,
+            decay,
+            consolidation,
         })
     }
 
@@ -160,6 +213,18 @@ impl MenteDb {
         embedder: Box<dyn EmbeddingProvider>,
     ) -> MenteResult<Self> {
         let mut db = Self::open(path)?;
+        db.embedding_dim = embedder.dimensions();
+        db.embedder = Some(embedder);
+        Ok(db)
+    }
+
+    /// Opens a MenteDB instance with both embedder and cognitive config.
+    pub fn open_with_embedder_and_config(
+        path: &Path,
+        embedder: Box<dyn EmbeddingProvider>,
+        cognitive_config: CognitiveConfig,
+    ) -> MenteResult<Self> {
+        let mut db = Self::open_with_config(path, cognitive_config)?;
         db.embedding_dim = embedder.dimensions();
         db.embedder = Some(embedder);
         Ok(db)
@@ -184,6 +249,13 @@ impl MenteDb {
     ///
     /// The node is persisted to storage, added to all indexes, and registered
     /// in the graph for relationship traversal.
+    ///
+    /// When cognitive features are enabled (the default), write inference
+    /// automatically runs to:
+    /// - Detect contradictions with existing memories
+    /// - Create relationship edges (Related, Supersedes, Contradicts)
+    /// - Invalidate superseded memories
+    /// - Propagate confidence changes through the graph
     pub fn store(&self, node: MemoryNode) -> MenteResult<()> {
         let id = node.id;
         debug!("Storing memory {}", id);
@@ -203,6 +275,11 @@ impl MenteDb {
         self.page_map.write().insert(id, page_id);
         self.index.index_memory(&node);
         self.graph.add_memory(id);
+
+        // Run write inference to auto-create edges and detect contradictions.
+        if self.cognitive_config.write_inference {
+            self.run_write_inference(&node);
+        }
 
         Ok(())
     }
@@ -451,6 +528,393 @@ impl MenteDb {
         &mut self.graph
     }
 
+    /// Returns a reference to the cognitive configuration.
+    pub fn cognitive_config(&self) -> &CognitiveConfig {
+        &self.cognitive_config
+    }
+
+    // -----------------------------------------------------------------------
+    // Cognitive Engine: Write Inference
+    // -----------------------------------------------------------------------
+
+    /// Run write inference on a newly stored memory.
+    ///
+    /// Finds semantically similar existing memories, runs the inference engine
+    /// to detect contradictions and relationships, then applies the actions
+    /// (creating edges, invalidating superseded memories, etc.).
+    fn run_write_inference(&self, new_memory: &MemoryNode) {
+        // Find candidate memories to compare against via vector search.
+        // We load a small set of the most similar memories.
+        let candidates = if !new_memory.embedding.is_empty() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64;
+            self.recall_hybrid_at(&new_memory.embedding, None, 20, now, None, None)
+                .unwrap_or_default()
+        } else {
+            vec![]
+        };
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        // Load the actual MemoryNode data for each candidate.
+        let pm = self.page_map.read();
+        let existing: Vec<MemoryNode> = candidates
+            .iter()
+            .filter(|(id, _)| *id != new_memory.id)
+            .filter_map(|(id, _)| {
+                pm.get(id)
+                    .and_then(|&pid| self.storage.load_memory(pid).ok())
+            })
+            .collect();
+        drop(pm);
+
+        if existing.is_empty() {
+            return;
+        }
+
+        let actions = self
+            .write_inference
+            .infer_on_write(new_memory, &existing, &[]);
+
+        let action_count = actions.len();
+        for action in actions {
+            if let Err(e) = self.apply_inferred_action(action) {
+                warn!("Failed to apply inferred action: {}", e);
+            }
+        }
+        if action_count > 0 {
+            debug!(
+                "Write inference for {} produced {} actions",
+                new_memory.id, action_count
+            );
+        }
+    }
+
+    /// Apply a single inferred action from the write inference engine.
+    fn apply_inferred_action(&self, action: InferredAction) -> MenteResult<()> {
+        match action {
+            InferredAction::CreateEdge {
+                source,
+                target,
+                edge_type,
+                weight,
+            } => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u64;
+                let edge = MemoryEdge {
+                    source,
+                    target,
+                    edge_type,
+                    weight,
+                    created_at: now,
+                    valid_from: None,
+                    valid_until: None,
+                    label: None,
+                };
+                debug!(
+                    "Auto-creating {:?} edge {} -> {}",
+                    edge_type, source, target
+                );
+                self.graph.add_relationship(&edge)?;
+            }
+            InferredAction::InvalidateMemory {
+                memory,
+                superseded_by,
+                valid_until,
+            } => {
+                debug!(
+                    "Invalidating memory {} (superseded by {})",
+                    memory, superseded_by
+                );
+                self.invalidate_memory(memory, valid_until)?;
+                // Also create the Supersedes edge.
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u64;
+                let edge = MemoryEdge {
+                    source: superseded_by,
+                    target: memory,
+                    edge_type: EdgeType::Supersedes,
+                    weight: 1.0,
+                    created_at: now,
+                    valid_from: None,
+                    valid_until: None,
+                    label: None,
+                };
+                self.graph.add_relationship(&edge)?;
+            }
+            InferredAction::MarkObsolete {
+                memory,
+                superseded_by,
+            } => {
+                debug!(
+                    "Marking {} obsolete (superseded by {})",
+                    memory, superseded_by
+                );
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u64;
+                self.invalidate_memory(memory, now)?;
+                let edge = MemoryEdge {
+                    source: superseded_by,
+                    target: memory,
+                    edge_type: EdgeType::Supersedes,
+                    weight: 1.0,
+                    created_at: now,
+                    valid_from: None,
+                    valid_until: None,
+                    label: None,
+                };
+                self.graph.add_relationship(&edge)?;
+            }
+            InferredAction::FlagContradiction {
+                existing,
+                new,
+                reason,
+            } => {
+                debug!(
+                    "Contradiction detected: {} vs {} — {}",
+                    existing, new, reason
+                );
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u64;
+                let edge = MemoryEdge {
+                    source: new,
+                    target: existing,
+                    edge_type: EdgeType::Contradicts,
+                    weight: 1.0,
+                    created_at: now,
+                    valid_from: None,
+                    valid_until: None,
+                    label: Some(reason),
+                };
+                self.graph.add_relationship(&edge)?;
+            }
+            InferredAction::UpdateConfidence {
+                memory,
+                new_confidence,
+            } => {
+                debug!("Updating confidence for {} to {}", memory, new_confidence);
+                if let Ok(mut node) = self.get_memory(memory) {
+                    node.confidence = new_confidence;
+                    let new_page_id = self.storage.store_memory(&node)?;
+                    self.page_map.write().insert(memory, new_page_id);
+                }
+            }
+            InferredAction::PropagateBeliefChange { root, delta } => {
+                debug!("Propagating belief change from {} (delta={})", root, delta);
+                if let Ok(node) = self.get_memory(root) {
+                    let new_confidence = (node.confidence + delta).clamp(0.0, 1.0);
+                    let affected = self.graph.propagate_belief_change(root, new_confidence);
+                    for (affected_id, new_conf) in affected {
+                        if let Ok(mut affected_node) = self.get_memory(affected_id) {
+                            affected_node.confidence = new_conf;
+                            if let Ok(pid) = self.storage.store_memory(&affected_node) {
+                                self.page_map.write().insert(affected_id, pid);
+                            }
+                        }
+                    }
+                }
+            }
+            InferredAction::UpdateContent {
+                memory,
+                new_content,
+                reason,
+            } => {
+                debug!("Updating content of {}: {}", memory, reason);
+                if let Ok(mut node) = self.get_memory(memory) {
+                    node.content = new_content;
+                    let new_page_id = self.storage.store_memory(&node)?;
+                    self.page_map.write().insert(memory, new_page_id);
+                    self.index.remove_memory(memory, &node);
+                    self.index.index_memory(&node);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Cognitive Engine: Salience Decay
+    // -----------------------------------------------------------------------
+
+    /// Apply salience decay to a batch of memories in-place.
+    ///
+    /// Call this during retrieval to ensure scores reflect temporal relevance,
+    /// or periodically to maintain salience accuracy across the database.
+    pub fn apply_decay(&self, memories: &mut [MemoryNode]) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        self.decay.apply_decay_batch(memories, now);
+    }
+
+    /// Compute the decayed salience for a single memory at the current time.
+    pub fn compute_decayed_salience(&self, memory: &MemoryNode) -> f32 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        self.decay.compute_decay(
+            memory.salience,
+            memory.created_at,
+            memory.accessed_at,
+            memory.access_count,
+            now,
+        )
+    }
+
+    /// Apply decay globally: recompute salience for all memories and persist.
+    ///
+    /// This is an expensive operation intended for periodic maintenance.
+    /// For real-time use, prefer `apply_decay` on retrieved memories.
+    pub fn apply_decay_global(&self) -> MenteResult<usize> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        let ids: Vec<(MemoryId, PageId)> = self
+            .page_map
+            .read()
+            .iter()
+            .map(|(mid, pid)| (*mid, *pid))
+            .collect();
+
+        let mut updated = 0;
+        for (mid, pid) in &ids {
+            if let Ok(mut node) = self.storage.load_memory(*pid) {
+                let new_salience = self.decay.compute_decay(
+                    node.salience,
+                    node.created_at,
+                    node.accessed_at,
+                    node.access_count,
+                    now,
+                );
+                if (new_salience - node.salience).abs() > 0.001 {
+                    node.salience = new_salience;
+                    let new_pid = self.storage.store_memory(&node)?;
+                    self.page_map.write().insert(*mid, new_pid);
+                    updated += 1;
+                }
+            }
+        }
+        if updated > 0 {
+            info!("Decay pass updated {} memories", updated);
+        }
+        Ok(updated)
+    }
+
+    // -----------------------------------------------------------------------
+    // Cognitive Engine: Consolidation
+    // -----------------------------------------------------------------------
+
+    /// Find groups of similar memories that are candidates for consolidation.
+    ///
+    /// Returns clusters of memories that share high semantic similarity and
+    /// could be merged into unified knowledge.
+    pub fn find_consolidation_candidates(
+        &self,
+        min_cluster_size: usize,
+        similarity_threshold: f32,
+    ) -> MenteResult<Vec<ConsolidationCandidate>> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+
+        // Load all memories eligible for consolidation.
+        let pm = self.page_map.read();
+        let eligible: Vec<MemoryNode> = pm
+            .values()
+            .filter_map(|pid| self.storage.load_memory(*pid).ok())
+            .filter(|node| ConsolidationEngine::should_consolidate(node, now))
+            .collect();
+        drop(pm);
+
+        if eligible.is_empty() {
+            return Ok(vec![]);
+        }
+
+        Ok(self
+            .consolidation
+            .find_candidates(&eligible, min_cluster_size, similarity_threshold))
+    }
+
+    /// Consolidate a cluster of memories into a single merged memory.
+    ///
+    /// The source memories are invalidated (not deleted) and a new consolidated
+    /// semantic memory is stored with Derived edges back to the sources.
+    pub fn consolidate_cluster(&self, memory_ids: &[MemoryId]) -> MenteResult<MemoryId> {
+        let pm = self.page_map.read();
+        let cluster: Vec<MemoryNode> = memory_ids
+            .iter()
+            .filter_map(|id| {
+                pm.get(id)
+                    .and_then(|&pid| self.storage.load_memory(pid).ok())
+            })
+            .collect();
+        drop(pm);
+
+        if cluster.len() < 2 {
+            return Err(MenteError::Query(
+                "consolidation requires at least 2 memories".into(),
+            ));
+        }
+
+        let result = self.consolidation.consolidate(&cluster);
+
+        // Create the consolidated memory node.
+        let agent_id = cluster[0].agent_id;
+        let mut consolidated = MemoryNode::new(
+            agent_id,
+            result.new_type,
+            result.summary,
+            result.combined_embedding,
+        );
+        consolidated.confidence = result.combined_confidence;
+
+        let consolidated_id = consolidated.id;
+        self.store(consolidated)?;
+
+        // Invalidate source memories and create Derived edges.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        for source_id in &result.source_memories {
+            let _ = self.invalidate_memory(*source_id, now);
+            let edge = MemoryEdge {
+                source: consolidated_id,
+                target: *source_id,
+                edge_type: EdgeType::Derived,
+                weight: 1.0,
+                created_at: now,
+                valid_from: None,
+                valid_until: None,
+                label: None,
+            };
+            let _ = self.graph.add_relationship(&edge);
+        }
+
+        info!(
+            "Consolidated {} memories into {}",
+            result.source_memories.len(),
+            consolidated_id
+        );
+        Ok(consolidated_id)
+    }
+
     /// Flushes all data and closes the database.
     pub fn close(&self) -> MenteResult<()> {
         info!("Closing MenteDB");
@@ -525,18 +989,53 @@ impl MenteDb {
     }
 
     /// Loads MemoryNodes from storage and pairs them with their search scores.
+    ///
+    /// When decay is enabled, salience is recomputed and factored into the
+    /// final score to prioritize temporally relevant memories.
     fn load_scored_memories(&self, hits: &[(MemoryId, f32)]) -> MenteResult<Vec<ScoredMemory>> {
         let pm = self.page_map.read();
+        let now = if self.cognitive_config.decay_on_recall {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64
+        } else {
+            0
+        };
+
         let mut scored = Vec::with_capacity(hits.len());
         for &(id, score) in hits {
             if let Some(&page_id) = pm.get(&id)
                 && let Ok(node) = self.storage.load_memory(page_id)
             {
+                let final_score = if self.cognitive_config.decay_on_recall {
+                    let decayed_salience = self.decay.compute_decay(
+                        node.salience,
+                        node.created_at,
+                        node.accessed_at,
+                        node.access_count,
+                        now,
+                    );
+                    // Blend search similarity with decayed salience.
+                    // 70% similarity, 30% salience — keeps search relevance
+                    // primary but rewards recently active memories.
+                    score * 0.7 + decayed_salience * 0.3
+                } else {
+                    score
+                };
                 scored.push(ScoredMemory {
                     memory: node,
-                    score,
+                    score: final_score,
                 });
             }
+        }
+        // Re-sort by blended score when decay is applied.
+        if self.cognitive_config.decay_on_recall {
+            scored.sort_unstable_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
         }
         Ok(scored)
     }
