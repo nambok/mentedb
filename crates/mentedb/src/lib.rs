@@ -40,9 +40,18 @@
 
 use std::path::{Path, PathBuf};
 
+use mentedb_cognitive::EntityResolver;
+use mentedb_cognitive::interference::{InterferenceDetector, InterferencePair};
+use mentedb_cognitive::pain::{PainRegistry, PainSignal};
+use mentedb_cognitive::phantom::{PhantomConfig, PhantomMemory, PhantomTracker};
+use mentedb_cognitive::speculative::{CacheEntry, CacheStats, SpeculativeCache};
+use mentedb_cognitive::stream::{CognitionStream, StreamAlert, StreamConfig};
+use mentedb_cognitive::trajectory::{TrajectoryNode, TrajectoryTracker};
 use mentedb_cognitive::write_inference::{
     InferredAction, WriteInferenceConfig, WriteInferenceEngine,
 };
+use mentedb_consolidation::archival::{ArchivalConfig, ArchivalDecision, ArchivalPipeline};
+use mentedb_consolidation::compression::{CompressedMemory, MemoryCompressor};
 use mentedb_consolidation::consolidation::{ConsolidationCandidate, ConsolidationEngine};
 use mentedb_consolidation::decay::{DecayConfig, DecayEngine};
 use mentedb_context::{AssemblyConfig, ContextAssembler, ContextWindow, ScoredMemory};
@@ -102,10 +111,34 @@ pub struct CognitiveConfig {
     pub write_inference: bool,
     /// Whether salience decay is applied during retrieval.
     pub decay_on_recall: bool,
+    /// Whether pain tracking is enabled.
+    pub pain_tracking: bool,
+    /// Whether interference detection is available.
+    pub interference_detection: bool,
+    /// Whether phantom tracking is enabled.
+    pub phantom_tracking: bool,
+    /// Whether speculative caching is enabled.
+    pub speculative_cache: bool,
+    /// Whether archival evaluation is available.
+    pub archival_evaluation: bool,
     /// Configuration for the write inference engine.
     pub inference_config: WriteInferenceConfig,
     /// Configuration for the decay engine.
     pub decay_config: DecayConfig,
+    /// Configuration for phantom tracking.
+    pub phantom_config: PhantomConfig,
+    /// Configuration for the archival pipeline.
+    pub archival_config: ArchivalConfig,
+    /// Configuration for the cognition stream.
+    pub stream_config: StreamConfig,
+    /// Similarity threshold for interference detection.
+    pub interference_threshold: f32,
+    /// Maximum trajectory turns to track.
+    pub trajectory_max_turns: usize,
+    /// Maximum speculative cache entries.
+    pub speculative_cache_size: usize,
+    /// Maximum pain signals to retain.
+    pub pain_max_warnings: usize,
 }
 
 impl Default for CognitiveConfig {
@@ -113,8 +146,20 @@ impl Default for CognitiveConfig {
         Self {
             write_inference: true,
             decay_on_recall: true,
+            pain_tracking: true,
+            interference_detection: true,
+            phantom_tracking: true,
+            speculative_cache: true,
+            archival_evaluation: true,
             inference_config: WriteInferenceConfig::default(),
             decay_config: DecayConfig::default(),
+            phantom_config: PhantomConfig::default(),
+            archival_config: ArchivalConfig::default(),
+            stream_config: StreamConfig::default(),
+            interference_threshold: 0.8,
+            trajectory_max_turns: 100,
+            speculative_cache_size: 10,
+            pain_max_warnings: 5,
         }
     }
 }
@@ -147,6 +192,24 @@ pub struct MenteDb {
     decay: DecayEngine,
     /// Consolidation engine for memory merging.
     consolidation: ConsolidationEngine,
+    /// Pain registry for tracking recurring failures.
+    pain: RwLock<PainRegistry>,
+    /// Trajectory tracker for conversation patterns.
+    trajectory: RwLock<TrajectoryTracker>,
+    /// Cognition stream for token-level monitoring.
+    stream: CognitionStream,
+    /// Phantom tracker for detecting referenced-but-missing knowledge.
+    phantom: RwLock<PhantomTracker>,
+    /// Speculative cache for pre-fetching likely-needed memories.
+    speculative: RwLock<SpeculativeCache>,
+    /// Interference detector for finding confusable memories.
+    interference: InterferenceDetector,
+    /// Entity resolver for canonical name resolution.
+    entity_resolver: RwLock<EntityResolver>,
+    /// Memory compressor for content summarization.
+    compressor: MemoryCompressor,
+    /// Archival pipeline for lifecycle evaluation.
+    archival: ArchivalPipeline,
 }
 
 impl MenteDb {
@@ -191,6 +254,36 @@ impl MenteDb {
             WriteInferenceEngine::with_config(cognitive_config.inference_config.clone());
         let decay = DecayEngine::new(cognitive_config.decay_config.clone());
         let consolidation = ConsolidationEngine::new();
+        let pain = RwLock::new(PainRegistry::new(cognitive_config.pain_max_warnings));
+        let trajectory = RwLock::new(TrajectoryTracker::new(
+            cognitive_config.trajectory_max_turns,
+        ));
+        let stream = CognitionStream::with_config(cognitive_config.stream_config.clone());
+        let phantom = RwLock::new(PhantomTracker::new(cognitive_config.phantom_config.clone()));
+        let speculative = RwLock::new(SpeculativeCache::new(
+            cognitive_config.speculative_cache_size,
+            0.5,
+            0.4,
+        ));
+        let interference = InterferenceDetector::new(cognitive_config.interference_threshold);
+        let entity_resolver = RwLock::new(EntityResolver::new());
+        let compressor = MemoryCompressor::new();
+        let archival = ArchivalPipeline::new(cognitive_config.archival_config.clone());
+
+        // Load persisted state for subsystems that support it.
+        let cognitive_dir = path.join("cognitive");
+        if cognitive_dir.exists() {
+            let _ = trajectory
+                .write()
+                .transitions
+                .load(&cognitive_dir.join("transitions.json"));
+            let _ = speculative
+                .write()
+                .load(&cognitive_dir.join("speculative.json"));
+            let _ = entity_resolver
+                .write()
+                .load(&cognitive_dir.join("entities.json"));
+        }
 
         Ok(Self {
             storage,
@@ -204,6 +297,15 @@ impl MenteDb {
             write_inference,
             decay,
             consolidation,
+            pain,
+            trajectory,
+            stream,
+            phantom,
+            speculative,
+            interference,
+            entity_resolver,
+            compressor,
+            archival,
         })
     }
 
@@ -932,6 +1034,24 @@ impl MenteDb {
         self.index.save(&self.path.join("indexes"))?;
         self.graph.save(&self.path.join("graph"))?;
         self.storage.checkpoint()?;
+
+        // Persist cognitive subsystem state.
+        let cognitive_dir = self.path.join("cognitive");
+        if std::fs::create_dir_all(&cognitive_dir).is_ok() {
+            let _ = self
+                .trajectory
+                .read()
+                .transitions
+                .save(&cognitive_dir.join("transitions.json"), 1);
+            let _ = self
+                .speculative
+                .read()
+                .save(&cognitive_dir.join("speculative.json"), 0);
+            let _ = self
+                .entity_resolver
+                .read()
+                .save(&cognitive_dir.join("entities.json"));
+        }
         Ok(())
     }
 
@@ -1038,5 +1158,346 @@ impl MenteDb {
             });
         }
         Ok(scored)
+    }
+
+    // -----------------------------------------------------------------------
+    // Cognitive Engine: Pain Registry
+    // -----------------------------------------------------------------------
+
+    /// Record a pain signal — a recurring failure or frustration pattern.
+    ///
+    /// Pain signals are tracked by keywords and surfaced as warnings when
+    /// similar contexts arise in future queries.
+    pub fn record_pain(&self, signal: PainSignal) {
+        if self.cognitive_config.pain_tracking {
+            self.pain.write().record_pain(signal);
+        }
+    }
+
+    /// Get pain warnings relevant to the given context keywords.
+    ///
+    /// Returns formatted warning text if any pain signals match the keywords.
+    /// Use this before answering to warn about past failures.
+    pub fn get_pain_warnings(&self, context_keywords: &[String]) -> Vec<PainSignal> {
+        if !self.cognitive_config.pain_tracking {
+            return vec![];
+        }
+        let registry = self.pain.read();
+        registry
+            .get_pain_for_context(context_keywords)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Format pain warnings as a human-readable string.
+    pub fn format_pain_warnings(&self, signals: &[&PainSignal]) -> String {
+        self.pain.read().format_pain_warnings(signals)
+    }
+
+    /// Decay all pain signals to reduce intensity over time.
+    pub fn decay_pain(&self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        self.pain.write().decay_all(now);
+    }
+
+    /// Get all recorded pain signals.
+    pub fn all_pain_signals(&self) -> Vec<PainSignal> {
+        self.pain.read().all_signals().to_vec()
+    }
+
+    // -----------------------------------------------------------------------
+    // Cognitive Engine: Trajectory Tracking
+    // -----------------------------------------------------------------------
+
+    /// Record a conversation turn in the trajectory tracker.
+    ///
+    /// Tracks the evolution of topics, decisions, and open questions across
+    /// a conversation. Used for resume context and topic prediction.
+    pub fn record_trajectory_turn(&self, turn: TrajectoryNode) {
+        self.trajectory.write().record_turn(turn);
+    }
+
+    /// Get a resume context string summarizing the conversation so far.
+    ///
+    /// Returns None if no trajectory has been recorded.
+    pub fn get_resume_context(&self) -> Option<String> {
+        self.trajectory.read().get_resume_context()
+    }
+
+    /// Predict the next likely topics based on conversation trajectory.
+    ///
+    /// Returns up to 3 predicted topic strings based on transition patterns.
+    pub fn predict_next_topics(&self) -> Vec<String> {
+        self.trajectory.read().predict_next_topics()
+    }
+
+    /// Get the full trajectory of recorded turns.
+    pub fn get_trajectory(&self) -> Vec<TrajectoryNode> {
+        self.trajectory.read().get_trajectory().to_vec()
+    }
+
+    /// Reinforce a transition that led to a speculative cache hit.
+    pub fn reinforce_transition(&self, hit_topic: &str) {
+        self.trajectory.write().reinforce_transition(hit_topic);
+    }
+
+    // -----------------------------------------------------------------------
+    // Cognitive Engine: Cognition Stream
+    // -----------------------------------------------------------------------
+
+    /// Feed a token to the cognition stream for real-time monitoring.
+    ///
+    /// Tokens are buffered and analyzed for contradictions with known facts
+    /// when `check_stream_alerts()` is called.
+    pub fn feed_stream_token(&self, token: &str) {
+        self.stream.feed_token(token);
+    }
+
+    /// Check for stream alerts against known facts.
+    ///
+    /// Compares the buffered token stream against the provided known facts
+    /// to detect contradictions, corrections, and reinforcements.
+    pub fn check_stream_alerts(&self, known_facts: &[(MemoryId, String)]) -> Vec<StreamAlert> {
+        self.stream.check_alerts(known_facts)
+    }
+
+    /// Drain the token buffer, returning accumulated text.
+    pub fn drain_stream_buffer(&self) -> String {
+        self.stream.drain_buffer()
+    }
+
+    // -----------------------------------------------------------------------
+    // Cognitive Engine: Phantom Tracking
+    // -----------------------------------------------------------------------
+
+    /// Detect phantom memories — entities referenced in content but not stored.
+    ///
+    /// Scans content for entity mentions that don't exist in the known entities
+    /// list, flagging them as knowledge gaps that should be filled.
+    pub fn detect_phantoms(
+        &self,
+        content: &str,
+        known_entities: &[String],
+        turn_id: u64,
+    ) -> Vec<PhantomMemory> {
+        if !self.cognitive_config.phantom_tracking {
+            return vec![];
+        }
+        self.phantom
+            .write()
+            .detect_gaps(content, known_entities, turn_id)
+    }
+
+    /// Resolve a phantom memory (mark it as no longer a gap).
+    pub fn resolve_phantom(&self, phantom_id: MemoryId) {
+        self.phantom.write().resolve(phantom_id.into());
+    }
+
+    /// Get all active (unresolved) phantom memories, sorted by priority.
+    pub fn get_active_phantoms(&self) -> Vec<PhantomMemory> {
+        self.phantom
+            .read()
+            .get_active_phantoms()
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Format phantom warnings as a human-readable string.
+    pub fn format_phantom_warnings(&self) -> String {
+        self.phantom.read().format_phantom_warnings()
+    }
+
+    /// Register an entity so the phantom tracker knows it exists.
+    pub fn register_entity(&self, entity: &str) {
+        self.phantom.write().register_entity(entity);
+    }
+
+    /// Register multiple entities at once.
+    pub fn register_entities(&self, entities: &[&str]) {
+        self.phantom.write().register_entities(entities);
+    }
+
+    // -----------------------------------------------------------------------
+    // Cognitive Engine: Speculative Cache
+    // -----------------------------------------------------------------------
+
+    /// Try to hit the speculative cache for a query.
+    ///
+    /// If a previous prediction matches the current query (by keyword overlap
+    /// or embedding similarity), returns the pre-assembled context.
+    pub fn try_speculative_hit(
+        &self,
+        query: &str,
+        query_embedding: Option<&[f32]>,
+    ) -> Option<CacheEntry> {
+        if !self.cognitive_config.speculative_cache {
+            return None;
+        }
+        self.speculative.write().try_hit(query, query_embedding)
+    }
+
+    /// Pre-assemble speculative cache entries for predicted topics.
+    ///
+    /// The builder function should return `(context_text, memory_ids, optional_embedding)`
+    /// for each topic prediction.
+    pub fn pre_assemble_speculative<F>(&self, predictions: Vec<String>, builder: F)
+    where
+        F: Fn(&str) -> Option<(String, Vec<MemoryId>, Option<Vec<f32>>)>,
+    {
+        if self.cognitive_config.speculative_cache {
+            self.speculative.write().pre_assemble(predictions, builder);
+        }
+    }
+
+    /// Evict stale entries from the speculative cache.
+    pub fn evict_stale_speculative(&self, max_age_us: u64) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        self.speculative.write().evict_stale(max_age_us, now);
+    }
+
+    /// Get speculative cache statistics.
+    pub fn speculative_cache_stats(&self) -> CacheStats {
+        self.speculative.read().stats()
+    }
+
+    // -----------------------------------------------------------------------
+    // Cognitive Engine: Interference Detection
+    // -----------------------------------------------------------------------
+
+    /// Detect interference between a set of memories.
+    ///
+    /// Returns pairs of memories that are similar enough to cause confusion,
+    /// along with disambiguation hints. Use this during context assembly to
+    /// add disambiguation notes or separate confusable memories.
+    pub fn detect_interference(&self, memories: &[MemoryNode]) -> Vec<InterferencePair> {
+        if !self.cognitive_config.interference_detection {
+            return vec![];
+        }
+        self.interference.detect_interference(memories)
+    }
+
+    /// Generate a disambiguation hint for two confusable memories.
+    pub fn generate_disambiguation(&self, a: &MemoryNode, b: &MemoryNode) -> String {
+        self.interference.generate_disambiguation(a, b)
+    }
+
+    /// Arrange memory IDs to maximize separation between interfering pairs.
+    pub fn arrange_with_separation(
+        memories: Vec<MemoryId>,
+        pairs: &[InterferencePair],
+    ) -> Vec<MemoryId> {
+        InterferenceDetector::arrange_with_separation(memories, pairs)
+    }
+
+    // -----------------------------------------------------------------------
+    // Cognitive Engine: Entity Resolution
+    // -----------------------------------------------------------------------
+
+    /// Resolve an entity name to its canonical form.
+    ///
+    /// Uses cached aliases and rule-based matching (no LLM).
+    pub fn resolve_entity(&self, name: &str) -> mentedb_cognitive::ResolvedEntity {
+        self.entity_resolver.read().resolve(name)
+    }
+
+    /// Add an alias mapping for entity resolution.
+    pub fn add_entity_alias(&self, alias: &str, canonical: &str, confidence: f32) {
+        self.entity_resolver
+            .write()
+            .add_alias(alias, canonical, confidence);
+    }
+
+    /// Get the canonical name for an entity, if known.
+    pub fn get_canonical_entity(&self, name: &str) -> Option<String> {
+        self.entity_resolver.read().get_canonical(name).cloned()
+    }
+
+    /// List all known entities in the resolver.
+    pub fn known_entities(&self) -> Vec<String> {
+        self.entity_resolver.read().known_entities()
+    }
+
+    // -----------------------------------------------------------------------
+    // Cognitive Engine: Memory Compression
+    // -----------------------------------------------------------------------
+
+    /// Compress a memory's content, extracting key facts and removing filler.
+    ///
+    /// Returns a compressed representation with the original ID, compressed text,
+    /// compression ratio, and extracted key facts.
+    pub fn compress_memory(&self, memory: &MemoryNode) -> CompressedMemory {
+        self.compressor.compress(memory)
+    }
+
+    /// Compress a batch of memories.
+    pub fn compress_memories(&self, memories: &[MemoryNode]) -> Vec<CompressedMemory> {
+        self.compressor.compress_batch(memories)
+    }
+
+    /// Estimate token count for a text string.
+    pub fn estimate_tokens(text: &str) -> usize {
+        MemoryCompressor::estimate_tokens(text)
+    }
+
+    // -----------------------------------------------------------------------
+    // Cognitive Engine: Archival Evaluation
+    // -----------------------------------------------------------------------
+
+    /// Evaluate whether a memory should be kept, archived, or deleted.
+    ///
+    /// Uses age, salience, and access patterns to make lifecycle decisions.
+    pub fn evaluate_archival(&self, memory: &MemoryNode) -> ArchivalDecision {
+        if !self.cognitive_config.archival_evaluation {
+            return ArchivalDecision::Keep;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        self.archival.evaluate(memory, now)
+    }
+
+    /// Evaluate archival decisions for a batch of memories.
+    pub fn evaluate_archival_batch(
+        &self,
+        memories: &[MemoryNode],
+    ) -> Vec<(MemoryId, ArchivalDecision)> {
+        if !self.cognitive_config.archival_evaluation {
+            return memories
+                .iter()
+                .map(|m| (m.id, ArchivalDecision::Keep))
+                .collect();
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        self.archival.evaluate_batch(memories, now)
+    }
+
+    /// Run archival evaluation on all memories in the database.
+    ///
+    /// Returns decisions for each memory. Does NOT apply them — call
+    /// `invalidate_memory` or `forget` to act on the decisions.
+    pub fn evaluate_archival_global(&self) -> MenteResult<Vec<(MemoryId, ArchivalDecision)>> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        let pm = self.page_map.read();
+        let memories: Vec<MemoryNode> = pm
+            .values()
+            .filter_map(|pid| self.storage.load_memory(*pid).ok())
+            .collect();
+        drop(pm);
+        Ok(self.archival.evaluate_batch(&memories, now))
     }
 }
