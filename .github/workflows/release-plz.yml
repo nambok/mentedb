@@ -113,8 +113,6 @@ jobs:
           persist-credentials: false
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      - name: Sync SDK versions
-        run: bash scripts/sync-sdk-versions.sh
       - name: Run release-plz
         uses: release-plz/action@v0.5
         with:
