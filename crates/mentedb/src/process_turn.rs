@@ -698,8 +698,11 @@ impl MenteDb {
             DecisionState::Completed
         };
 
-        let raw_topic = if input.user_message.len() > 100 {
-            format!("{}...", &input.user_message[..100])
+        let raw_topic = if input.user_message.chars().count() > 100 {
+            format!(
+                "{}...",
+                input.user_message.chars().take(100).collect::<String>()
+            )
         } else {
             input.user_message.clone()
         };

@@ -5,7 +5,7 @@ description = "MenteDB integration for CrewAI and AutoGen"
 license = "Apache-2.0"
 requires-python = ">=3.9"
 dependencies = [
-    "mentedb>=0.1.0",
+    "mentedb>=0.7.0",
     "crewai>=0.30",
 ]
 

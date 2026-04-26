@@ -1,6 +1,9 @@
 use std::path::Path;
+use std::sync::Mutex;
 
 use mentedb::MenteDb;
+use mentedb::CognitiveConfig;
+use mentedb::process_turn::ProcessTurnInput;
 use mentedb_cognitive::pain::{PainRegistry as RustPainRegistry, PainSignal};
 use mentedb_cognitive::stream::{
     CognitionStream as RustCognitionStream, StreamAlert as RustStreamAlert,
@@ -8,6 +11,7 @@ use mentedb_cognitive::stream::{
 use mentedb_cognitive::trajectory::{
     DecisionState, TrajectoryNode, TrajectoryTracker as RustTrajectoryTracker,
 };
+use mentedb_context::DeltaTracker;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
 use mentedb_core::types::{AgentId, Embedding, MemoryId, Timestamp};
@@ -112,6 +116,7 @@ fn now_us() -> Timestamp {
 struct MenteDB {
     db: Option<MenteDb>,
     embedder: Option<Box<dyn EmbeddingProvider>>,
+    delta_tracker: Mutex<DeltaTracker>,
 }
 
 #[pymethods]
@@ -166,13 +171,15 @@ impl MenteDB {
             }
         };
 
-        let mut db = MenteDb::open(Path::new(data_dir)).map_err(to_pyerr)?;
+        let mut db = MenteDb::open_with_config(Path::new(data_dir), CognitiveConfig::default())
+            .map_err(to_pyerr)?;
         if let Some(ref e) = embedder {
             db.set_embedder(Box::new(HashEmbeddingProvider::new(e.dimensions())));
         }
         Ok(Self {
             db: Some(db),
             embedder,
+            delta_tracker: Mutex::new(DeltaTracker::new()),
         })
     }
 
@@ -3474,6 +3481,140 @@ impl MenteDB {
             );
         }
         Ok(community_ids)
+    }
+
+    /// Process a conversation turn through the full cognitive pipeline.
+    ///
+    /// Returns a dict with: context, stored_ids, episodic_id, pain_warnings,
+    /// cache_hit, inference_actions, detected_actions, proactive_recalls,
+    /// correction_id, sentiment, phantom_count, contradiction_count,
+    /// predicted_topics, facts_extracted, edges_created.
+    #[pyo3(signature = (user_message, assistant_response=None, turn_id=0, project_context=None, agent_id=None))]
+    fn process_turn(
+        &self,
+        py: Python<'_>,
+        user_message: &str,
+        assistant_response: Option<String>,
+        turn_id: u64,
+        project_context: Option<String>,
+        agent_id: Option<&str>,
+    ) -> PyResult<PyObject> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+
+        let aid = match agent_id {
+            Some(s) => Some(parse_uuid(s)?),
+            None => None,
+        };
+
+        let input = ProcessTurnInput {
+            user_message: user_message.to_string(),
+            assistant_response,
+            turn_id,
+            project_context,
+            agent_id: aid,
+        };
+
+        let mut delta = self
+            .delta_tracker
+            .lock()
+            .map_err(|e| PyRuntimeError::new_err(format!("lock poisoned: {e}")))?;
+
+        let result = db.process_turn(&input, &mut delta).map_err(to_pyerr)?;
+
+        let dict = pyo3::types::PyDict::new(py);
+        let context_list: Vec<PyObject> = result
+            .context
+            .iter()
+            .map(|sm| {
+                let d = pyo3::types::PyDict::new(py);
+                d.set_item("id", sm.memory.id.to_string()).unwrap();
+                d.set_item("content", &sm.memory.content).unwrap();
+                d.set_item("score", sm.score).unwrap();
+                d.into_any().unbind()
+            })
+            .collect();
+        dict.set_item("context", context_list)?;
+        dict.set_item(
+            "stored_ids",
+            result
+                .stored_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>(),
+        )?;
+        dict.set_item(
+            "episodic_id",
+            result.episodic_id.map(|id| id.to_string()),
+        )?;
+        let pain_list: Vec<PyObject> = result
+            .pain_warnings
+            .iter()
+            .map(|pw| {
+                let d = pyo3::types::PyDict::new(py);
+                d.set_item("signal_id", pw.signal_id.to_string()).unwrap();
+                d.set_item("intensity", pw.intensity).unwrap();
+                d.set_item("description", &pw.description).unwrap();
+                d.into_any().unbind()
+            })
+            .collect();
+        dict.set_item("pain_warnings", pain_list)?;
+        dict.set_item("cache_hit", result.cache_hit)?;
+        dict.set_item("inference_actions", result.inference_actions)?;
+        let actions_list: Vec<PyObject> = result
+            .detected_actions
+            .iter()
+            .map(|a| {
+                let d = pyo3::types::PyDict::new(py);
+                d.set_item("action_type", &a.action_type).unwrap();
+                d.set_item("detail", &a.detail).unwrap();
+                d.into_any().unbind()
+            })
+            .collect();
+        dict.set_item("detected_actions", actions_list)?;
+        let recalls_list: Vec<PyObject> = result
+            .proactive_recalls
+            .iter()
+            .map(|pr| {
+                let d = pyo3::types::PyDict::new(py);
+                d.set_item("memory_id", pr.memory_id.to_string()).unwrap();
+                d.set_item("content", &pr.content).unwrap();
+                d.set_item("relevance", pr.relevance).unwrap();
+                d.set_item("action_type", &pr.action_type).unwrap();
+                d.into_any().unbind()
+            })
+            .collect();
+        dict.set_item("proactive_recalls", recalls_list)?;
+        dict.set_item(
+            "correction_id",
+            result.correction_id.map(|id| id.to_string()),
+        )?;
+        dict.set_item("sentiment", result.sentiment)?;
+        dict.set_item("phantom_count", result.phantom_count)?;
+        dict.set_item("contradiction_count", result.contradiction_count)?;
+        dict.set_item("predicted_topics", result.predicted_topics)?;
+        dict.set_item("facts_extracted", result.facts_extracted)?;
+        dict.set_item("edges_created", result.edges_created)?;
+        dict.set_item(
+            "delta_added",
+            result
+                .delta_added
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>(),
+        )?;
+        dict.set_item(
+            "delta_removed",
+            result
+                .delta_removed
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>(),
+        )?;
+
+        Ok(dict.into_any().unbind())
     }
 
     /// Flush and close the database.

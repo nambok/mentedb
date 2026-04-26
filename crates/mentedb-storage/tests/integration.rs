@@ -8,7 +8,7 @@ use mentedb_storage::StorageEngine;
 #[test]
 fn test_store_and_load_memory() {
     let dir = tempfile::tempdir().unwrap();
-    let mut engine = StorageEngine::open(dir.path()).unwrap();
+    let engine = StorageEngine::open(dir.path()).unwrap();
 
     let node = MemoryNode::new(
         AgentId::new(),
@@ -30,7 +30,7 @@ fn test_store_and_load_memory() {
 #[test]
 fn test_multiple_memories() {
     let dir = tempfile::tempdir().unwrap();
-    let mut engine = StorageEngine::open(dir.path()).unwrap();
+    let engine = StorageEngine::open(dir.path()).unwrap();
 
     let nodes: Vec<MemoryNode> = (0..10)
         .map(|i| {
@@ -70,12 +70,12 @@ fn test_persist_across_reopen() {
 
     let page_id;
     {
-        let mut engine = StorageEngine::open(dir.path()).unwrap();
+        let engine = StorageEngine::open(dir.path()).unwrap();
         page_id = engine.store_memory(&node).unwrap();
         engine.close().unwrap();
     }
     {
-        let mut engine = StorageEngine::open(dir.path()).unwrap();
+        let engine = StorageEngine::open(dir.path()).unwrap();
         let loaded = engine.load_memory(page_id).unwrap();
         assert_eq!(loaded.id, id);
         assert_eq!(loaded.content, "persisted memory");
@@ -96,13 +96,13 @@ fn test_checkpoint_and_reload() {
 
     let page_id;
     {
-        let mut engine = StorageEngine::open(dir.path()).unwrap();
+        let engine = StorageEngine::open(dir.path()).unwrap();
         page_id = engine.store_memory(&node).unwrap();
         engine.checkpoint().unwrap();
         engine.close().unwrap();
     }
     {
-        let mut engine = StorageEngine::open(dir.path()).unwrap();
+        let engine = StorageEngine::open(dir.path()).unwrap();
         let loaded = engine.load_memory(page_id).unwrap();
         assert_eq!(loaded.id, id);
         assert_eq!(loaded.content, "don't use global state");

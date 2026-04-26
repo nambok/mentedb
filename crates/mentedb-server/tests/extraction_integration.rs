@@ -12,7 +12,6 @@ use mentedb_server::routes;
 use mentedb_server::state::AppState;
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use tokio::sync::RwLock;
 use tower::ServiceExt;
 
 fn test_state(
