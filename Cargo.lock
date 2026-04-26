@@ -2224,6 +2224,7 @@ dependencies = [
  "mentedb-context",
  "mentedb-core",
  "mentedb-embedding",
+ "mentedb-extraction",
  "mentedb-graph",
  "mentedb-index",
  "mentedb-query",
