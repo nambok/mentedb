@@ -1,5 +1,5 @@
 # Builder stage
-FROM rust:1.85-slim AS builder
+FROM rust:1.88-slim AS builder
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
 
@@ -22,4 +22,4 @@ RUN mkdir -p /var/mentedb/data
 
 EXPOSE 8080
 
-CMD ["mentedb-server", "--host", "0.0.0.0", "--port", "8080", "--data-dir", "/var/mentedb/data"]
+CMD ["mentedb-server", "--port", "8080", "--data-dir", "/var/mentedb/data"]
