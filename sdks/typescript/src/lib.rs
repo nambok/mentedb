@@ -142,6 +142,7 @@ pub struct JsProcessTurnResult {
     pub predicted_topics: Vec<String>,
     pub facts_extracted: u32,
     pub edges_created: u32,
+    pub enrichment_pending: bool,
     pub delta_added: Vec<String>,
     pub delta_removed: Vec<String>,
 }
@@ -406,6 +407,7 @@ impl MenteDB {
             predicted_topics: result.predicted_topics,
             facts_extracted: result.facts_extracted as u32,
             edges_created: result.edges_created,
+            enrichment_pending: result.enrichment_pending,
             delta_added: result.delta_added.iter().map(|id| id.to_string()).collect(),
             delta_removed: result.delta_removed.iter().map(|id| id.to_string()).collect(),
         })
@@ -415,6 +417,46 @@ impl MenteDB {
     #[napi]
     pub fn close(&self) -> Result<()> {
         self.inner.close().map_err(mente_err)
+    }
+
+    /// Check if enrichment is pending.
+    #[napi]
+    pub fn needs_enrichment(&self) -> Result<bool> {
+        Ok(self.inner.needs_enrichment())
+    }
+
+    /// Get the turn ID of the last completed enrichment.
+    #[napi]
+    pub fn last_enrichment_turn(&self) -> Result<u32> {
+        Ok(self.inner.last_enrichment_turn() as u32)
+    }
+
+    /// Manually request enrichment on the next check.
+    #[napi]
+    pub fn request_enrichment(&self) -> Result<()> {
+        self.inner.request_enrichment();
+        Ok(())
+    }
+
+    /// Get episodic memories that need enrichment.
+    #[napi]
+    pub fn enrichment_candidates(&self) -> Result<Vec<JsContextItem>> {
+        let candidates = self.inner.enrichment_candidates();
+        Ok(candidates
+            .iter()
+            .map(|m| JsContextItem {
+                id: m.id.to_string(),
+                content: m.content.clone(),
+                score: 1.0,
+            })
+            .collect())
+    }
+
+    /// Mark enrichment as complete at the given turn.
+    #[napi]
+    pub fn mark_enrichment_complete(&self, turn_id: u32) -> Result<()> {
+        self.inner.mark_enrichment_complete(turn_id as u64);
+        Ok(())
     }
 }
 

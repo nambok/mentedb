@@ -3613,6 +3613,7 @@ impl MenteDB {
                 .map(|id| id.to_string())
                 .collect::<Vec<_>>(),
         )?;
+        dict.set_item("enrichment_pending", result.enrichment_pending)?;
 
         Ok(dict.into_any().unbind())
     }
@@ -3622,6 +3623,66 @@ impl MenteDB {
         if let Some(db) = self.db.take() {
             db.close().map_err(to_pyerr)?;
         }
+        Ok(())
+    }
+
+    /// Check if enrichment is pending.
+    fn needs_enrichment(&self) -> PyResult<bool> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        Ok(db.needs_enrichment())
+    }
+
+    /// Get the turn ID of the last completed enrichment.
+    fn last_enrichment_turn(&self) -> PyResult<u64> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        Ok(db.last_enrichment_turn())
+    }
+
+    /// Manually request enrichment on the next check.
+    fn request_enrichment(&self) -> PyResult<()> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        db.request_enrichment();
+        Ok(())
+    }
+
+    /// Get episodic memories that need enrichment.
+    fn enrichment_candidates(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let candidates = db.enrichment_candidates();
+        let result: Vec<PyObject> = candidates
+            .iter()
+            .map(|m| {
+                let d = pyo3::types::PyDict::new(py);
+                d.set_item("id", m.id.to_string()).unwrap();
+                d.set_item("content", &m.content).unwrap();
+                d.set_item("memory_type", format!("{:?}", m.memory_type))
+                    .unwrap();
+                d.set_item("created_at", m.created_at).unwrap();
+                d.into_any().unbind()
+            })
+            .collect();
+        Ok(result)
+    }
+
+    /// Mark enrichment as complete at the given turn.
+    fn mark_enrichment_complete(&self, turn_id: u64) -> PyResult<()> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        db.mark_enrichment_complete(turn_id);
         Ok(())
     }
 }
