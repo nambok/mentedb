@@ -56,7 +56,8 @@ jobs:
               | jq -r ".packages[] | select(.name == \"$crate\") | .version")
 
             # Check if this version is already on crates.io
-            published=$(curl -sf "https://crates.io/api/v1/crates/$crate/$version" \
+            published=$(curl -sf -H "User-Agent: mentedb-ci" \
+              "https://crates.io/api/v1/crates/$crate/$version" \
               | jq -r '.version.num // empty' 2>/dev/null || true)
 
             if [ "$published" = "$version" ]; then
@@ -117,7 +118,8 @@ jobs:
           fi
 
           # Check if the version is actually on crates.io (i.e., was published)
-          published=$(curl -sf "https://crates.io/api/v1/crates/mentedb/$VERSION" \
+          published=$(curl -sf -H "User-Agent: mentedb-ci" \
+            "https://crates.io/api/v1/crates/mentedb/$VERSION" \
             | jq -r '.version.num // empty' 2>/dev/null || true)
 
           if [ "$published" != "$VERSION" ]; then
