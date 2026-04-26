@@ -48,6 +48,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          skip-existing: true
 
   build-npm:
     name: Build npm native (${{ matrix.target }})
@@ -134,7 +135,14 @@ jobs:
         run: npx tsc
       - name: Publish to npm
         working-directory: sdks/typescript
-        run: npm publish --access public --provenance
+        run: |
+          CURRENT=$(node -p "require('./package.json').version")
+          PUBLISHED=$(npm view mentedb version 2>/dev/null || echo "0.0.0")
+          if [ "$CURRENT" = "$PUBLISHED" ]; then
+            echo "Version $CURRENT already published, skipping"
+          else
+            npm publish --access public --provenance
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -165,6 +173,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          skip-existing: true
 
   publish-docker:
     name: Publish Docker image
