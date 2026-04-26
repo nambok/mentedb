@@ -111,6 +111,54 @@ use mentedb_storage::PageId;
 /// Mapping from MemoryId to the storage PageId where it lives.
 use std::collections::HashMap;
 
+/// Configuration for sleeptime enrichment pipeline.
+///
+/// Enrichment runs BETWEEN conversations, never in the hot path.
+/// The engine tracks state and provides candidates; callers invoke
+/// the async LLM pipeline when ready.
+#[derive(Debug, Clone)]
+pub struct EnrichmentConfig {
+    /// Whether enrichment is enabled. Default: false (opt-in).
+    pub enabled: bool,
+    /// Run enrichment after this many process_turn calls. Default: 50.
+    pub trigger_interval: u64,
+    /// Minimum confidence for extracted memories to be stored. Default: 0.6.
+    pub min_confidence: f32,
+    /// Maximum confidence for enrichment-generated memories. Default: 0.7.
+    pub max_enrichment_confidence: f32,
+    /// Whether to generate a user model summary. Default: false.
+    pub enable_user_model: bool,
+}
+
+impl Default for EnrichmentConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            trigger_interval: 50,
+            min_confidence: 0.6,
+            max_enrichment_confidence: 0.7,
+            enable_user_model: false,
+        }
+    }
+}
+
+/// Result of running the enrichment pipeline.
+#[derive(Debug, Clone, Default)]
+pub struct EnrichmentResult {
+    /// Number of new memories stored from extraction.
+    pub memories_stored: usize,
+    /// Number of entity nodes created or updated.
+    pub entities_processed: usize,
+    /// Number of edges created (Derived, Related, PartOf).
+    pub edges_created: usize,
+    /// Number of memories skipped as duplicates.
+    pub duplicates_skipped: usize,
+    /// Number of contradictions detected.
+    pub contradictions_found: usize,
+    /// Turn ID at which enrichment was completed.
+    pub completed_at_turn: u64,
+}
+
 /// Configuration for the cognitive engine subsystems.
 #[derive(Debug, Clone)]
 pub struct CognitiveConfig {
@@ -138,6 +186,8 @@ pub struct CognitiveConfig {
     pub archival_config: ArchivalConfig,
     /// Configuration for the cognition stream.
     pub stream_config: StreamConfig,
+    /// Configuration for sleeptime enrichment.
+    pub enrichment_config: EnrichmentConfig,
     /// Similarity threshold for interference detection.
     pub interference_threshold: f32,
     /// Maximum trajectory turns to track.
@@ -163,6 +213,7 @@ impl Default for CognitiveConfig {
             phantom_config: PhantomConfig::default(),
             archival_config: ArchivalConfig::default(),
             stream_config: StreamConfig::default(),
+            enrichment_config: EnrichmentConfig::default(),
             interference_threshold: 0.8,
             trajectory_max_turns: 100,
             speculative_cache_size: 10,
@@ -217,6 +268,10 @@ pub struct MenteDb {
     compressor: MemoryCompressor,
     /// Archival pipeline for lifecycle evaluation.
     archival: ArchivalPipeline,
+    /// Turn ID of the last completed enrichment cycle.
+    last_enrichment_turn: RwLock<u64>,
+    /// Whether enrichment is currently pending (set by maintenance trigger).
+    enrichment_pending: RwLock<bool>,
 }
 
 impl MenteDb {
@@ -313,6 +368,8 @@ impl MenteDb {
             entity_resolver,
             compressor,
             archival,
+            last_enrichment_turn: RwLock::new(0),
+            enrichment_pending: RwLock::new(false),
         })
     }
 
@@ -1506,5 +1563,119 @@ impl MenteDb {
             .collect();
         drop(pm);
         Ok(self.archival.evaluate_batch(&memories, now))
+    }
+
+    // -----------------------------------------------------------------------
+    // Sleeptime Enrichment Pipeline
+    // -----------------------------------------------------------------------
+
+    /// Check whether enrichment is pending (triggered by turn count or manual).
+    pub fn needs_enrichment(&self) -> bool {
+        if !self.cognitive_config.enrichment_config.enabled {
+            return false;
+        }
+        *self.enrichment_pending.read()
+    }
+
+    /// Get the turn ID when enrichment last completed.
+    pub fn last_enrichment_turn(&self) -> u64 {
+        *self.last_enrichment_turn.read()
+    }
+
+    /// Manually trigger enrichment on the next check.
+    pub fn request_enrichment(&self) {
+        *self.enrichment_pending.write() = true;
+    }
+
+    /// Get episodic memories that haven't been enriched yet.
+    ///
+    /// Returns all Episodic memories created after the last enrichment turn,
+    /// sorted by creation time. These are the candidates for LLM extraction.
+    pub fn enrichment_candidates(&self) -> Vec<MemoryNode> {
+        let last_turn = *self.last_enrichment_turn.read();
+        let pm = self.page_map.read();
+        let mut candidates: Vec<MemoryNode> = pm
+            .values()
+            .filter_map(|pid| self.storage.load_memory(*pid).ok())
+            .filter(|m| {
+                m.memory_type == mentedb_core::memory::MemoryType::Episodic
+                    && !m.tags.contains(&"source:enrichment".to_string())
+                    && m.created_at > last_turn
+            })
+            .collect();
+        candidates.sort_by_key(|m| m.created_at);
+        candidates
+    }
+
+    /// Store enrichment results: extracted memories with provenance tracking.
+    ///
+    /// Each stored memory gets:
+    /// - `source:enrichment` tag for identification
+    /// - Confidence capped at `max_enrichment_confidence`
+    /// - `Derived` edges back to source episodic memories
+    ///
+    /// Returns (memories_stored, edges_created).
+    pub fn store_enrichment_memories(
+        &self,
+        memories: Vec<MemoryNode>,
+        source_ids: &[MemoryId],
+    ) -> MenteResult<(usize, usize)> {
+        let max_conf = self
+            .cognitive_config
+            .enrichment_config
+            .max_enrichment_confidence;
+        let mut stored = 0usize;
+        let mut edges = 0usize;
+
+        for mut mem in memories {
+            // Tag as enrichment-generated
+            if !mem.tags.contains(&"source:enrichment".to_string()) {
+                mem.tags.push("source:enrichment".to_string());
+            }
+            // Cap confidence
+            if mem.confidence > max_conf {
+                mem.confidence = max_conf;
+            }
+
+            let mem_id = mem.id;
+            self.store(mem)?;
+            stored += 1;
+
+            // Create Derived edges back to source episodics
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64;
+            for src_id in source_ids {
+                let edge = MemoryEdge {
+                    source: mem_id,
+                    target: *src_id,
+                    edge_type: EdgeType::Derived,
+                    weight: 0.8,
+                    created_at: now,
+                    valid_from: None,
+                    valid_until: None,
+                    label: Some("enrichment".to_string()),
+                };
+                if self.relate(edge).is_ok() {
+                    edges += 1;
+                }
+            }
+        }
+
+        debug!(stored, edges, "enrichment memories stored");
+        Ok((stored, edges))
+    }
+
+    /// Mark enrichment as complete for the given turn.
+    pub fn mark_enrichment_complete(&self, turn_id: u64) {
+        *self.last_enrichment_turn.write() = turn_id;
+        *self.enrichment_pending.write() = false;
+        debug!(turn_id, "enrichment cycle complete");
+    }
+
+    /// Get the enrichment configuration.
+    pub fn enrichment_config(&self) -> &EnrichmentConfig {
+        &self.cognitive_config.enrichment_config
     }
 }

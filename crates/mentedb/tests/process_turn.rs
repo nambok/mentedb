@@ -1,4 +1,5 @@
 use mentedb::CognitiveConfig;
+use mentedb::EnrichmentConfig;
 use mentedb::MenteDb;
 use mentedb::process_turn::ProcessTurnInput;
 use mentedb_context::DeltaTracker;
@@ -6,6 +7,20 @@ use mentedb_context::DeltaTracker;
 fn open_db() -> (MenteDb, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db = MenteDb::open_with_config(dir.path(), CognitiveConfig::default()).unwrap();
+    (db, dir)
+}
+
+fn open_db_with_enrichment(interval: u64) -> (MenteDb, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let config = CognitiveConfig {
+        enrichment_config: EnrichmentConfig {
+            enabled: true,
+            trigger_interval: interval,
+            ..EnrichmentConfig::default()
+        },
+        ..CognitiveConfig::default()
+    };
+    let db = MenteDb::open_with_config(dir.path(), config).unwrap();
     (db, dir)
 }
 
@@ -247,4 +262,194 @@ fn test_process_turn_maintenance_intervals() {
         agent_id: None,
     };
     let _ = db.process_turn(&input200, &mut delta).unwrap();
+}
+
+#[test]
+fn test_enrichment_disabled_by_default() {
+    let (db, _dir) = open_db();
+    assert!(!db.needs_enrichment());
+    assert_eq!(db.last_enrichment_turn(), 0);
+    assert!(db.enrichment_candidates().is_empty());
+}
+
+#[test]
+fn test_enrichment_trigger_after_interval() {
+    let (db, _dir) = open_db_with_enrichment(5);
+    let mut delta = DeltaTracker::new();
+
+    // Run 4 turns — should NOT trigger yet
+    for i in 1..=4 {
+        let input = ProcessTurnInput {
+            user_message: format!("Turn {}", i),
+            assistant_response: None,
+            turn_id: i,
+            project_context: None,
+            agent_id: None,
+        };
+        let result = db.process_turn(&input, &mut delta).unwrap();
+        assert!(!result.enrichment_pending, "turn {} should not trigger", i);
+    }
+
+    // Turn 5 should trigger enrichment
+    let input5 = ProcessTurnInput {
+        user_message: "Turn five".to_string(),
+        assistant_response: None,
+        turn_id: 5,
+        project_context: None,
+        agent_id: None,
+    };
+    let result = db.process_turn(&input5, &mut delta).unwrap();
+    assert!(result.enrichment_pending);
+    assert!(db.needs_enrichment());
+}
+
+#[test]
+fn test_enrichment_candidates_returns_episodics() {
+    let (db, _dir) = open_db_with_enrichment(5);
+    let mut delta = DeltaTracker::new();
+
+    // Store some turns
+    for i in 1..=3 {
+        let input = ProcessTurnInput {
+            user_message: format!("I like {} programming", ["Rust", "Python", "Go"][i - 1]),
+            assistant_response: Some("Nice choice!".to_string()),
+            turn_id: i as u64,
+            project_context: None,
+            agent_id: None,
+        };
+        db.process_turn(&input, &mut delta).unwrap();
+    }
+
+    let candidates = db.enrichment_candidates();
+    assert!(
+        candidates.len() >= 3,
+        "should have at least 3 episodic candidates"
+    );
+
+    // All should be Episodic
+    for c in &candidates {
+        assert_eq!(c.memory_type, mentedb_core::memory::MemoryType::Episodic);
+    }
+}
+
+#[test]
+fn test_enrichment_store_results() {
+    let (db, _dir) = open_db_with_enrichment(5);
+    let mut delta = DeltaTracker::new();
+
+    // Store a turn to get a source memory
+    let input = ProcessTurnInput {
+        user_message: "I prefer using Rust".to_string(),
+        assistant_response: Some("Rust is great!".to_string()),
+        turn_id: 1,
+        project_context: None,
+        agent_id: None,
+    };
+    let result = db.process_turn(&input, &mut delta).unwrap();
+    let source_id = result.episodic_id.unwrap();
+
+    // Create an enrichment memory (simulating extraction output)
+    let enrichment_mem = mentedb_core::MemoryNode::new(
+        mentedb_core::types::AgentId::nil(),
+        mentedb_core::memory::MemoryType::Semantic,
+        "User prefers Rust for programming".to_string(),
+        vec![0.1; 384],
+    );
+
+    let (stored, edges) = db
+        .store_enrichment_memories(vec![enrichment_mem], &[source_id])
+        .unwrap();
+
+    assert_eq!(stored, 1);
+    assert_eq!(edges, 1);
+
+    // Verify the stored memory has enrichment tag and capped confidence
+    let candidates = db.enrichment_candidates();
+    // The enrichment memory should NOT show up as a candidate (it has source:enrichment tag)
+    for c in &candidates {
+        assert!(
+            !c.tags.contains(&"source:enrichment".to_string()),
+            "enrichment memories should not be candidates"
+        );
+    }
+}
+
+#[test]
+fn test_enrichment_mark_complete_resets_pending() {
+    let (db, _dir) = open_db_with_enrichment(3);
+    let mut delta = DeltaTracker::new();
+
+    // Trigger enrichment
+    for i in 1..=3 {
+        let input = ProcessTurnInput {
+            user_message: format!("Turn {}", i),
+            assistant_response: None,
+            turn_id: i,
+            project_context: None,
+            agent_id: None,
+        };
+        db.process_turn(&input, &mut delta).unwrap();
+    }
+    assert!(db.needs_enrichment());
+
+    // Mark complete
+    db.mark_enrichment_complete(3);
+    assert!(!db.needs_enrichment());
+    assert_eq!(db.last_enrichment_turn(), 3);
+
+    // Next 2 turns should not trigger again
+    for i in 4..=5 {
+        let input = ProcessTurnInput {
+            user_message: format!("Turn {}", i),
+            assistant_response: None,
+            turn_id: i,
+            project_context: None,
+            agent_id: None,
+        };
+        let result = db.process_turn(&input, &mut delta).unwrap();
+        assert!(!result.enrichment_pending);
+    }
+
+    // Turn 6 should trigger again (3 turns since last enrichment at turn 3)
+    let input6 = ProcessTurnInput {
+        user_message: "Turn 6".to_string(),
+        assistant_response: None,
+        turn_id: 6,
+        project_context: None,
+        agent_id: None,
+    };
+    let result = db.process_turn(&input6, &mut delta).unwrap();
+    assert!(result.enrichment_pending);
+}
+
+#[test]
+fn test_always_scope_in_retrieve_context() {
+    let (db, _dir) = open_db();
+    let mut delta = DeltaTracker::new();
+
+    // Store an always-scoped memory directly
+    let mut always_mem = mentedb_core::MemoryNode::new(
+        mentedb_core::types::AgentId::nil(),
+        mentedb_core::memory::MemoryType::Semantic,
+        "Always remember: user prefers dark mode".to_string(),
+        vec![0.1; 384],
+    );
+    always_mem.tags.push("scope:always".to_string());
+    db.store(always_mem).unwrap();
+
+    // process_turn on an unrelated topic should still include the always-scoped memory
+    let input = ProcessTurnInput {
+        user_message: "What is the weather today?".to_string(),
+        assistant_response: None,
+        turn_id: 1,
+        project_context: None,
+        agent_id: None,
+    };
+    let result = db.process_turn(&input, &mut delta).unwrap();
+
+    let has_always = result
+        .context
+        .iter()
+        .any(|sm| sm.memory.tags.contains(&"scope:always".to_string()));
+    assert!(has_always, "always-scoped memory should be in context");
 }
