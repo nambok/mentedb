@@ -322,11 +322,88 @@ All cognitive features are enabled by default. Toggle individually:
 use mentedb::{MenteDb, CognitiveConfig};
 
 let config = CognitiveConfig {
-    write_inference: true,   // auto-edges, contradiction detection
-    decay_on_recall: true,   // time-based salience decay
+    write_inference: true,        // auto-edges, contradiction detection
+    decay_on_recall: true,        // time-based salience decay
+    pain_tracking: true,          // recurring failure warnings
+    interference_detection: true, // confusable memory detection
+    phantom_tracking: true,       // missing knowledge gap detection
+    speculative_cache: true,      // predictive context pre-assembly
+    archival_evaluation: true,    // memory lifecycle management
     ..Default::default()
 };
 let db = MenteDb::open_with_config("./memory", config)?;
+```
+
+### Pain Registry
+
+Track recurring failures and surface warnings when similar contexts arise:
+
+```rust
+db.record_pain(PainSignal { trigger_keywords: vec!["deploy".into()], .. });
+let warnings = db.get_pain_warnings(&["deploy".into(), "production".into()]);
+```
+
+### Interference Detection
+
+Find confusable memories and generate disambiguation hints:
+
+```rust
+let pairs = db.detect_interference(&retrieved_memories);
+for pair in &pairs {
+    println!("Confusable: {} ({})", pair.disambiguation, pair.similarity);
+}
+```
+
+### Phantom Tracking
+
+Detect referenced-but-missing knowledge gaps:
+
+```rust
+db.register_entities(&["PostgreSQL", "Redis"]);
+let phantoms = db.detect_phantoms("Deploy to Kubernetes", &known, turn_id);
+```
+
+### Speculative Cache
+
+Pre-fetch context for predicted topics:
+
+```rust
+let predictions = db.predict_next_topics();
+db.pre_assemble_speculative(predictions, |topic| { /* build context */ });
+let hit = db.try_speculative_hit("database design", Some(&query_embedding));
+```
+
+### Entity Resolution
+
+Resolve aliases to canonical names:
+
+```rust
+db.add_entity_alias("JS", "JavaScript", 0.95);
+let resolved = db.resolve_entity("JS"); // → "javascript"
+```
+
+### Memory Compression
+
+Compress verbose memories for token efficiency:
+
+```rust
+let compressed = db.compress_memory(&memory);
+println!("Ratio: {:.0}%", compressed.compression_ratio * 100.0);
+```
+
+### Archival Evaluation
+
+Evaluate memory lifecycle decisions (keep, archive, delete):
+
+```rust
+let decisions = db.evaluate_archival_global()?;
+for (id, decision) in decisions {
+    match decision {
+        ArchivalDecision::Archive => { /* move to cold storage */ },
+        ArchivalDecision::Delete => { db.forget(id)?; },
+        _ => {}
+    }
+}
 ```
 
 ## Crates
@@ -335,7 +412,7 @@ MenteDB is organized as a Cargo workspace with 13 crates:
 
 | Crate | Description |
 |-------|-------------|
-| `mentedb` | Facade crate with integrated cognitive engine (write inference, decay, consolidation) |
+| `mentedb` | Facade crate with full cognitive engine (12 subsystems wired in) |
 | `mentedb-core` | Types (MemoryNode, MemoryEdge), newtype IDs, errors, config |
 | `mentedb-storage` | Page based storage engine with crash safe WAL, buffer pool, LZ4 |
 | `mentedb-index` | HNSW vector index (bounded, concurrent), roaring bitmaps, temporal index |
