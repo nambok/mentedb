@@ -104,6 +104,8 @@ pub struct ProcessTurnResult {
     pub facts_extracted: usize,
     /// Number of edges created from fact extraction.
     pub edges_created: u32,
+    /// Whether enrichment is pending (caller should invoke enrichment pipeline).
+    pub enrichment_pending: bool,
     /// Delta: memory IDs added since last turn.
     pub delta_added: Vec<MemoryId>,
     /// Delta: memory IDs removed since last turn.
@@ -315,6 +317,7 @@ impl MenteDb {
             predicted_topics,
             facts_extracted,
             edges_created,
+            enrichment_pending: self.needs_enrichment(),
             delta_added: delta.added,
             delta_removed: delta.removed,
         })
@@ -350,7 +353,7 @@ impl MenteDb {
         let now = now_us();
         let results =
             self.recall_hybrid_at(query_embedding, Some(user_message), 10, now, None, None)?;
-        let scored: Vec<ScoredMemory> = results
+        let mut scored: Vec<ScoredMemory> = results
             .iter()
             .filter_map(|(mid, score)| {
                 self.get_memory(*mid).ok().map(|m| ScoredMemory {
@@ -359,6 +362,25 @@ impl MenteDb {
                 })
             })
             .collect();
+
+        // Append always-scoped memories (not already in results)
+        let hybrid_ids: std::collections::HashSet<MemoryId> =
+            scored.iter().map(|sm| sm.memory.id).collect();
+        let always_scope_tag = "scope:always";
+        let pm = self.page_map.read();
+        for pid in pm.values() {
+            if let Ok(mem) = self.storage.load_memory(*pid)
+                && mem.tags.iter().any(|t| t == always_scope_tag)
+                && !hybrid_ids.contains(&mem.id)
+            {
+                scored.push(ScoredMemory {
+                    memory: mem,
+                    score: 0.85,
+                });
+            }
+        }
+        drop(pm);
+
         let ids: Vec<MemoryId> = scored.iter().map(|sm| sm.memory.id).collect();
         Ok((scored, ids, false))
     }
@@ -829,6 +851,22 @@ impl MenteDb {
                 Err(e) => {
                     warn!(turn_id, error = %e, "auto-maintenance: consolidation failed");
                 }
+            }
+        }
+
+        // Enrichment trigger: mark pending when interval is reached
+        let enrichment = &self.cognitive_config.enrichment_config;
+        if enrichment.enabled && enrichment.trigger_interval > 0 {
+            let last = self.last_enrichment_turn();
+            let turns_since = turn_id.saturating_sub(last);
+            if turns_since >= enrichment.trigger_interval && !self.needs_enrichment() {
+                *self.enrichment_pending.write() = true;
+                debug!(
+                    turn_id,
+                    last_enrichment = last,
+                    turns_since,
+                    "enrichment trigger: marked pending"
+                );
             }
         }
     }

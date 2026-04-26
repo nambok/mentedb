@@ -6,7 +6,7 @@ use mentedb_embedding::provider::EmbeddingProvider;
 use crate::config::ExtractionConfig;
 use crate::error::ExtractionError;
 use crate::provider::ExtractionProvider;
-use crate::schema::{ExtractedMemory, ExtractionResult};
+use crate::schema::{ExtractedEntity, ExtractedMemory, ExtractionResult};
 
 /// Findings from cognitive checks (contradiction detection).
 #[derive(Debug, Clone)]
@@ -49,6 +49,8 @@ pub struct ProcessedExtractionResult {
     pub rejected_duplicate: Vec<ExtractedMemory>,
     /// Memories that contradict existing ones (stored anyway, with findings).
     pub contradictions: Vec<(ExtractedMemory, Vec<CognitiveFinding>)>,
+    /// Entities extracted from the conversation.
+    pub entities: Vec<ExtractedEntity>,
     /// Summary statistics.
     pub stats: ExtractionStats,
 }
@@ -353,7 +355,9 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
         existing_memories: &[MemoryNode],
         embedding_provider: &dyn EmbeddingProvider,
     ) -> Result<ProcessedExtractionResult, ExtractionError> {
-        let all_memories = self.extract_from_conversation(conversation).await?;
+        let full_result = self.extract_full(conversation).await?;
+        let all_memories = full_result.memories;
+        let entities = full_result.entities;
         let total_extracted = all_memories.len();
 
         let quality_passed = self.filter_quality(&all_memories);
@@ -408,6 +412,7 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
             rejected_low_quality,
             rejected_duplicate,
             contradictions,
+            entities,
             stats,
         })
     }
