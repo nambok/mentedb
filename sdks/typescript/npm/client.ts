@@ -6,22 +6,41 @@ import {
   type SearchResult,
 } from './types';
 
-let nativeBinding: any;
+import * as os from 'os';
+import * as path from 'path';
 
-try {
-  nativeBinding = require('../mentedb.node');
-} catch {
-  nativeBinding = null;
-}
+const PLATFORM_TRIPLES: Record<string, string> = {
+  'linux-x64': 'linux-x64-gnu',
+  'darwin-arm64': 'darwin-arm64',
+  'darwin-x64': 'darwin-x64',
+  'win32-x64': 'win32-x64-msvc',
+};
 
-function requireNative(): any {
-  if (!nativeBinding) {
-    throw new Error(
-      'Native extension not loaded. Build with: npm run build'
-    );
+function loadNativeBinding(): any {
+  const key = `${os.platform()}-${os.arch()}`;
+  const triple = PLATFORM_TRIPLES[key];
+
+  // Try platform-specific binary first (from CI cross-compile)
+  if (triple) {
+    try {
+      return require(path.join(__dirname, '..', `mentedb.${triple}.node`));
+    } catch {}
   }
-  return nativeBinding;
+
+  // Fall back to unqualified binary (local `napi build --release`)
+  try {
+    return require(path.join(__dirname, '..', 'mentedb.node'));
+  } catch {}
+
+  const supported = Object.keys(PLATFORM_TRIPLES).join(', ');
+  throw new Error(
+    `No native binding found for ${key}. ` +
+    `Supported platforms: ${supported}. ` +
+    `Build locally with: cd sdks/typescript && npm run build`
+  );
 }
+
+const nativeBinding = loadNativeBinding();
 
 /**
  * MenteDB client. Wraps the native Rust database engine and exposes a
@@ -32,8 +51,7 @@ export class MenteDB {
   private native: any;
 
   constructor(dataDir: string = './mentedb-data') {
-    const binding = requireNative();
-    this.native = new binding.MenteDB(dataDir);
+    this.native = new nativeBinding.MenteDB(dataDir);
   }
 
   /** Store a memory and return its UUID. */
@@ -87,8 +105,7 @@ export class CognitionStream {
   private native: any;
 
   constructor(bufferSize: number = 1000) {
-    const binding = requireNative();
-    this.native = new binding.JsCognitionStream(bufferSize);
+    this.native = new nativeBinding.JsCognitionStream(bufferSize);
   }
 
   /** Push a token into the stream buffer. */
@@ -109,8 +126,7 @@ export class TrajectoryTracker {
   private native: any;
 
   constructor(maxTurns: number = 100) {
-    const binding = requireNative();
-    this.native = new binding.JsTrajectoryTracker(maxTurns);
+    this.native = new nativeBinding.JsTrajectoryTracker(maxTurns);
   }
 
   /**
