@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.6.1...mentedb-storage-v0.6.2) - 2026-04-26
+
+### Added
+
+- wire all 9 remaining cognitive subsystems into MenteDb ([#66](https://github.com/nambok/mentedb/pull/66))
+- wire cognitive engine subsystems into MenteDb ([#65](https://github.com/nambok/mentedb/pull/65))
+- token efficiency benchmark ([#63](https://github.com/nambok/mentedb/pull/63))
+
 ## [0.6.0](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.5.2...mentedb-storage-v0.6.0) - 2026-04-20
 
 ### Added
