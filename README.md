@@ -72,6 +72,9 @@ result = db.process_turn(
 
 One function call runs the full 14-step cognitive pipeline: embedding, speculative cache, hybrid search, pain signals, episodic storage, fact extraction, contradiction detection, sentiment analysis, and more.
 
+> **Enrichment runs automatically in the background** — semantic facts, entity graphs,
+> community summaries, and a user profile are built over time after each `process_turn`.
+
 **Via MCP (zero code):**
 
 ```bash
@@ -468,6 +471,31 @@ for (id, decision) in decisions {
         _ => {}
     }
 }
+```
+
+## Sleeptime Enrichment
+
+MenteDB includes a 4-phase background enrichment pipeline that automatically converts raw conversations into structured knowledge. It runs after `process_turn` when enough new memories accumulate — no manual trigger needed.
+
+| Phase | What it does |
+|-------|-------------|
+| **Batch LLM Extraction** | Converts episodic memories into semantic facts and entity nodes |
+| **Entity Linking** | Resolves duplicates and aliases (e.g., "JS" ↔ "JavaScript") via rules + LLM |
+| **Community Detection** | Groups related entities by category and generates LLM summaries |
+| **User Model** | Builds an always-available user profile from accumulated knowledge |
+
+Enrichment results feed back into `process_turn` context retrieval — richer semantic memories, entity graphs, community summaries, and the user profile all improve recall quality. The pipeline is idempotent and tracks provenance via `source:enrichment` tags and `Derived` edges.
+
+**Requires an LLM provider** (OpenAI, Anthropic, or Ollama). Without one, the engine works perfectly — enrichment just doesn't run. See [LLM Extraction Config](#llm-extraction-config) for setup.
+
+```rust
+// Enable enrichment in Cargo.toml:
+// mentedb = { version = "0.8", features = ["enrichment"] }
+
+use mentedb::enrichment::{run_enrichment, EnrichmentResult};
+
+let result = run_enrichment(&db, config, &embedder, Some(&cognitive_llm), turn_id).await;
+println!("Stored {} memories, linked {} entities", result.memories_stored, result.sync_linked + result.llm_linked);
 ```
 
 ## Crates
