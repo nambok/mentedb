@@ -5,7 +5,7 @@ use std::io;
 use std::path::Path;
 
 const SNAPSHOT_VERSION: u32 = 2;
-const MIN_WORD_LEN: usize = 2;
+
 const WORD_MATCH_CONFIDENCE: f32 = 0.7;
 
 /// Resolves entity references to canonical names using a three-tier strategy:
@@ -205,10 +205,6 @@ impl EntityResolver {
     /// canonical's words or vice versa. Handles "Alice" matching "Alice Smith"
     /// but correctly rejects "Java" matching "JavaScript".
     fn rule_based_match(&self, normalized: &str) -> Option<(String, f32)> {
-        if normalized.len() < MIN_WORD_LEN {
-            return None;
-        }
-
         let input_words: HashSet<&str> = normalized
             .split(|c: char| c.is_whitespace() || c == '-' || c == '_')
             .filter(|w| !w.is_empty())
