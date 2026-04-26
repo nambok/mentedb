@@ -489,6 +489,13 @@ fn test_entity_linking_creates_edges() {
         "should link same-name entities with similar embeddings"
     );
     assert!(result.edges_created > 0, "should create edges");
+
+    // Run again — should NOT create duplicate edges
+    let result2 = db.link_entities().unwrap();
+    assert_eq!(
+        result2.edges_created, 0,
+        "should not create duplicate edges"
+    );
 }
 
 #[test]

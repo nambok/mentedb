@@ -1762,6 +1762,21 @@ impl MenteDb {
                     let sim = mentedb_consolidation::cosine_similarity(&a.embedding, &b.embedding);
 
                     if sim >= merge_thresh {
+                        // Check if edge already exists to avoid duplicates on repeated runs
+                        let graph = self.graph.read_graph();
+                        let already_linked = graph.outgoing(a.id).iter().any(|(tid, e)| {
+                            *tid == b.id
+                                && e.edge_type == EdgeType::Related
+                                && e.label
+                                    .as_ref()
+                                    .is_some_and(|l| l.starts_with("entity_link:"))
+                        });
+                        drop(graph);
+
+                        if already_linked {
+                            continue;
+                        }
+
                         // High confidence: create Related edge
                         let edge = MemoryEdge {
                             source: a.id,
