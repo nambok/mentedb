@@ -26,6 +26,10 @@
 //!
 //! ## Feature Highlights
 //!
+//! - **Unified `process_turn`** pipeline: single call handles context retrieval,
+//!   pain signals, episodic storage, write inference, action detection, sentiment,
+//!   phantom tracking, trajectory, speculative caching, fact extraction, and
+//!   auto-maintenance (decay / archival / consolidation)
 //! - Seven cognitive features: interference detection, pain signals, phantom tracking,
 //!   speculative caching, stream monitoring, trajectory tracking, write inference
 //! - HNSW vector index with hybrid search (vector + tags + temporal + salience)
@@ -88,6 +92,9 @@ pub use mentedb_index as index;
 pub use mentedb_query as query;
 /// Page based storage engine with WAL and buffer pool.
 pub use mentedb_storage as storage;
+
+/// Unified process_turn orchestration.
+pub mod process_turn;
 
 /// Commonly used types, re-exported for convenience.
 pub mod prelude {
