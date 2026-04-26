@@ -128,9 +128,8 @@ jobs:
           fi
 
           echo "📦 Creating release $TAG (release-plz skipped it)"
-          git tag "$TAG"
-          git push origin "$TAG"
           gh release create "$TAG" \
+            --target main \
             --title "$TAG" \
             --notes "Release mentedb v${VERSION}" \
             --latest
