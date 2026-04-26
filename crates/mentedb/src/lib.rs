@@ -1774,9 +1774,8 @@ impl MenteDb {
                                 if existing.len() < 300 {
                                     existing.push_str(" | ");
                                     let remaining = 500usize.saturating_sub(existing.len());
-                                    existing.push_str(
-                                        &mem.content[..mem.content.len().min(remaining)],
-                                    );
+                                    existing
+                                        .push_str(&mem.content[..mem.content.len().min(remaining)]);
                                 }
                             })
                             .or_insert_with(|| {
