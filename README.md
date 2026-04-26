@@ -50,41 +50,50 @@ pip install mentedb-crewai     # CrewAI memory provider
 
 ## Quick Start
 
-**Just remember a conversation:**
+**`process_turn` — one call does everything:**
+
+```python
+from mentedb import MenteDB
+
+db = MenteDB("./my-agent-memory")
+db.configure_llm(provider="anthropic", api_key="sk-...")
+
+result = db.process_turn(
+    user_message="I switched from PostgreSQL to SQLite for side projects",
+    assistant_response="Got it, I'll suggest SQLite going forward.",
+    turn_id=0,
+)
+
+# result.context       → relevant memories for your prompt
+# result.facts_extracted → what was learned this turn
+# result.contradiction_count → conflicting beliefs detected
+# result.pain_warnings → things that went wrong before
+```
+
+One function call runs the full 14-step cognitive pipeline: embedding, speculative cache, hybrid search, pain signals, episodic storage, fact extraction, contradiction detection, sentiment analysis, and more.
+
+**Via MCP (zero code):**
 
 ```bash
-# Via REST API
-curl -X POST http://localhost:6677/v1/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"conversation": "User: I prefer Python over JS\nAssistant: Noted!", "agent_id": "my-agent"}'
-
-# Response: { "memories_stored": 2, "rejected_low_quality": 5, "contradictions": 0 }
+npx mentedb-mcp@latest setup copilot  # or claude, cursor, vscode
 ```
 
-**Via MCP (Claude CLI, Copilot CLI, Cursor):**
-
-```json
-// claude_desktop_config.json
-{
-  "mcpServers": {
-    "mentedb": {
-      "command": "mentedb-mcp",
-      "args": ["--data-dir", "~/.mentedb"]
-    }
-  }
-}
-```
-
-Then the AI can call `ingest_conversation` directly. No manual memory structuring needed.
+Your AI assistant calls `process_turn` automatically every turn.
 
 **Embed in Rust:**
 
 ```rust
-use mentedb::MenteDb;
+use mentedb::{MenteDb, process_turn::{ProcessTurnInput, DeltaTracker}};
 
 let db = MenteDb::open("./my-agent-memory")?;
-db.store(&memory_node)?;
-let context = db.assemble_context(agent_id, space_id, 4096)?;
+let mut delta = DeltaTracker::default();
+let result = db.process_turn(&ProcessTurnInput {
+    user_message: "I switched from PostgreSQL to SQLite".into(),
+    assistant_response: Some("Got it!".into()),
+    turn_id: 0,
+    project_context: None,
+    agent_id: None,
+}, &mut delta)?;
 ```
 
 ## Why MenteDB?
