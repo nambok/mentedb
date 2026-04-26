@@ -22,6 +22,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Sync SDK version from workspace Cargo.toml
+        shell: bash
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "📦 Syncing Python SDK to v${VERSION}"
+          sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" sdks/python/Cargo.toml
+          sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" sdks/python/pyproject.toml
+          rm -f sdks/python/Cargo.toml.bak sdks/python/pyproject.toml.bak
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -76,6 +84,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - name: Sync SDK version from workspace Cargo.toml
+        shell: bash
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "📦 Syncing TypeScript SDK to v${VERSION}"
+          cd sdks/typescript
+          node -e "const p=require('./package.json'); p.version='${VERSION}'; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2)+'\n')"
+          sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          rm -f Cargo.toml.bak
       - name: Install protobuf compiler (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get install -y protobuf-compiler
@@ -109,6 +126,12 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      - name: Sync SDK version from workspace Cargo.toml
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "📦 Syncing TypeScript SDK to v${VERSION}"
+          cd sdks/typescript
+          node -e "const p=require('./package.json'); p.version='${VERSION}'; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2)+'\n')"
       - name: Download all native artifacts
         uses: actions/download-artifact@v4
         with:
@@ -159,6 +182,14 @@ jobs:
           python-version: '3.12'
       - name: Install build tools
         run: pip install build
+      - name: Sync integration versions from workspace Cargo.toml
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "📦 Syncing integrations to v${VERSION}"
+          for toml in sdks/python/integrations/langchain/pyproject.toml sdks/python/integrations/crewai/pyproject.toml; do
+            sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" "$toml"
+            sed -i "s/\"mentedb>=.*\"/\"mentedb>=${VERSION}\"/" "$toml"
+          done
       - name: Build and publish mentedb-langchain
         working-directory: sdks/python/integrations/langchain
         run: python -m build
