@@ -3685,6 +3685,45 @@ impl MenteDB {
         db.mark_enrichment_complete(turn_id);
         Ok(())
     }
+
+    /// Link entities across sessions by name + embedding similarity.
+    ///
+    /// Returns a dict with `linked`, `ambiguous`, and `edges_created` counts.
+    fn link_entities(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let result = db.link_entities().map_err(to_pyerr)?;
+        let d = pyo3::types::PyDict::new(py);
+        d.set_item("linked", result.linked).unwrap();
+        d.set_item("ambiguous", result.ambiguous).unwrap();
+        d.set_item("edges_created", result.edges_created).unwrap();
+        Ok(d.into_any().unbind())
+    }
+
+    /// Get all entity memory nodes (memories tagged with `entity:{name}`).
+    fn entity_memories(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let entities = db.entity_memories();
+        let result: Vec<PyObject> = entities
+            .iter()
+            .map(|m| {
+                let d = pyo3::types::PyDict::new(py);
+                d.set_item("id", m.id.to_string()).unwrap();
+                d.set_item("content", &m.content).unwrap();
+                d.set_item("memory_type", format!("{:?}", m.memory_type))
+                    .unwrap();
+                d.set_item("tags", &m.tags).unwrap();
+                d.set_item("created_at", m.created_at).unwrap();
+                d.into_any().unbind()
+            })
+            .collect();
+        Ok(result)
+    }
 }
 
 // ---------------------------------------------------------------------------

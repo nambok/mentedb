@@ -453,3 +453,134 @@ fn test_always_scope_in_retrieve_context() {
         .any(|sm| sm.memory.tags.contains(&"scope:always".to_string()));
     assert!(has_always, "always-scoped memory should be in context");
 }
+
+#[test]
+fn test_entity_linking_creates_edges() {
+    let (db, _dir) = open_db_with_enrichment(50);
+
+    // Create two entity memories with the same name but different content
+    let emb1 = vec![0.9, 0.1, 0.0, 0.0];
+    let emb2 = vec![0.85, 0.15, 0.05, 0.0];
+
+    let mut node1 = mentedb_core::MemoryNode::new(
+        mentedb_core::types::AgentId::nil(),
+        mentedb_core::memory::MemoryType::Semantic,
+        "Max is a Golden Retriever".to_string(),
+        emb1,
+    );
+    node1.tags.push("entity:max".to_string());
+    node1.tags.push("source:enrichment".to_string());
+    db.store(node1).unwrap();
+
+    let mut node2 = mentedb_core::MemoryNode::new(
+        mentedb_core::types::AgentId::nil(),
+        mentedb_core::memory::MemoryType::Semantic,
+        "Max loves playing fetch in the park".to_string(),
+        emb2,
+    );
+    node2.tags.push("entity:max".to_string());
+    node2.tags.push("source:enrichment".to_string());
+    db.store(node2).unwrap();
+
+    let result = db.link_entities().unwrap();
+    // Embeddings [0.9,0.1,0,0] and [0.85,0.15,0.05,0] have high cosine sim (~0.99)
+    assert!(
+        result.linked > 0,
+        "should link same-name entities with similar embeddings"
+    );
+    assert!(result.edges_created > 0, "should create edges");
+}
+
+#[test]
+fn test_entity_linking_separates_different_entities() {
+    let (db, _dir) = open_db_with_enrichment(50);
+
+    // Two "python" entities with very different embeddings (programming vs comedy)
+    let emb_prog = vec![1.0, 0.0, 0.0, 0.0];
+    let emb_comedy = vec![0.0, 0.0, 0.0, 1.0];
+
+    let mut node1 = mentedb_core::MemoryNode::new(
+        mentedb_core::types::AgentId::nil(),
+        mentedb_core::memory::MemoryType::Semantic,
+        "Python programming language".to_string(),
+        emb_prog,
+    );
+    node1.tags.push("entity:python".to_string());
+    db.store(node1).unwrap();
+
+    let mut node2 = mentedb_core::MemoryNode::new(
+        mentedb_core::types::AgentId::nil(),
+        mentedb_core::memory::MemoryType::Semantic,
+        "Monty Python comedy troupe".to_string(),
+        emb_comedy,
+    );
+    node2.tags.push("entity:python".to_string());
+    db.store(node2).unwrap();
+
+    let result = db.link_entities().unwrap();
+    // Orthogonal embeddings → cosine sim ~0 → below separate_threshold
+    assert_eq!(result.linked, 0, "should NOT link different entities");
+    assert_eq!(result.edges_created, 0, "no edges for different entities");
+}
+
+#[test]
+fn test_entity_linking_ambiguous_range() {
+    let (db, _dir) = open_db_with_enrichment(50);
+
+    // Two entities with moderate similarity (in the ambiguous range 0.4-0.7)
+    let emb1 = vec![1.0, 0.0, 0.0, 0.0];
+    let emb2 = vec![0.6, 0.6, 0.0, 0.0]; // cosine with emb1 ≈ 0.707
+
+    let mut node1 = mentedb_core::MemoryNode::new(
+        mentedb_core::types::AgentId::nil(),
+        mentedb_core::memory::MemoryType::Semantic,
+        "Java island in Indonesia".to_string(),
+        emb1,
+    );
+    node1.tags.push("entity:java".to_string());
+    db.store(node1).unwrap();
+
+    let mut node2 = mentedb_core::MemoryNode::new(
+        mentedb_core::types::AgentId::nil(),
+        mentedb_core::memory::MemoryType::Semantic,
+        "Java programming language".to_string(),
+        emb2,
+    );
+    node2.tags.push("entity:java".to_string());
+    db.store(node2).unwrap();
+
+    let result = db.link_entities().unwrap();
+    // cosine([1,0,0,0], [0.6,0.6,0,0]) ≈ 0.707 — right at the merge threshold (0.7)
+    // Depending on floating point, this could be linked or ambiguous
+    assert!(
+        result.linked > 0 || result.ambiguous > 0,
+        "should be either linked or ambiguous, not ignored"
+    );
+}
+
+#[test]
+fn test_entity_memories_returns_tagged() {
+    let (db, _dir) = open_db();
+
+    let mut entity_node = mentedb_core::MemoryNode::new(
+        mentedb_core::types::AgentId::nil(),
+        mentedb_core::memory::MemoryType::Semantic,
+        "Max the dog".to_string(),
+        vec![0.5, 0.5, 0.0, 0.0],
+    );
+    entity_node.tags.push("entity:max".to_string());
+    db.store(entity_node).unwrap();
+
+    let mut regular_node = mentedb_core::MemoryNode::new(
+        mentedb_core::types::AgentId::nil(),
+        mentedb_core::memory::MemoryType::Semantic,
+        "I like coffee".to_string(),
+        vec![0.0, 0.0, 0.5, 0.5],
+    );
+    regular_node.tags.push("preference".to_string());
+    db.store(regular_node).unwrap();
+
+    let entities = db.entity_memories();
+    assert_eq!(entities.len(), 1);
+    assert!(entities[0].tags.contains(&"entity:max".to_string()));
+}

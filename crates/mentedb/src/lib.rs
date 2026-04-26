@@ -128,6 +128,10 @@ pub struct EnrichmentConfig {
     pub max_enrichment_confidence: f32,
     /// Whether to generate a user model summary. Default: false.
     pub enable_user_model: bool,
+    /// Embedding similarity threshold to merge entities. Default: 0.7.
+    pub entity_merge_threshold: f32,
+    /// Embedding similarity below which entities are kept separate. Default: 0.4.
+    pub entity_separate_threshold: f32,
 }
 
 impl Default for EnrichmentConfig {
@@ -138,6 +142,8 @@ impl Default for EnrichmentConfig {
             min_confidence: 0.6,
             max_enrichment_confidence: 0.7,
             enable_user_model: false,
+            entity_merge_threshold: 0.7,
+            entity_separate_threshold: 0.4,
         }
     }
 }
@@ -157,6 +163,21 @@ pub struct EnrichmentResult {
     pub contradictions_found: usize,
     /// Turn ID at which enrichment was completed.
     pub completed_at_turn: u64,
+    /// Number of entity links created (Related edges between same-name entities).
+    pub entities_linked: usize,
+    /// Number of entity pairs left ambiguous (below merge threshold).
+    pub entities_ambiguous: usize,
+}
+
+/// Result of a single entity linking run.
+#[derive(Debug, Clone, Default)]
+pub struct EntityLinkResult {
+    /// Number of entity pairs linked with Related edges.
+    pub linked: usize,
+    /// Number of entity pairs tagged as ambiguous (MaybeRelated).
+    pub ambiguous: usize,
+    /// Number of edges created.
+    pub edges_created: usize,
 }
 
 /// Configuration for the cognitive engine subsystems.
@@ -1677,5 +1698,120 @@ impl MenteDb {
     /// Get the enrichment configuration.
     pub fn enrichment_config(&self) -> &EnrichmentConfig {
         &self.cognitive_config.enrichment_config
+    }
+
+    /// Link entities across sessions by name + embedding similarity.
+    ///
+    /// Scans all semantic memories tagged with `entity:{name}`, groups by
+    /// normalized entity name, then compares embedding similarity within
+    /// each group to decide:
+    /// - **Merge** (sim ≥ merge_threshold): create `Related` edge (weight = similarity)
+    /// - **Ambiguous** (separate_threshold ≤ sim < merge_threshold): tag `maybe_related:{other_id}`
+    /// - **Separate** (sim < separate_threshold): no action
+    ///
+    /// Conservative: when in doubt, don't merge. Two separate nodes > one wrong merge.
+    pub fn link_entities(&self) -> MenteResult<EntityLinkResult> {
+        let merge_thresh = self
+            .cognitive_config
+            .enrichment_config
+            .entity_merge_threshold;
+        let separate_thresh = self
+            .cognitive_config
+            .enrichment_config
+            .entity_separate_threshold;
+        let pm = self.page_map.read();
+
+        // Collect all entity memories grouped by normalized name
+        let mut entity_groups: HashMap<String, Vec<MemoryNode>> = HashMap::new();
+        for pid in pm.values() {
+            if let Ok(mem) = self.storage.load_memory(*pid) {
+                for tag in &mem.tags {
+                    if let Some(name) = tag.strip_prefix("entity:") {
+                        let normalized = name.to_lowercase().trim().to_string();
+                        entity_groups
+                            .entry(normalized)
+                            .or_default()
+                            .push(mem.clone());
+                        break;
+                    }
+                }
+            }
+        }
+
+        let mut result = EntityLinkResult::default();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+
+        for (entity_name, members) in &entity_groups {
+            if members.len() < 2 {
+                continue;
+            }
+
+            // Compare all pairs within the group
+            for i in 0..members.len() {
+                for j in (i + 1)..members.len() {
+                    let a = &members[i];
+                    let b = &members[j];
+
+                    if a.embedding.is_empty() || b.embedding.is_empty() {
+                        continue;
+                    }
+
+                    let sim = mentedb_consolidation::cosine_similarity(&a.embedding, &b.embedding);
+
+                    if sim >= merge_thresh {
+                        // High confidence: create Related edge
+                        let edge = MemoryEdge {
+                            source: a.id,
+                            target: b.id,
+                            edge_type: EdgeType::Related,
+                            weight: sim,
+                            created_at: now,
+                            valid_from: None,
+                            valid_until: None,
+                            label: Some(format!("entity_link:{}", entity_name)),
+                        };
+                        if self.relate(edge).is_ok() {
+                            result.edges_created += 1;
+                        }
+                        result.linked += 1;
+                        debug!(
+                            entity = entity_name,
+                            a = %a.id, b = %b.id, sim,
+                            "entity link: merged"
+                        );
+                    } else if sim >= separate_thresh {
+                        // Ambiguous: tag for later resolution
+                        result.ambiguous += 1;
+                        debug!(
+                            entity = entity_name,
+                            a = %a.id, b = %b.id, sim,
+                            "entity link: ambiguous"
+                        );
+                    }
+                    // Below separate_threshold: different entities, no action
+                }
+            }
+        }
+
+        debug!(
+            linked = result.linked,
+            ambiguous = result.ambiguous,
+            edges = result.edges_created,
+            groups = entity_groups.len(),
+            "entity linking complete"
+        );
+        Ok(result)
+    }
+
+    /// Get all entity memory nodes (memories tagged with `entity:{name}`).
+    pub fn entity_memories(&self) -> Vec<MemoryNode> {
+        let pm = self.page_map.read();
+        pm.values()
+            .filter_map(|pid| self.storage.load_memory(*pid).ok())
+            .filter(|m| m.tags.iter().any(|t| t.starts_with("entity:")))
+            .collect()
     }
 }

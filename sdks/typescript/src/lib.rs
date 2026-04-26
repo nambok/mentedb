@@ -147,6 +147,13 @@ pub struct JsProcessTurnResult {
     pub delta_removed: Vec<String>,
 }
 
+#[napi(object)]
+pub struct JsEntityLinkResult {
+    pub linked: u32,
+    pub ambiguous: u32,
+    pub edges_created: u32,
+}
+
 // ---------------------------------------------------------------------------
 // MenteDB
 // ---------------------------------------------------------------------------
@@ -457,6 +464,31 @@ impl MenteDB {
     pub fn mark_enrichment_complete(&self, turn_id: u32) -> Result<()> {
         self.inner.mark_enrichment_complete(turn_id as u64);
         Ok(())
+    }
+
+    /// Link entities across sessions by name + embedding similarity.
+    #[napi]
+    pub fn link_entities(&self) -> Result<JsEntityLinkResult> {
+        let result = self.inner.link_entities().map_err(mente_err)?;
+        Ok(JsEntityLinkResult {
+            linked: result.linked as u32,
+            ambiguous: result.ambiguous as u32,
+            edges_created: result.edges_created as u32,
+        })
+    }
+
+    /// Get all entity memory nodes (memories tagged with `entity:{name}`).
+    #[napi]
+    pub fn entity_memories(&self) -> Result<Vec<JsContextItem>> {
+        let entities = self.inner.entity_memories();
+        Ok(entities
+            .iter()
+            .map(|m| JsContextItem {
+                id: m.id.to_string(),
+                content: m.content.clone(),
+                score: 1.0,
+            })
+            .collect())
     }
 }
 
