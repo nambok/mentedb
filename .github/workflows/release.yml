@@ -8,6 +8,9 @@ on:
     tags:
       - 'mentedb-v*'
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   publish-crates:
     name: Publish to crates.io
