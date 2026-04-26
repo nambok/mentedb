@@ -62,6 +62,7 @@ use mentedb_consolidation::decay::{DecayConfig, DecayEngine};
 use mentedb_context::{AssemblyConfig, ContextAssembler, ContextWindow, ScoredMemory};
 use mentedb_core::edge::EdgeType;
 use mentedb_core::error::MenteResult;
+use mentedb_core::memory::MemoryType;
 use mentedb_core::types::{MemoryId, Timestamp};
 use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
 use mentedb_embedding::provider::EmbeddingProvider;
@@ -2040,5 +2041,230 @@ impl MenteDb {
             .filter_map(|pid| self.storage.load_memory(*pid).ok())
             .filter(|m| m.tags.iter().any(|t| t.starts_with("entity:")))
             .collect()
+    }
+
+    /// Get entity categories with their member entities for community detection.
+    ///
+    /// Returns a map of category → list of (entity_name, context_snippet).
+    /// Categories come from `entity_type:` tags on entity memories.
+    pub fn entity_communities(&self) -> HashMap<String, Vec<(String, String)>> {
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        let mut categories: HashMap<String, Vec<(String, String)>> = HashMap::new();
+
+        for pid in &page_ids {
+            if let Ok(mem) = self.storage.load_memory(*pid) {
+                // Skip non-entity memories and existing community summaries
+                if mem.tags.iter().any(|t| t == "community_summary") {
+                    continue;
+                }
+
+                let entity_name = mem
+                    .tags
+                    .iter()
+                    .find_map(|t| t.strip_prefix("entity:"))
+                    .map(|n| n.to_string());
+
+                if let Some(name) = entity_name {
+                    let entity_type = mem
+                        .tags
+                        .iter()
+                        .find_map(|t| t.strip_prefix("entity_type:"))
+                        .unwrap_or("general")
+                        .to_lowercase();
+
+                    let context = mem.content[..mem.content.len().min(200)].to_string();
+                    categories
+                        .entry(entity_type)
+                        .or_default()
+                        .push((name, context));
+                }
+            }
+        }
+
+        // Only return categories with 2+ entities (meaningful clusters)
+        categories.retain(|_, members| members.len() >= 2);
+        categories
+    }
+
+    /// Store a community summary memory with edges to member entities.
+    ///
+    /// Creates a `community_summary` tagged memory and `Derived` edges
+    /// from the summary to each member entity in the category.
+    pub fn store_community_summary(
+        &self,
+        category: &str,
+        summary: &str,
+        member_names: &[String],
+    ) -> MenteResult<MemoryId> {
+        // Check if a community summary already exists for this category
+        let community_tag = format!("community:{}", category);
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        for pid in &page_ids {
+            if let Ok(mem) = self.storage.load_memory(*pid)
+                && mem.tags.iter().any(|t| t == &community_tag)
+            {
+                // Update existing summary
+                let mut updated = mem.clone();
+                updated.content = summary.to_string();
+                if let Some(ref embedder) = self.embedder {
+                    updated.embedding = embedder
+                        .embed(summary)
+                        .unwrap_or_else(|_| updated.embedding.clone());
+                }
+                self.storage.store_memory(&updated)?;
+                return Ok(updated.id);
+            }
+        }
+
+        // Create new community summary
+        let embedding = self
+            .embedder
+            .as_ref()
+            .and_then(|e| e.embed(summary).ok())
+            .unwrap_or_default();
+
+        let mut node = MemoryNode::new(
+            mentedb_core::types::AgentId::new(),
+            MemoryType::Semantic,
+            summary.to_string(),
+            embedding,
+        );
+        node.tags = vec![
+            "community_summary".to_string(),
+            community_tag,
+            "source:enrichment".to_string(),
+        ];
+        node.confidence = 0.7;
+        let node_id = node.id;
+        self.store(node)?;
+
+        // Create Derived edges from summary to member entity memories
+        let entity_map = self.build_entity_memory_map();
+        for name in member_names {
+            let normalized = name.to_lowercase();
+            if let Some(member_ids) = entity_map.get(&normalized) {
+                for member_id in member_ids {
+                    self.relate(MemoryEdge {
+                        source: node_id,
+                        target: *member_id,
+                        edge_type: EdgeType::Derived,
+                        weight: 0.8,
+                        created_at: mentedb_core::types::Timestamp::default(),
+                        valid_from: None,
+                        valid_until: None,
+                        label: Some(format!("community_member:{}", category)),
+                    })?;
+                }
+            }
+        }
+
+        Ok(node_id)
+    }
+
+    /// Get existing community summaries.
+    pub fn community_summaries(&self) -> Vec<MemoryNode> {
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        page_ids
+            .iter()
+            .filter_map(|pid| self.storage.load_memory(*pid).ok())
+            .filter(|m| m.tags.iter().any(|t| t == "community_summary"))
+            .collect()
+    }
+
+    /// Collect all semantic/procedural facts for user profile generation.
+    ///
+    /// Returns high-confidence memories suitable for profile building.
+    pub fn profile_facts(&self) -> Vec<String> {
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        let mut facts = Vec::new();
+
+        for pid in &page_ids {
+            if let Ok(mem) = self.storage.load_memory(*pid) {
+                // Only semantic and procedural memories with decent confidence
+                if mem.confidence < 0.5 {
+                    continue;
+                }
+                match mem.memory_type {
+                    MemoryType::Semantic | MemoryType::Procedural => {
+                        // Skip community summaries and entity nodes
+                        if mem
+                            .tags
+                            .iter()
+                            .any(|t| t == "community_summary" || t.starts_with("entity:"))
+                        {
+                            continue;
+                        }
+                        facts.push(mem.content[..mem.content.len().min(300)].to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Cap at 100 most relevant facts to fit in LLM context
+        facts.truncate(100);
+        facts
+    }
+
+    /// Store or update the user profile as an always-scoped memory.
+    ///
+    /// There is exactly one user profile memory (tagged `user_profile`).
+    /// If one already exists, it's replaced entirely.
+    pub fn store_user_profile(&self, profile: &str) -> MenteResult<MemoryId> {
+        // Find existing profile
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        for pid in &page_ids {
+            if let Ok(mem) = self.storage.load_memory(*pid)
+                && mem.tags.iter().any(|t| t == "user_profile")
+            {
+                // Update in place
+                let mut updated = mem.clone();
+                updated.content = profile.to_string();
+                if let Some(ref embedder) = self.embedder {
+                    updated.embedding = embedder
+                        .embed(profile)
+                        .unwrap_or_else(|_| updated.embedding.clone());
+                }
+                self.storage.store_memory(&updated)?;
+                return Ok(updated.id);
+            }
+        }
+
+        // Create new profile
+        let embedding = self
+            .embedder
+            .as_ref()
+            .and_then(|e| e.embed(profile).ok())
+            .unwrap_or_default();
+
+        let mut node = MemoryNode::new(
+            mentedb_core::types::AgentId::new(),
+            MemoryType::Semantic,
+            profile.to_string(),
+            embedding,
+        );
+        node.tags = vec![
+            "user_profile".to_string(),
+            "scope:always".to_string(),
+            "source:enrichment".to_string(),
+        ];
+        node.confidence = 0.8;
+        let node_id = node.id;
+        self.store(node)?;
+
+        Ok(node_id)
+    }
+
+    /// Get the current user profile, if one exists.
+    pub fn user_profile(&self) -> Option<MemoryNode> {
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        for pid in &page_ids {
+            if let Ok(mem) = self.storage.load_memory(*pid)
+                && mem.tags.iter().any(|t| t == "user_profile")
+            {
+                return Some(mem);
+            }
+        }
+        None
     }
 }

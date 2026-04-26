@@ -138,6 +138,18 @@ pub struct TopicLabel {
     pub is_new: bool,
 }
 
+/// LLM-generated community summary for a cluster of entities.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommunitySummary {
+    pub summary: String,
+}
+
+/// LLM-generated user profile from accumulated knowledge.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UserProfile {
+    pub profile: String,
+}
+
 // ---------------------------------------------------------------------------
 // Compact memory representation for prompts
 // ---------------------------------------------------------------------------
@@ -228,6 +240,36 @@ Rules:
 
 Respond with ONLY a JSON object:
 {"topic": "authentication", "is_new": false}"#;
+
+    pub const COMMUNITY_SUMMARY_SYSTEM: &str = r#"You are a knowledge summarizer for an AI agent's long-term memory system.
+
+Given a category name and a list of entities the user has interacted with, create a concise summary that captures the user's relationship to this cluster of entities.
+
+Rules:
+- Mention EVERY entity by name — do not omit any
+- Focus on the user's relationship to each (uses, likes, works with, etc.)
+- Keep it to 2-3 sentences maximum
+- The summary should be findable when someone searches for this topic
+- Write in third person ("The user...")
+
+Respond with ONLY a JSON object:
+{"summary": "The user works with Python and Rust for systems programming, uses PostgreSQL for databases, and deploys on AWS."}"#;
+
+    pub const USER_PROFILE_SYSTEM: &str = r#"You are a profile generator for an AI agent's long-term memory system.
+
+Given a collection of facts, preferences, and patterns about a user, generate a concise profile that captures the most important information an AI assistant should know.
+
+Rules:
+- Prioritize: preferences > active projects > skills > relationships > habits
+- Be factual — only include what the evidence supports
+- Keep it under 200 words
+- Write in third person ("The user...")
+- Group related facts together
+- Include specific names, tools, and preferences — not vague generalities
+- This profile will be included in EVERY conversation, so only include persistently relevant facts
+
+Respond with ONLY a JSON object:
+{"profile": "The user is a software engineer who prefers Rust and Python. They are building MenteDB, a cognitive memory database..."}"#;
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +400,69 @@ impl<J: LlmJudge> CognitiveLlmService<J> {
             .complete(prompts::TOPIC_SYSTEM, &user_prompt)
             .await?;
         parse_json_response::<TopicLabel>(&response)
+    }
+
+    /// Generate a summary for a community (cluster of related entities).
+    pub async fn generate_community_summary(
+        &self,
+        category: &str,
+        entities: &[(String, String)], // (name, context/relationship)
+    ) -> Result<CommunitySummary, LlmJudgeError> {
+        let entity_list = entities
+            .iter()
+            .map(|(name, ctx)| format!("- {} — {}", name, ctx))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let user_prompt = format!(
+            "Category: {}\n\nEntities in this cluster:\n{}",
+            category, entity_list
+        );
+
+        let response = self
+            .judge
+            .complete(prompts::COMMUNITY_SUMMARY_SYSTEM, &user_prompt)
+            .await?;
+        parse_json_response::<CommunitySummary>(&response)
+    }
+
+    /// Generate a user profile from accumulated knowledge.
+    pub async fn generate_user_profile(
+        &self,
+        facts: &[String],
+        community_summaries: &[String],
+    ) -> Result<UserProfile, LlmJudgeError> {
+        let mut sections = Vec::new();
+
+        if !facts.is_empty() {
+            sections.push(format!(
+                "Known facts about the user:\n{}",
+                facts
+                    .iter()
+                    .map(|f| format!("- {}", f))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
+
+        if !community_summaries.is_empty() {
+            sections.push(format!(
+                "Community summaries:\n{}",
+                community_summaries
+                    .iter()
+                    .map(|s| format!("- {}", s))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
+
+        let user_prompt = sections.join("\n\n");
+
+        let response = self
+            .judge
+            .complete(prompts::USER_PROFILE_SYSTEM, &user_prompt)
+            .await?;
+        parse_json_response::<UserProfile>(&response)
     }
 }
 
