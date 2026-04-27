@@ -143,10 +143,12 @@ impl StorageEngine {
 
     /// Write data into a page with WAL protection.
     pub fn write_page(&self, page_id: PageId, data: &[u8]) -> MenteResult<()> {
-        let lsn = self
-            .wal
-            .lock()
-            .append(WalEntryType::PageWrite, page_id.0, data)?;
+        let lsn = {
+            let mut wal = self.wal.lock();
+            let lsn = wal.append(WalEntryType::PageWrite, page_id.0, data)?;
+            wal.sync()?;
+            lsn
+        };
 
         let mut pm = self.page_manager.lock();
         let mut page = self.buffer_pool.fetch_page(page_id, &mut pm)?;

@@ -59,52 +59,56 @@ pub async fn run_enrichment<J: LlmJudge>(
     embedder: &dyn EmbeddingProvider,
     cognitive_llm: Option<&CognitiveLlmService<J>>,
     current_turn: u64,
+    skip_extraction: bool,
 ) -> EnrichmentResult {
     let mut result = EnrichmentResult::default();
 
-    let candidates = db.enrichment_candidates();
-    if candidates.is_empty() {
-        tracing::debug!("enrichment: no candidates, marking complete");
-        db.mark_enrichment_complete(current_turn);
-        return result;
-    }
-
-    tracing::info!(
-        candidates = candidates.len(),
-        "starting sleeptime enrichment"
-    );
-
-    // ── Phase 1: Batch LLM Extraction ──
-    let http_provider = match HttpExtractionProvider::new(extraction_config.clone()) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!(error = %e, "enrichment: failed to create HTTP provider");
+    if !skip_extraction {
+        let candidates = db.enrichment_candidates();
+        if candidates.is_empty() {
+            tracing::debug!("enrichment: no candidates, marking complete");
             db.mark_enrichment_complete(current_turn);
             return result;
         }
-    };
 
-    let enrichment_config = db.enrichment_config().clone();
-    let pipeline_cfg = ExtractionConfig {
-        quality_threshold: enrichment_config.min_confidence,
-        ..extraction_config
-    };
-    let pipeline = ExtractionPipeline::new(http_provider, pipeline_cfg);
+        tracing::info!(
+            candidates = candidates.len(),
+            "starting sleeptime enrichment"
+        );
 
-    let batches = batch_conversations(&candidates, 10);
+        // ── Phase 1: Batch LLM Extraction ──
+        let http_provider = match HttpExtractionProvider::new(extraction_config.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(error = %e, "enrichment: failed to create HTTP provider");
+                db.mark_enrichment_complete(current_turn);
+                return result;
+            }
+        };
 
-    for (batch_idx, batch) in batches.iter().enumerate() {
-        let conversation = batch
-            .iter()
-            .map(|m| m.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n---\n");
+        let enrichment_config = db.enrichment_config().clone();
+        let pipeline_cfg = ExtractionConfig {
+            quality_threshold: enrichment_config.min_confidence,
+            ..extraction_config
+        };
+        let pipeline = ExtractionPipeline::new(http_provider, pipeline_cfg);
 
-        let source_ids: Vec<mentedb_core::types::MemoryId> = batch.iter().map(|m| m.id).collect();
+        let batches = batch_conversations(&candidates, 10);
 
-        // Get existing memories for dedup
-        let existing: Vec<MemoryNode> =
-            if let Ok(Some(emb)) = db.embed_text(&conversation[..conversation.len().min(500)]) {
+        for (batch_idx, batch) in batches.iter().enumerate() {
+            let conversation = batch
+                .iter()
+                .map(|m| m.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n---\n");
+
+            let source_ids: Vec<mentedb_core::types::MemoryId> =
+                batch.iter().map(|m| m.id).collect();
+
+            // Get existing memories for dedup
+            let existing: Vec<MemoryNode> = if let Ok(Some(emb)) =
+                db.embed_text(&conversation[..conversation.len().min(500)])
+            {
                 db.recall_similar(&emb, 30)
                     .unwrap_or_default()
                     .into_iter()
@@ -114,73 +118,85 @@ pub async fn run_enrichment<J: LlmJudge>(
                 Vec::new()
             };
 
-        match pipeline.process(&conversation, &existing, embedder).await {
-            Ok(extraction_result) => {
-                result.duplicates_skipped += extraction_result.stats.rejected_duplicate;
-                result.contradictions_found += extraction_result.stats.contradictions_found;
+            match pipeline.process(&conversation, &existing, embedder).await {
+                Ok(extraction_result) => {
+                    result.duplicates_skipped += extraction_result.stats.rejected_duplicate;
+                    result.contradictions_found += extraction_result.stats.contradictions_found;
 
-                let mut nodes = Vec::new();
-                for mem in extraction_result
-                    .to_store
-                    .iter()
-                    .chain(extraction_result.contradictions.iter().map(|(m, _)| m))
-                {
-                    let mem_type =
-                        mentedb_extraction::map_extraction_type_to_memory_type(&mem.memory_type);
-                    let embedding = match embedder.embed(&mem.content) {
-                        Ok(e) => e,
+                    let mut nodes = Vec::new();
+                    for mem in extraction_result
+                        .to_store
+                        .iter()
+                        .chain(extraction_result.contradictions.iter().map(|(m, _)| m))
+                    {
+                        let mem_type = mentedb_extraction::map_extraction_type_to_memory_type(
+                            &mem.memory_type,
+                        );
+                        let embedding = match embedder.embed(&mem.content) {
+                            Ok(e) => e,
+                            Err(e) => {
+                                tracing::warn!(error = %e, "enrichment: embedding failed");
+                                continue;
+                            }
+                        };
+                        let mut node = MemoryNode::new(
+                            AgentId::nil(),
+                            mem_type,
+                            mem.content.clone(),
+                            embedding,
+                        );
+                        node.tags = mem.tags.clone();
+                        node.confidence = mem.confidence;
+                        nodes.push(node);
+                    }
+
+                    // Build entity nodes
+                    for entity in &extraction_result.entities {
+                        let content = entity.to_content();
+                        let embedding_text = entity.embedding_key();
+                        let embedding = match embedder.embed(&embedding_text) {
+                            Ok(e) => e,
+                            Err(e) => {
+                                tracing::warn!(error = %e, "enrichment: entity embedding failed");
+                                continue;
+                            }
+                        };
+                        let mut node = MemoryNode::new(
+                            AgentId::nil(),
+                            MemoryType::Semantic,
+                            content,
+                            embedding,
+                        );
+                        let name_lower = entity.name.to_lowercase();
+                        node.tags.push(format!("entity:{}", name_lower));
+                        node.tags
+                            .push(format!("entity_type:{}", entity.entity_type));
+                        if let Some(cat) = entity.attributes.get("category") {
+                            for c in cat.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                                node.tags.push(format!("category:{}", c.to_lowercase()));
+                            }
+                        }
+                        nodes.push(node);
+                        result.entities_extracted += 1;
+                    }
+
+                    match db.store_enrichment_memories(nodes, &source_ids) {
+                        Ok((stored, edges)) => {
+                            result.memories_stored += stored;
+                            result.edges_created += edges;
+                        }
                         Err(e) => {
-                            tracing::warn!(error = %e, "enrichment: embedding failed");
-                            continue;
-                        }
-                    };
-                    let mut node =
-                        MemoryNode::new(AgentId::nil(), mem_type, mem.content.clone(), embedding);
-                    node.tags = mem.tags.clone();
-                    node.confidence = mem.confidence;
-                    nodes.push(node);
-                }
-
-                // Build entity nodes
-                for entity in &extraction_result.entities {
-                    let content = entity.to_content();
-                    let embedding_text = entity.embedding_key();
-                    let embedding = match embedder.embed(&embedding_text) {
-                        Ok(e) => e,
-                        Err(e) => {
-                            tracing::warn!(error = %e, "enrichment: entity embedding failed");
-                            continue;
-                        }
-                    };
-                    let mut node =
-                        MemoryNode::new(AgentId::nil(), MemoryType::Semantic, content, embedding);
-                    let name_lower = entity.name.to_lowercase();
-                    node.tags.push(format!("entity:{}", name_lower));
-                    node.tags
-                        .push(format!("entity_type:{}", entity.entity_type));
-                    if let Some(cat) = entity.attributes.get("category") {
-                        for c in cat.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                            node.tags.push(format!("category:{}", c.to_lowercase()));
+                            tracing::error!(batch = batch_idx, error = %e, "enrichment: failed to store batch");
                         }
                     }
-                    nodes.push(node);
-                    result.entities_extracted += 1;
                 }
-
-                match db.store_enrichment_memories(nodes, &source_ids) {
-                    Ok((stored, edges)) => {
-                        result.memories_stored += stored;
-                        result.edges_created += edges;
-                    }
-                    Err(e) => {
-                        tracing::error!(batch = batch_idx, error = %e, "enrichment: failed to store batch");
-                    }
+                Err(e) => {
+                    tracing::error!(batch = batch_idx, error = %e, "enrichment: extraction failed");
                 }
-            }
-            Err(e) => {
-                tracing::error!(batch = batch_idx, error = %e, "enrichment: extraction failed");
             }
         }
+    } else {
+        tracing::info!("enrichment: skipping Phase 1 extraction (skip_extraction=true)");
     }
 
     // ── Phase 2: Entity Linking ──
@@ -222,7 +238,7 @@ pub async fn run_enrichment<J: LlmJudge>(
         contradictions = result.contradictions_found,
         communities = result.communities_created,
         user_model = result.user_model_updated,
-        batches = batches.len(),
+        skip_extraction = skip_extraction,
         "sleeptime enrichment complete"
     );
 

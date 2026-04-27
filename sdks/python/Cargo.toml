@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.24", features = ["extension-module"] }
-mentedb = { path = "../../crates/mentedb" }
+mentedb = { path = "../../crates/mentedb", features = ["enrichment"] }
 mentedb-core = { path = "../../crates/mentedb-core" }
 mentedb-storage = { path = "../../crates/mentedb-storage" }
 mentedb-index = { path = "../../crates/mentedb-index" }

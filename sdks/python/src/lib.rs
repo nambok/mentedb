@@ -3724,6 +3724,65 @@ impl MenteDB {
             .collect();
         Ok(result)
     }
+
+    /// Run the full 4-phase sleeptime enrichment pipeline.
+    ///
+    /// Phases:
+    ///   1. Batch LLM extraction — episodic memories → semantic + entities
+    ///   2. Entity linking — rule-based + LLM resolution
+    ///   3. Community detection — category clustering + LLM summaries
+    ///   4. User model — always-scoped profile from all knowledge
+    ///
+    /// Requires MENTEDB_LLM_PROVIDER and MENTEDB_LLM_API_KEY env vars.
+    /// Returns a dict with enrichment statistics.
+    #[pyo3(signature = (provider=None, current_turn=0, skip_extraction=false))]
+    fn run_enrichment(
+        &self,
+        py: Python<'_>,
+        provider: Option<&str>,
+        current_turn: u64,
+        skip_extraction: bool,
+    ) -> PyResult<PyObject> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let embedder = self
+            .embedder
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("no embedding provider configured"))?;
+
+        let config = build_extraction_config_from_env(provider)?;
+        let http_provider =
+            HttpExtractionProvider::new(config.clone()).map_err(to_pyerr)?;
+        let judge =
+            mentedb_extraction::cognitive_adapter::ExtractionLlmJudge::new(http_provider);
+        let cognitive_llm = mentedb_cognitive::CognitiveLlmService::new(judge);
+
+        let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
+        let enrichment_result = py.allow_threads(|| {
+            rt.block_on(mentedb::enrichment::run_enrichment(
+                db,
+                config,
+                embedder.as_ref(),
+                Some(&cognitive_llm),
+                current_turn,
+                skip_extraction,
+            ))
+        });
+
+        let d = pyo3::types::PyDict::new(py);
+        d.set_item("memories_stored", enrichment_result.memories_stored)?;
+        d.set_item("edges_created", enrichment_result.edges_created)?;
+        d.set_item("entities_extracted", enrichment_result.entities_extracted)?;
+        d.set_item("duplicates_skipped", enrichment_result.duplicates_skipped)?;
+        d.set_item("contradictions_found", enrichment_result.contradictions_found)?;
+        d.set_item("sync_linked", enrichment_result.sync_linked)?;
+        d.set_item("llm_linked", enrichment_result.llm_linked)?;
+        d.set_item("communities_created", enrichment_result.communities_created)?;
+        d.set_item("user_model_updated", enrichment_result.user_model_updated)?;
+        Ok(d.into_any().unbind())
+    }
 }
 
 // ---------------------------------------------------------------------------

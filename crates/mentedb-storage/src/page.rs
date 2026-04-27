@@ -263,8 +263,19 @@ impl PageManager {
         self.file.seek(SeekFrom::Start(offset))?;
         self.file.read_exact(&mut buf)?;
 
+        let page = Page::from_bytes(&buf);
+        if page.header.checksum != 0 {
+            let expected = page.compute_checksum();
+            if page.header.checksum != expected {
+                return Err(MenteError::Storage(format!(
+                    "page {} checksum mismatch (stored={:#x}, computed={:#x})",
+                    page_id.0, page.header.checksum, expected
+                )));
+            }
+        }
+
         trace!(page_id = page_id.0, "read page from disk");
-        Ok(Box::new(Page::from_bytes(&buf)))
+        Ok(Box::new(page))
     }
 
     /// Write a page to disk.
@@ -412,5 +423,41 @@ mod tests {
         page.data[0] = 0x00;
         let c2 = page.compute_checksum();
         assert_ne!(c1, c2);
+    }
+
+    #[test]
+    fn test_checksum_verified_on_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid;
+        {
+            let mut pm = PageManager::open(dir.path()).unwrap();
+            pid = pm.allocate_page().unwrap();
+            let mut page = Page::zeroed();
+            page.header.page_id = pid.0;
+            page.header.page_type = PageType::Data as u8;
+            page.data[0..5].copy_from_slice(b"valid");
+            page.header.checksum = page.compute_checksum();
+            pm.write_page(pid, &page).unwrap();
+            pm.sync().unwrap();
+        }
+        {
+            // Valid checksum — should read fine
+            let mut pm = PageManager::open(dir.path()).unwrap();
+            let page = pm.read_page(pid).unwrap();
+            assert_eq!(&page.data[0..5], b"valid");
+        }
+        {
+            // Corrupt the data on disk
+            let data_path = dir.path().join("pages.db");
+            let mut raw = std::fs::read(&data_path).unwrap();
+            let offset = pid.0 as usize * PAGE_SIZE;
+            // Flip a byte in the data section (after header)
+            raw[offset + std::mem::size_of::<PageHeader>()] ^= 0xFF;
+            std::fs::write(&data_path, &raw).unwrap();
+
+            let mut pm = PageManager::open(dir.path()).unwrap();
+            let result = pm.read_page(pid);
+            assert!(result.is_err(), "corrupted page should fail checksum");
+        }
     }
 }
