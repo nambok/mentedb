@@ -3,3 +3,4 @@ data/
 
 # Benchmark results and eval logs
 results/
+extraction_cache.json

@@ -105,6 +105,25 @@ impl Wal {
         Ok(wal)
     }
 
+    /// Acquire a blocking exclusive file lock on the WAL file.
+    ///
+    /// Uses `flock(2)` (via fs2) which works across processes on the same host
+    /// and across NFS/EFS mounts. Blocks until the lock is available — callers
+    /// should hold it only for the duration of append + fsync.
+    pub fn lock_exclusive(&self) -> MenteResult<()> {
+        use fs2::FileExt;
+        self.file.lock_exclusive().map_err(|e| {
+            MenteError::Storage(format!("WAL flock failed: {e}"))
+        })
+    }
+
+    /// Release the file lock on the WAL file.
+    pub fn unlock(&self) -> MenteResult<()> {
+        fs2::FileExt::unlock(&self.file).map_err(|e| {
+            MenteError::Storage(format!("WAL unlock failed: {e}"))
+        })
+    }
+
     /// Append an entry to the WAL and return its LSN.
     pub fn append(
         &mut self,

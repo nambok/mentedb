@@ -1,12 +1,10 @@
 //! Storage Engine: facade that ties the page manager, WAL, and buffer pool together.
 
-use std::fs::File;
 use std::path::Path;
 
 use mentedb_core::MemoryNode;
 use mentedb_core::error::{MenteError, MenteResult};
 
-use fs2::FileExt;
 use parking_lot::Mutex;
 use tracing::info;
 
@@ -21,14 +19,20 @@ const DEFAULT_BUFFER_POOL_SIZE: usize = 1024;
 /// Coordinates page allocation, caching, and write-ahead logging to provide
 /// crash-safe, page-oriented storage for memory nodes.
 ///
-/// All internal state is protected by fine-grained locks so every public method
-/// takes `&self`, enabling concurrent reads from multiple threads.
+/// Concurrency model (inspired by WAL-mode databases):
+/// - **Reads are lock-free**: `read_page` only touches the buffer pool and page
+///   manager — no file locks, no WAL access.
+/// - **Writes acquire a transient file lock** on the WAL file via `flock(2)`.
+///   The lock is held only for the duration of WAL append + fsync (microseconds
+///   to milliseconds), then released immediately. This serializes concurrent
+///   writers across processes (e.g. multiple ECS tasks sharing EFS) without
+///   blocking readers.
+/// - **No DB-level lock on open.** Multiple processes can open the same database
+///   simultaneously.
 pub struct StorageEngine {
     page_manager: Mutex<PageManager>,
     buffer_pool: BufferPool,
     wal: Mutex<Wal>,
-    /// Exclusive lock file — held for the lifetime of the engine to prevent concurrent access.
-    _lock_file: File,
 }
 
 impl StorageEngine {
@@ -39,16 +43,6 @@ impl StorageEngine {
     pub fn open(path: &Path) -> MenteResult<Self> {
         std::fs::create_dir_all(path)?;
 
-        // Acquire exclusive lock to prevent concurrent access corruption
-        let lock_path = path.join("mentedb.lock");
-        let lock_file = File::create(&lock_path)
-            .map_err(|e| MenteError::Storage(format!("failed to create lock file: {e}")))?;
-        lock_file.try_lock_exclusive().map_err(|_| {
-            MenteError::Storage(
-                "Database is locked by another process. Only one instance can access the database at a time.".to_string()
-            )
-        })?;
-
         let page_manager = PageManager::open(path)?;
         let buffer_pool = BufferPool::new(DEFAULT_BUFFER_POOL_SIZE);
         let wal = Wal::open(path)?;
@@ -57,7 +51,6 @@ impl StorageEngine {
             page_manager: Mutex::new(page_manager),
             buffer_pool,
             wal: Mutex::new(wal),
-            _lock_file: lock_file,
         };
 
         let recovered = engine.recover()?;
@@ -76,6 +69,7 @@ impl StorageEngine {
     /// After replay the WAL is truncated. Returns the number of entries replayed.
     pub fn recover(&self) -> MenteResult<usize> {
         let mut wal = self.wal.lock();
+        wal.lock_exclusive()?;
         let entries = wal.iterate()?;
         let mut count = 0usize;
         let mut pm = self.page_manager.lock();
@@ -115,6 +109,7 @@ impl StorageEngine {
             info!(count, "WAL recovery replayed entries");
         }
 
+        wal.unlock()?;
         Ok(count)
     }
 
@@ -142,11 +137,16 @@ impl StorageEngine {
     }
 
     /// Write data into a page with WAL protection.
+    ///
+    /// Acquires a blocking file lock on the WAL for the duration of the
+    /// append + fsync, ensuring only one writer at a time across processes.
     pub fn write_page(&self, page_id: PageId, data: &[u8]) -> MenteResult<()> {
         let lsn = {
             let mut wal = self.wal.lock();
+            wal.lock_exclusive()?;
             let lsn = wal.append(WalEntryType::PageWrite, page_id.0, data)?;
             wal.sync()?;
+            wal.unlock()?;
             lsn
         };
 
@@ -230,9 +230,11 @@ impl StorageEngine {
         pm.sync()?;
 
         let mut wal = self.wal.lock();
+        wal.lock_exclusive()?;
         let lsn = wal.append(WalEntryType::Checkpoint, 0, &[])?;
         wal.sync()?;
         wal.truncate(lsn)?;
+        wal.unlock()?;
 
         info!(lsn, "checkpoint complete");
         Ok(())
@@ -435,6 +437,70 @@ mod tests {
                 let loaded = engine.load_memory(*pid).unwrap();
                 assert_eq!(&loaded.content, expected);
             }
+        }
+    }
+
+    #[test]
+    fn test_concurrent_open_no_lock_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Two engines open the same directory simultaneously — should succeed
+        // now that we no longer hold an exclusive DB-level flock.
+        let engine1 = StorageEngine::open(dir.path()).unwrap();
+        let engine2 = StorageEngine::open(dir.path()).unwrap();
+
+        // Both can write (serialized by WAL file lock)
+        let node1 = MemoryNode::new(
+            AgentId::new(),
+            MemoryType::Episodic,
+            "from engine 1".to_string(),
+            vec![1.0],
+        );
+        let node2 = MemoryNode::new(
+            AgentId::new(),
+            MemoryType::Episodic,
+            "from engine 2".to_string(),
+            vec![2.0],
+        );
+
+        let pid1 = engine1.store_memory(&node1).unwrap();
+        let pid2 = engine2.store_memory(&node2).unwrap();
+
+        // Each engine can read what it wrote
+        let loaded1 = engine1.load_memory(pid1).unwrap();
+        assert_eq!(loaded1.content, "from engine 1");
+
+        let loaded2 = engine2.load_memory(pid2).unwrap();
+        assert_eq!(loaded2.content, "from engine 2");
+    }
+
+    #[test]
+    fn test_concurrent_writes_from_threads() {
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Arc::new(StorageEngine::open(dir.path()).unwrap());
+
+        let handles: Vec<_> = (0..10)
+            .map(|i| {
+                let eng = Arc::clone(&engine);
+                std::thread::spawn(move || {
+                    let node = MemoryNode::new(
+                        AgentId::new(),
+                        MemoryType::Episodic,
+                        format!("thread-{i}"),
+                        vec![i as f32],
+                    );
+                    eng.store_memory(&node).unwrap()
+                })
+            })
+            .collect();
+
+        let pids: Vec<PageId> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        // All 10 writes succeeded and are readable
+        for (i, pid) in pids.iter().enumerate() {
+            let loaded = engine.load_memory(*pid).unwrap();
+            assert_eq!(loaded.content, format!("thread-{i}"));
         }
     }
 }
