@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.9.0...mentedb-storage-v0.9.1) - 2026-04-27
+
+### Added
+
+- WAL-level file locking for multi-process concurrency
+
+### Other
+
+- Add doc examples to StorageEngine public methods and update crate docs
+- Merge pull request #80 from nambok/feat/wal-level-locking
+- Fix flock continuity across WAL truncate, remove infra-specific comments
+- Implement reload_header() and reload_lsn() for multi-process safety
+- cargo fmt
+
 ## [0.9.0](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.8.2...mentedb-storage-v0.9.0) - 2026-04-27
 
 ### Fixed
