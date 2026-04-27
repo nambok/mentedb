@@ -107,9 +107,9 @@ impl Wal {
 
     /// Acquire a blocking exclusive file lock on the WAL file.
     ///
-    /// Uses `flock(2)` (via fs2) which works across processes on the same host
-    /// and across NFS/EFS mounts. Blocks until the lock is available — callers
-    /// should hold it only for the duration of append + fsync.
+    /// Uses `flock(2)` (via fs2) which works across processes on the same host.
+    /// Blocks until the lock is available — callers should hold it only for
+    /// the duration of append + fsync.
     pub fn lock_exclusive(&self) -> MenteResult<()> {
         use fs2::FileExt;
         self.file
@@ -222,8 +222,12 @@ impl Wal {
 
         std::fs::rename(&tmp_path, &wal_path)?;
 
-        // Reopen the renamed file
-        self.file = OpenOptions::new().read(true).write(true).open(&wal_path)?;
+        // Reopen the renamed file and re-acquire flock so callers' subsequent
+        // unlock() releases the correct fd.
+        let new_file = OpenOptions::new().read(true).write(true).open(&wal_path)?;
+        fs2::FileExt::lock_exclusive(&new_file)
+            .map_err(|e| MenteError::Storage(format!("WAL flock re-acquire failed: {e}")))?;
+        self.file = new_file;
 
         debug!(before_lsn, "WAL truncated (atomic)");
         Ok(())

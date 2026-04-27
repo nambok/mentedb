@@ -25,7 +25,7 @@ const DEFAULT_BUFFER_POOL_SIZE: usize = 1024;
 /// - **Writes are fully serialized** via a blocking `flock(2)` on the WAL file.
 ///   The entire write transaction (page allocation + WAL append + page write +
 ///   fsync) executes under a single flock, ensuring correctness across multiple
-///   processes (e.g. multiple ECS tasks sharing EFS).
+///   processes sharing the same data directory.
 /// - **State is refreshed from disk** under the flock: page count is re-read
 ///   from the file header and LSN is re-read from the WAL tail, so no process
 ///   can act on stale in-memory state.
