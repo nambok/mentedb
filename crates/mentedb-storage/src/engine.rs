@@ -42,6 +42,16 @@ impl StorageEngine {
     ///
     /// `path` must be a directory; it will be created if it does not exist.
     /// After opening, any uncommitted WAL entries are replayed for crash recovery.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use mentedb_storage::StorageEngine;
+    ///
+    /// let engine = StorageEngine::open("/tmp/mentedb".as_ref())?;
+    /// // engine is ready — WAL recovery already ran if needed
+    /// # Ok::<(), mentedb_core::error::MenteError>(())
+    /// ```
     pub fn open(path: &Path) -> MenteResult<Self> {
         std::fs::create_dir_all(path)?;
 
@@ -119,6 +129,15 @@ impl StorageEngine {
     }
 
     /// Gracefully shut down: flush dirty pages, sync files.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use mentedb_storage::StorageEngine;
+    /// # let engine = StorageEngine::open("/tmp/mentedb".as_ref())?;
+    /// engine.close()?;
+    /// # Ok::<(), mentedb_core::error::MenteError>(())
+    /// ```
     pub fn close(&self) -> MenteResult<()> {
         let mut pm = self.page_manager.lock();
         self.buffer_pool.flush_all(&mut pm)?;
@@ -192,6 +211,23 @@ impl StorageEngine {
     ///
     /// The entire operation — page allocation, WAL append, page write — executes
     /// under a single WAL flock, making it safe across multiple processes.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use mentedb_storage::StorageEngine;
+    /// use mentedb_core::{MemoryNode, memory::MemoryType, types::AgentId};
+    ///
+    /// let engine = StorageEngine::open("/tmp/mentedb".as_ref())?;
+    /// let node = MemoryNode::new(
+    ///     AgentId::new(),
+    ///     MemoryType::Semantic,
+    ///     "User likes dark mode".to_string(),
+    ///     vec![0.1, 0.2],
+    /// );
+    /// let page_id = engine.store_memory(&node)?;
+    /// # Ok::<(), mentedb_core::error::MenteError>(())
+    /// ```
     pub fn store_memory(&self, node: &MemoryNode) -> MenteResult<PageId> {
         let serialized =
             serde_json::to_vec(node).map_err(|e| MenteError::Serialization(e.to_string()))?;
@@ -255,6 +291,16 @@ impl StorageEngine {
     }
 
     /// Load and deserialize a [`MemoryNode`] from the given page.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use mentedb_storage::{StorageEngine, PageId};
+    /// # let engine = StorageEngine::open("/tmp/mentedb".as_ref())?;
+    /// let node = engine.load_memory(PageId(1))?;
+    /// println!("memory: {}", node.content);
+    /// # Ok::<(), mentedb_core::error::MenteError>(())
+    /// ```
     pub fn load_memory(&self, page_id: PageId) -> MenteResult<MemoryNode> {
         let page = self.read_page(page_id)?;
         self.buffer_pool.unpin_page(page_id, false).ok();
@@ -273,6 +319,16 @@ impl StorageEngine {
     // ---- durability ----
 
     /// Checkpoint: flush all dirty pages, sync to disk, and truncate the WAL.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use mentedb_storage::StorageEngine;
+    /// # let engine = StorageEngine::open("/tmp/mentedb".as_ref())?;
+    /// // After a batch of writes, checkpoint to reclaim WAL space
+    /// engine.checkpoint()?;
+    /// # Ok::<(), mentedb_core::error::MenteError>(())
+    /// ```
     pub fn checkpoint(&self) -> MenteResult<()> {
         let mut wal = self.wal.lock();
         let mut pm = self.page_manager.lock();
@@ -294,7 +350,20 @@ impl StorageEngine {
 
     /// Scan all pages and return (MemoryId, PageId) pairs for every valid memory node.
     ///
-    /// Used to rebuild the page map on startup.
+    /// Refreshes the page count from disk before scanning so pages written by
+    /// other processes are included. Used to rebuild the page map on startup.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use mentedb_storage::StorageEngine;
+    /// # let engine = StorageEngine::open("/tmp/mentedb".as_ref())?;
+    /// let memories = engine.scan_all_memories();
+    /// for (memory_id, page_id) in &memories {
+    ///     println!("{memory_id} -> page {}", page_id.0);
+    /// }
+    /// # Ok::<(), mentedb_core::error::MenteError>(())
+    /// ```
     pub fn scan_all_memories(&self) -> Vec<(mentedb_core::types::MemoryId, PageId)> {
         let mut pm = self.page_manager.lock();
         // Refresh from disk to see pages written by other processes
