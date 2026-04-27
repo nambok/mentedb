@@ -1,12 +1,10 @@
 //! Storage Engine: facade that ties the page manager, WAL, and buffer pool together.
 
-use std::fs::File;
 use std::path::Path;
 
 use mentedb_core::MemoryNode;
 use mentedb_core::error::{MenteError, MenteResult};
 
-use fs2::FileExt;
 use parking_lot::Mutex;
 use tracing::info;
 
@@ -21,14 +19,22 @@ const DEFAULT_BUFFER_POOL_SIZE: usize = 1024;
 /// Coordinates page allocation, caching, and write-ahead logging to provide
 /// crash-safe, page-oriented storage for memory nodes.
 ///
-/// All internal state is protected by fine-grained locks so every public method
-/// takes `&self`, enabling concurrent reads from multiple threads.
+/// Concurrency model (inspired by WAL-mode databases):
+/// - **Reads are lock-free**: `read_page` only touches the buffer pool and page
+///   manager — no file locks, no WAL access.
+/// - **Writes are fully serialized** via a blocking `flock(2)` on the WAL file.
+///   The entire write transaction (page allocation + WAL append + page write +
+///   fsync) executes under a single flock, ensuring correctness across multiple
+///   processes sharing the same data directory.
+/// - **State is refreshed from disk** under the flock: page count is re-read
+///   from the file header and LSN is re-read from the WAL tail, so no process
+///   can act on stale in-memory state.
+/// - **No DB-level lock on open.** Multiple processes can open the same database
+///   simultaneously.
 pub struct StorageEngine {
     page_manager: Mutex<PageManager>,
     buffer_pool: BufferPool,
     wal: Mutex<Wal>,
-    /// Exclusive lock file — held for the lifetime of the engine to prevent concurrent access.
-    _lock_file: File,
 }
 
 impl StorageEngine {
@@ -39,16 +45,6 @@ impl StorageEngine {
     pub fn open(path: &Path) -> MenteResult<Self> {
         std::fs::create_dir_all(path)?;
 
-        // Acquire exclusive lock to prevent concurrent access corruption
-        let lock_path = path.join("mentedb.lock");
-        let lock_file = File::create(&lock_path)
-            .map_err(|e| MenteError::Storage(format!("failed to create lock file: {e}")))?;
-        lock_file.try_lock_exclusive().map_err(|_| {
-            MenteError::Storage(
-                "Database is locked by another process. Only one instance can access the database at a time.".to_string()
-            )
-        })?;
-
         let page_manager = PageManager::open(path)?;
         let buffer_pool = BufferPool::new(DEFAULT_BUFFER_POOL_SIZE);
         let wal = Wal::open(path)?;
@@ -57,7 +53,6 @@ impl StorageEngine {
             page_manager: Mutex::new(page_manager),
             buffer_pool,
             wal: Mutex::new(wal),
-            _lock_file: lock_file,
         };
 
         let recovered = engine.recover()?;
@@ -76,9 +71,13 @@ impl StorageEngine {
     /// After replay the WAL is truncated. Returns the number of entries replayed.
     pub fn recover(&self) -> MenteResult<usize> {
         let mut wal = self.wal.lock();
+        wal.lock_exclusive()?;
         let entries = wal.iterate()?;
         let mut count = 0usize;
         let mut pm = self.page_manager.lock();
+
+        // Refresh page count from disk — another process may have written pages.
+        pm.reload_header()?;
 
         for entry in &entries {
             match entry.entry_type {
@@ -115,6 +114,7 @@ impl StorageEngine {
             info!(count, "WAL recovery replayed entries");
         }
 
+        wal.unlock()?;
         Ok(count)
     }
 
@@ -130,29 +130,43 @@ impl StorageEngine {
 
     // ---- low-level page operations ----
 
-    /// Allocate a fresh page.
+    /// Allocate a fresh page (for internal/test use).
+    ///
+    /// **WARNING**: In multi-process scenarios, prefer `store_memory` which
+    /// allocates under the WAL flock. This method does NOT acquire the flock.
     pub fn allocate_page(&self) -> MenteResult<PageId> {
         self.page_manager.lock().allocate_page()
     }
 
-    /// Read a page through the buffer pool.
+    /// Read a page through the buffer pool (lock-free — no WAL access).
     pub fn read_page(&self, page_id: PageId) -> MenteResult<Box<Page>> {
         self.buffer_pool
             .fetch_page(page_id, &mut self.page_manager.lock())
     }
 
-    /// Write data into a page with WAL protection.
+    /// Write data into an already-allocated page with WAL protection.
+    ///
+    /// Acquires the WAL flock for the duration of the write transaction.
+    /// For new pages, prefer `store_memory` which allocates + writes atomically.
     pub fn write_page(&self, page_id: PageId, data: &[u8]) -> MenteResult<()> {
         let lsn = {
             let mut wal = self.wal.lock();
+            wal.lock_exclusive()?;
+            wal.reload_lsn()?;
             let lsn = wal.append(WalEntryType::PageWrite, page_id.0, data)?;
             wal.sync()?;
+            wal.unlock()?;
             lsn
         };
 
+        self.apply_page_write(page_id, data, lsn)
+    }
+
+    /// Apply a page write to the buffer pool and page manager (after WAL).
+    fn apply_page_write(&self, page_id: PageId, data: &[u8], lsn: u64) -> MenteResult<()> {
         let mut pm = self.page_manager.lock();
         let mut page = self.buffer_pool.fetch_page(page_id, &mut pm)?;
-        drop(pm); // release page_manager lock while we work on the page
+        drop(pm);
 
         let copy_len = data.len().min(PAGE_DATA_SIZE);
         page.data[..copy_len].copy_from_slice(&data[..copy_len]);
@@ -176,7 +190,8 @@ impl StorageEngine {
 
     /// Serialize and store a [`MemoryNode`] into a single page.
     ///
-    /// Returns the [`PageId`] where the node was stored.
+    /// The entire operation — page allocation, WAL append, page write — executes
+    /// under a single WAL flock, making it safe across multiple processes.
     pub fn store_memory(&self, node: &MemoryNode) -> MenteResult<PageId> {
         let serialized =
             serde_json::to_vec(node).map_err(|e| MenteError::Serialization(e.to_string()))?;
@@ -189,13 +204,47 @@ impl StorageEngine {
             )));
         }
 
-        let page_id = self.allocate_page()?;
-
         let mut buf = Vec::with_capacity(4 + serialized.len());
         buf.extend_from_slice(&(serialized.len() as u32).to_le_bytes());
         buf.extend_from_slice(&serialized);
 
-        self.write_page(page_id, &buf)?;
+        // Atomic write transaction: allocate + WAL + page write under one flock
+        let (page_id, lsn) = {
+            let mut wal = self.wal.lock();
+            let mut pm = self.page_manager.lock();
+
+            // Acquire flock and refresh state from disk
+            wal.lock_exclusive()?;
+            pm.reload_header()?;
+            wal.reload_lsn()?;
+
+            // Allocate page (using fresh page_count from disk)
+            let page_id = pm.allocate_page()?;
+
+            // WAL append + sync
+            let lsn = wal.append(WalEntryType::PageWrite, page_id.0, &buf)?;
+            wal.sync()?;
+
+            // Write page data to disk
+            let mut page = Page::zeroed();
+            page.header.page_id = page_id.0;
+            let copy_len = buf.len().min(PAGE_DATA_SIZE);
+            page.data[..copy_len].copy_from_slice(&buf[..copy_len]);
+            page.header.lsn = lsn;
+            page.header.page_type = PageType::Data as u8;
+            page.header.free_space = (PAGE_DATA_SIZE - copy_len) as u16;
+            page.header.checksum = page.compute_checksum();
+            pm.write_page(page_id, &page)?;
+            pm.sync()?;
+
+            // Release flock — other processes can now write
+            wal.unlock()?;
+
+            (page_id, lsn)
+        };
+
+        // Update buffer pool outside the flock (optional optimization)
+        let _ = lsn; // buffer pool update uses the page already written to disk
 
         info!(
             page_id = page_id.0,
@@ -225,14 +274,19 @@ impl StorageEngine {
 
     /// Checkpoint: flush all dirty pages, sync to disk, and truncate the WAL.
     pub fn checkpoint(&self) -> MenteResult<()> {
+        let mut wal = self.wal.lock();
         let mut pm = self.page_manager.lock();
+
+        wal.lock_exclusive()?;
+        wal.reload_lsn()?;
+
         self.buffer_pool.flush_all(&mut pm)?;
         pm.sync()?;
 
-        let mut wal = self.wal.lock();
         let lsn = wal.append(WalEntryType::Checkpoint, 0, &[])?;
         wal.sync()?;
         wal.truncate(lsn)?;
+        wal.unlock()?;
 
         info!(lsn, "checkpoint complete");
         Ok(())
@@ -242,7 +296,12 @@ impl StorageEngine {
     ///
     /// Used to rebuild the page map on startup.
     pub fn scan_all_memories(&self) -> Vec<(mentedb_core::types::MemoryId, PageId)> {
-        let count = self.page_manager.lock().page_count();
+        let mut pm = self.page_manager.lock();
+        // Refresh from disk to see pages written by other processes
+        let _ = pm.reload_header();
+        let count = pm.page_count();
+        drop(pm);
+
         let mut results = Vec::new();
         for i in 1..count {
             let page_id = PageId(i);
@@ -435,6 +494,70 @@ mod tests {
                 let loaded = engine.load_memory(*pid).unwrap();
                 assert_eq!(&loaded.content, expected);
             }
+        }
+    }
+
+    #[test]
+    fn test_concurrent_open_no_lock_conflict() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Two engines open the same directory simultaneously — should succeed
+        // now that we no longer hold an exclusive DB-level flock.
+        let engine1 = StorageEngine::open(dir.path()).unwrap();
+        let engine2 = StorageEngine::open(dir.path()).unwrap();
+
+        // Both can write (serialized by WAL file lock)
+        let node1 = MemoryNode::new(
+            AgentId::new(),
+            MemoryType::Episodic,
+            "from engine 1".to_string(),
+            vec![1.0],
+        );
+        let node2 = MemoryNode::new(
+            AgentId::new(),
+            MemoryType::Episodic,
+            "from engine 2".to_string(),
+            vec![2.0],
+        );
+
+        let pid1 = engine1.store_memory(&node1).unwrap();
+        let pid2 = engine2.store_memory(&node2).unwrap();
+
+        // Each engine can read what it wrote
+        let loaded1 = engine1.load_memory(pid1).unwrap();
+        assert_eq!(loaded1.content, "from engine 1");
+
+        let loaded2 = engine2.load_memory(pid2).unwrap();
+        assert_eq!(loaded2.content, "from engine 2");
+    }
+
+    #[test]
+    fn test_concurrent_writes_from_threads() {
+        use std::sync::Arc;
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Arc::new(StorageEngine::open(dir.path()).unwrap());
+
+        let handles: Vec<_> = (0..10)
+            .map(|i| {
+                let eng = Arc::clone(&engine);
+                std::thread::spawn(move || {
+                    let node = MemoryNode::new(
+                        AgentId::new(),
+                        MemoryType::Episodic,
+                        format!("thread-{i}"),
+                        vec![i as f32],
+                    );
+                    eng.store_memory(&node).unwrap()
+                })
+            })
+            .collect();
+
+        let pids: Vec<PageId> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        // All 10 writes succeeded and are readable
+        for (i, pid) in pids.iter().enumerate() {
+            let loaded = engine.load_memory(*pid).unwrap();
+            assert_eq!(loaded.content, format!("thread-{i}"));
         }
     }
 }

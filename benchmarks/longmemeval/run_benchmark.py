@@ -615,8 +615,8 @@ def main():
                         help="Resume from a previous partial run")
     parser.add_argument("--no-cognitive", action="store_true",
                         help="Disable cognitive pipeline (raw storage baseline)")
-    parser.add_argument("--workers", type=int, default=3,
-                        help="Number of parallel workers (default: 3)")
+    parser.add_argument("--workers", type=int, default=10,
+                        help="Number of parallel workers (default: 10)")
     parser.add_argument("--reader-model", type=str, default=None,
                         help="Override reader model (default: gpt-4o for OpenAI, Sonnet for Anthropic)")
     parser.add_argument("--enrichment", action="store_true",

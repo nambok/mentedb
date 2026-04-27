@@ -105,6 +105,33 @@ impl Wal {
         Ok(wal)
     }
 
+    /// Acquire a blocking exclusive file lock on the WAL file.
+    ///
+    /// Uses `flock(2)` (via fs2) which works across processes on the same host.
+    /// Blocks until the lock is available — callers should hold it only for
+    /// the duration of append + fsync.
+    pub fn lock_exclusive(&self) -> MenteResult<()> {
+        use fs2::FileExt;
+        self.file
+            .lock_exclusive()
+            .map_err(|e| MenteError::Storage(format!("WAL flock failed: {e}")))
+    }
+
+    /// Release the file lock on the WAL file.
+    pub fn unlock(&self) -> MenteResult<()> {
+        fs2::FileExt::unlock(&self.file)
+            .map_err(|e| MenteError::Storage(format!("WAL unlock failed: {e}")))
+    }
+
+    /// Re-read the WAL file to find the highest LSN, updating next_lsn.
+    /// Must be called under flock to see writes from other processes.
+    pub fn reload_lsn(&mut self) -> MenteResult<()> {
+        let entries = self.read_all_entries()?;
+        self.next_lsn = entries.last().map_or(1, |e| e.lsn + 1);
+        debug!(next_lsn = self.next_lsn, "reloaded WAL LSN");
+        Ok(())
+    }
+
     /// Append an entry to the WAL and return its LSN.
     pub fn append(
         &mut self,
@@ -195,8 +222,12 @@ impl Wal {
 
         std::fs::rename(&tmp_path, &wal_path)?;
 
-        // Reopen the renamed file
-        self.file = OpenOptions::new().read(true).write(true).open(&wal_path)?;
+        // Reopen the renamed file and re-acquire flock so callers' subsequent
+        // unlock() releases the correct fd.
+        let new_file = OpenOptions::new().read(true).write(true).open(&wal_path)?;
+        fs2::FileExt::lock_exclusive(&new_file)
+            .map_err(|e| MenteError::Storage(format!("WAL flock re-acquire failed: {e}")))?;
+        self.file = new_file;
 
         debug!(before_lsn, "WAL truncated (atomic)");
         Ok(())
