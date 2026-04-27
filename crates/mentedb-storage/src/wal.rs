@@ -123,6 +123,15 @@ impl Wal {
             .map_err(|e| MenteError::Storage(format!("WAL unlock failed: {e}")))
     }
 
+    /// Re-read the WAL file to find the highest LSN, updating next_lsn.
+    /// Must be called under flock to see writes from other processes.
+    pub fn reload_lsn(&mut self) -> MenteResult<()> {
+        let entries = self.read_all_entries()?;
+        self.next_lsn = entries.last().map_or(1, |e| e.lsn + 1);
+        debug!(next_lsn = self.next_lsn, "reloaded WAL LSN");
+        Ok(())
+    }
+
     /// Append an entry to the WAL and return its LSN.
     pub fn append(
         &mut self,

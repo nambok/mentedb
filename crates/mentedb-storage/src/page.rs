@@ -202,6 +202,23 @@ impl PageManager {
         }
     }
 
+    /// Re-read the file header from disk to pick up changes made by another process.
+    pub fn reload_header(&mut self) -> MenteResult<()> {
+        let mut buf = [0u8; std::mem::size_of::<FileHeader>()];
+        self.file.seek(SeekFrom::Start(0))?;
+        self.file.read_exact(&mut buf)?;
+        let hdr: FileHeader = unsafe { std::ptr::read(buf.as_ptr() as *const FileHeader) };
+        if hdr.magic != MAGIC {
+            return Err(MenteError::Storage(
+                "invalid page file magic on reload".into(),
+            ));
+        }
+        self.page_count = hdr.page_count;
+        self.free_list_head = hdr.free_list_head;
+        debug!(page_count = self.page_count, "reloaded page file header");
+        Ok(())
+    }
+
     /// Persist the file header into the beginning of page 0.
     fn write_file_header(&mut self) -> MenteResult<()> {
         let hdr = FileHeader {
