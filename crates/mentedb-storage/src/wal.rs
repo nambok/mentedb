@@ -24,6 +24,7 @@ pub type Lsn = u64;
 #[repr(u8)]
 pub enum WalEntryType {
     PageWrite = 1,
+    /// Reserved for future transaction support. Not currently emitted.
     Commit = 2,
     Checkpoint = 3,
 }
@@ -58,6 +59,7 @@ pub struct WalEntry {
 /// Append-only write-ahead log.
 pub struct Wal {
     file: File,
+    dir_path: std::path::PathBuf,
     next_lsn: u64,
 }
 
@@ -80,7 +82,11 @@ impl Wal {
             .truncate(false)
             .open(&wal_path)?;
 
-        let mut wal = Self { file, next_lsn: 1 };
+        let mut wal = Self {
+            file,
+            dir_path: dir_path.to_path_buf(),
+            next_lsn: 1,
+        };
 
         if exists {
             let entries = wal.read_all_entries()?;
@@ -147,36 +153,52 @@ impl Wal {
     }
 
     /// Truncate all entries with LSN **less than** `before_lsn`.
+    ///
+    /// Uses atomic write-to-temp-then-rename to avoid data loss on crash.
     pub fn truncate(&mut self, before_lsn: Lsn) -> MenteResult<()> {
         let entries = self.read_all_entries()?;
         let to_keep: Vec<&WalEntry> = entries.iter().filter(|e| e.lsn >= before_lsn).collect();
 
-        self.file.seek(SeekFrom::Start(0))?;
-        self.file.set_len(0)?;
+        let wal_path = self.dir_path.join("wal.log");
+        let tmp_path = self.dir_path.join("wal.log.tmp");
 
-        for entry in to_keep {
-            let compressed = lz4_flex::compress_prepend_size(&entry.data);
+        {
+            let mut tmp_file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&tmp_path)?;
 
-            let payload_len = 8 + 1 + 8 + compressed.len();
-            let mut payload = Vec::with_capacity(payload_len);
-            payload.extend_from_slice(&entry.lsn.to_le_bytes());
-            payload.push(entry.entry_type as u8);
-            payload.extend_from_slice(&entry.page_id.to_le_bytes());
-            payload.extend_from_slice(&compressed);
+            for entry in to_keep {
+                let compressed = lz4_flex::compress_prepend_size(&entry.data);
 
-            let crc = {
-                let mut h = crc32fast::Hasher::new();
-                h.update(&payload);
-                h.finalize()
-            };
+                let payload_len = 8 + 1 + 8 + compressed.len();
+                let mut payload = Vec::with_capacity(payload_len);
+                payload.extend_from_slice(&entry.lsn.to_le_bytes());
+                payload.push(entry.entry_type as u8);
+                payload.extend_from_slice(&entry.page_id.to_le_bytes());
+                payload.extend_from_slice(&compressed);
 
-            self.file.write_all(&(payload_len as u32).to_le_bytes())?;
-            self.file.write_all(&payload)?;
-            self.file.write_all(&crc.to_le_bytes())?;
+                let crc = {
+                    let mut h = crc32fast::Hasher::new();
+                    h.update(&payload);
+                    h.finalize()
+                };
+
+                tmp_file.write_all(&(payload_len as u32).to_le_bytes())?;
+                tmp_file.write_all(&payload)?;
+                tmp_file.write_all(&crc.to_le_bytes())?;
+            }
+
+            tmp_file.sync_data()?;
         }
 
-        self.file.sync_data()?;
-        debug!(before_lsn, "WAL truncated");
+        std::fs::rename(&tmp_path, &wal_path)?;
+
+        // Reopen the renamed file
+        self.file = OpenOptions::new().read(true).write(true).open(&wal_path)?;
+
+        debug!(before_lsn, "WAL truncated (atomic)");
         Ok(())
     }
 
@@ -344,5 +366,76 @@ mod tests {
         let entries = wal.iterate().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].data, big_data);
+    }
+
+    #[test]
+    fn test_append_then_sync_is_durable() {
+        // append() alone does not fsync — callers must call sync() for durability.
+        // This matches the group-commit pattern: batch appends, sync once.
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut wal = Wal::open(dir.path()).unwrap();
+            wal.append(WalEntryType::PageWrite, 1, b"batch1").unwrap();
+            wal.append(WalEntryType::PageWrite, 2, b"batch2").unwrap();
+            wal.sync().unwrap();
+        }
+        {
+            let mut wal = Wal::open(dir.path()).unwrap();
+            let entries = wal.iterate().unwrap();
+            assert_eq!(entries.len(), 2);
+            assert_eq!(entries[0].data, b"batch1");
+            assert_eq!(entries[1].data, b"batch2");
+        }
+    }
+
+    #[test]
+    fn test_truncate_atomic_preserves_kept_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut wal = Wal::open(dir.path()).unwrap();
+            wal.append(WalEntryType::PageWrite, 1, b"old1").unwrap();
+            wal.append(WalEntryType::PageWrite, 2, b"old2").unwrap();
+            wal.append(WalEntryType::PageWrite, 3, b"keep1").unwrap();
+            wal.append(WalEntryType::PageWrite, 4, b"keep2").unwrap();
+
+            wal.truncate(3).unwrap();
+
+            let entries = wal.iterate().unwrap();
+            assert_eq!(entries.len(), 2);
+            assert_eq!(entries[0].data, b"keep1");
+            assert_eq!(entries[1].data, b"keep2");
+        }
+        // Verify survives reopen
+        {
+            let mut wal = Wal::open(dir.path()).unwrap();
+            let entries = wal.iterate().unwrap();
+            assert_eq!(entries.len(), 2);
+            assert_eq!(entries[0].lsn, 3);
+            assert_eq!(entries[1].lsn, 4);
+        }
+    }
+
+    #[test]
+    fn test_truncate_no_temp_file_left_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut wal = Wal::open(dir.path()).unwrap();
+        wal.append(WalEntryType::PageWrite, 1, b"a").unwrap();
+        wal.truncate(2).unwrap();
+
+        // Temp file should not exist after truncation
+        assert!(!dir.path().join("wal.log.tmp").exists());
+    }
+
+    #[test]
+    fn test_append_after_truncate_works() {
+        let (_dir, mut wal) = setup();
+        wal.append(WalEntryType::PageWrite, 1, b"before").unwrap();
+        wal.truncate(2).unwrap();
+
+        // Should be able to append after truncation (file handle is valid)
+        wal.append(WalEntryType::PageWrite, 10, b"after").unwrap();
+        let entries = wal.iterate().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].data, b"after");
     }
 }

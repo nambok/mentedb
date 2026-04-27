@@ -163,6 +163,7 @@ impl CsrGraph {
         // Also remove from delta
         self.delta_edges
             .retain(|e| e.source_idx != idx && e.target_idx != idx);
+        self.id_to_idx.remove(&id);
     }
 
     /// Add an edge to the delta log.
@@ -529,6 +530,46 @@ mod tests {
         g.remove_edge(a, b);
         g.compact();
 
+        let out = g.outgoing(a);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, c);
+    }
+
+    #[test]
+    fn test_remove_node_cleans_id_to_idx() {
+        let mut g = CsrGraph::new();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+
+        g.add_edge(&make_edge(a, b, EdgeType::Caused));
+        assert!(g.contains_node(a));
+        assert!(g.contains_node(b));
+
+        g.remove_node(a);
+        assert!(
+            !g.contains_node(a),
+            "removed node should not be in id_to_idx"
+        );
+        assert!(g.contains_node(b), "unrelated node should still exist");
+
+        // Edges involving the removed node should be gone
+        assert!(g.outgoing(a).is_empty());
+        assert!(g.incoming(b).is_empty());
+    }
+
+    #[test]
+    fn test_remove_node_then_readd() {
+        let mut g = CsrGraph::new();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
+
+        g.add_edge(&make_edge(a, b, EdgeType::Caused));
+        g.remove_node(a);
+
+        // Re-adding the same ID should get a fresh index
+        g.add_edge(&make_edge(a, c, EdgeType::Related));
+        assert!(g.contains_node(a));
         let out = g.outgoing(a);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0, c);

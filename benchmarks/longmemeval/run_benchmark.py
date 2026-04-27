@@ -45,6 +45,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 RESULTS_DIR = os.path.join(SCRIPT_DIR, "results")
 
+# Global extraction cache: session_id -> list of extracted memory dicts
+# Loaded once at startup when --extraction-cache is used.
+EXTRACTION_CACHE = {}
+
 DATASET_FILES = {
     "s": "longmemeval_s_cleaned.json",
     "m": "longmemeval_m_cleaned.json",
@@ -120,13 +124,15 @@ def _extract_one(db, text, llm_provider, max_retries=5):
 def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
     """Ingest all chat sessions for a question into MenteDB.
 
-    When use_cognitive=True, extractions run in parallel (GIL released during
-    HTTP calls), then results are stored sequentially.
+    When EXTRACTION_CACHE is populated, uses cached extractions instead of
+    calling the LLM. Otherwise extractions run in parallel (GIL released
+    during HTTP calls), then results are stored sequentially.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     sessions = question_data["haystack_sessions"]
     dates = question_data["haystack_dates"]
+    session_ids = question_data.get("haystack_session_ids", [None] * len(sessions))
     thread = threading.current_thread().name
     total = len(sessions)
 
@@ -141,39 +147,57 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
             memory_ids.append(mid)
         return memory_ids
 
-    # Phase 1: Extract all sessions in parallel (GIL released during HTTP)
     texts = [format_session(s, d) for s, d in zip(sessions, dates)]
-    extracted = [None] * total
+
+    # Check if we can use the extraction cache
+    if EXTRACTION_CACHE:
+        extracted = []
+        cache_hits = 0
+        for sid in session_ids:
+            cached = EXTRACTION_CACHE.get(sid)
+            if cached is not None:
+                extracted.append(cached)
+                cache_hits += 1
+            else:
+                extracted.append(None)
+        if cache_hits > 0:
+            print(f"    [{thread}] cache hits: {cache_hits}/{total}", flush=True)
+    else:
+        extracted = [None] * total
+
+    # Extract any sessions not in cache
+    uncached = [(i, texts[i]) for i in range(total) if extracted[i] is None and use_cognitive]
     cognitive_ok = 0
     cognitive_fail = 0
     first_error_msg = None
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
-        futures = {pool.submit(_extract_one, db, text, llm_provider): i
-                   for i, text in enumerate(texts)}
-        done = 0
-        for f in as_completed(futures):
-            idx = futures[f]
-            status, payload = f.result()
-            done += 1
+    if uncached:
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(_extract_one, db, text, llm_provider): i
+                       for i, text in uncached}
+            done = 0
+            for f in as_completed(futures):
+                idx = futures[f]
+                status, payload = f.result()
+                done += 1
 
-            if status == "ok":
-                extracted[idx] = payload
-                cognitive_ok += 1
-            else:
-                cognitive_fail += 1
-                if first_error_msg is None:
-                    first_error_msg = payload
-                    if status == "fatal":
-                        print(f"    [{thread}] ⚠️  FATAL: {payload[:200]}", flush=True)
-                        print(f"    [{thread}] ⚠️  Check MENTEDB_LLM_API_KEY and MENTEDB_LLM_PROVIDER", flush=True)
-                    elif status == "model_error":
-                        print(f"    [{thread}] ⚠️  MODEL ERROR: {payload[:200]}", flush=True)
-                    else:
-                        print(f"    [{thread}] ⚠️  Extraction error: {payload[:200]}", flush=True)
+                if status == "ok":
+                    extracted[idx] = payload
+                    cognitive_ok += 1
+                else:
+                    cognitive_fail += 1
+                    if first_error_msg is None:
+                        first_error_msg = payload
+                        if status == "fatal":
+                            print(f"    [{thread}] FATAL: {payload[:200]}", flush=True)
+                        elif status == "model_error":
+                            print(f"    [{thread}] MODEL ERROR: {payload[:200]}", flush=True)
+                        else:
+                            print(f"    [{thread}] Extraction error: {payload[:200]}", flush=True)
 
-            if done % 10 == 0 or done == total:
-                print(f"    [{thread}] extracted {done}/{total} (ok: {cognitive_ok}, fail: {cognitive_fail})", flush=True)
+                if done % 10 == 0 or done == len(uncached):
+                    print(f"    [{thread}] extracted {done}/{len(uncached)} (ok: {cognitive_ok}, fail: {cognitive_fail})", flush=True)
+
 
     # Phase 2: Store all extracted memories sequentially (fast, local only)
     memory_ids = []
@@ -182,17 +206,14 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
             result = db.store_extracted(memories)
             memory_ids.extend(result.get("stored_ids", []))
 
-    # Phase 3: Store raw sessions as episodic memories for keyword coverage.
-    # Extracted facts capture the "gist" but may miss casual details like
-    # place names or numbers. BM25 search on raw text catches those.
-    # Use store_extracted for batch embedding (1 API call instead of 50).
+    # Phase 3: Store raw sessions as semantic memories for keyword coverage.
+    # Using semantic (not episodic) so enrichment_candidates() won't re-extract them.
     raw_memories = []
     for i, (text, date) in enumerate(zip(texts, dates)):
-        # Cap content to avoid exceeding node size limits (32KB max)
         content = text[:8000] if len(text) > 8000 else text
         raw_memories.append({
             "content": content,
-            "memory_type": "episodic",
+            "memory_type": "semantic",
             "tags": [f"date:{date}", f"session:{i}", "raw"],
             "confidence": 0.3,
             "embedding_key": text[:500],
@@ -200,8 +221,7 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
     result = db.store_extracted(raw_memories)
     memory_ids.extend(result.get("stored_ids", []))
 
-    # Build community summaries for entity clusters (e.g., "health devices", "musical instruments")
-    # These summaries make entities discoverable by abstract category queries.
+    # Build community summaries for entity clusters
     if use_cognitive and llm_provider:
         try:
             community_ids = db.build_communities()
@@ -212,6 +232,29 @@ def ingest_sessions(db, question_data, use_cognitive=True, llm_provider=None):
 
     print(f"    [{thread}] stored {len(memory_ids)} memories", flush=True)
     return memory_ids
+
+
+def run_enrichment_pipeline(db, cognitive_provider, thread_name="main"):
+    """Run Phases 2-4 of the sleeptime enrichment pipeline after ingestion.
+
+    Phase 1 (batch LLM extraction) is skipped because ingest_sessions
+    already extracts memories. This runs:
+      Phase 2: Entity linking (rule-based + LLM resolution)
+      Phase 3: Community detection with LLM summaries
+      Phase 4: User model generation
+    """
+    try:
+        result = db.run_enrichment(provider=cognitive_provider, current_turn=0, skip_extraction=True)
+        print(f"    [{thread_name}] enrichment complete: "
+              f"stored={result['memories_stored']}, "
+              f"entities={result['entities_extracted']}, "
+              f"linked={result['sync_linked']}+{result['llm_linked']}(llm), "
+              f"communities={result['communities_created']}, "
+              f"user_model={result['user_model_updated']}", flush=True)
+        return result
+    except Exception as e:
+        print(f"    [{thread_name}] enrichment failed: {e}", flush=True)
+        return None
 
 
 def retrieve_and_answer(db, question_data, llm_client, llm_provider, top_k=20, reader_model=None):
@@ -255,7 +298,8 @@ def retrieve_and_answer(db, question_data, llm_client, llm_provider, top_k=20, r
 
 def process_single_question(question_data, embedding_provider, embedding_api_key,
                             embedding_model, use_cognitive, cognitive_provider,
-                            llm_provider, top_k, reader_model=None):
+                            llm_provider, top_k, reader_model=None,
+                            run_enrichment_pipeline_flag=False):
     """Process a single question end-to-end. Designed to run in a thread pool."""
     import mentedb as mentedb_pkg
     import shutil
@@ -285,7 +329,17 @@ def process_single_question(question_data, embedding_provider, embedding_api_key
         mids = ingest_sessions(db, question_data, use_cognitive=use_cognitive,
                        llm_provider=cognitive_provider)
         ingest_time = time.time() - ingest_start
-        print(f"  [{thread}] {qid} — ingested {len(mids)} memories in {ingest_time:.0f}s, searching...", flush=True)
+        print(f"  [{thread}] {qid} — ingested {len(mids)} memories in {ingest_time:.0f}s", flush=True)
+
+        # Run enrichment pipeline if requested (after all sessions are ingested)
+        if run_enrichment_pipeline_flag and cognitive_provider:
+            enrich_start = time.time()
+            print(f"  [{thread}] {qid} — running enrichment pipeline...", flush=True)
+            run_enrichment_pipeline(db, cognitive_provider, thread_name=thread)
+            enrich_time = time.time() - enrich_start
+            print(f"  [{thread}] {qid} — enrichment took {enrich_time:.0f}s", flush=True)
+
+        print(f"  [{thread}] {qid} — searching...", flush=True)
 
         search_start = time.time()
         # Retry search+answer on transient connection errors (20 attempts)
@@ -324,7 +378,8 @@ def process_single_question(question_data, embedding_provider, embedding_api_key
 
 
 def run_benchmark(variant="s", top_k=60, limit=None, offset=0, resume_from=None,
-                  use_cognitive=True, workers=3, reader_model=None):
+                  use_cognitive=True, workers=3, reader_model=None,
+                  use_enrichment=False):
     """Run the full LongMemEval benchmark."""
     if not has_llm_key():
         print("Need OPENAI_API_KEY, ANTHROPIC_API_KEY, or OLLAMA_MODEL for answer generation.")
@@ -418,6 +473,7 @@ def run_benchmark(variant="s", top_k=60, limit=None, offset=0, resume_from=None,
         print(f"    Provider:       {cognitive_provider}")
         print(f"    Model:          {cognitive_model}")
     print(f"  Reader:           {llm_provider} / {reader_model}")
+    print(f"  Enrichment:       {'ON (4-phase pipeline)' if use_enrichment else 'OFF'}")
     print(f"  Top-K:            {top_k}")
     print(f"  Workers:          {workers}")
     print(f"  Engine features:")
@@ -443,7 +499,8 @@ def run_benchmark(variant="s", top_k=60, limit=None, offset=0, resume_from=None,
     run_tag = f"q{range_start}-{range_end}"
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    output_file = os.path.join(RESULTS_DIR, f"hypotheses_{run_tag}.jsonl")
+    enrichment_tag = "_enriched" if use_enrichment else ""
+    output_file = os.path.join(RESULTS_DIR, f"hypotheses{enrichment_tag}_{run_tag}.jsonl")
 
     print(f"  Questions:        {range_start}..{range_end} of {total_available}")
     print(f"  Output:           {output_file}")
@@ -484,6 +541,7 @@ def run_benchmark(variant="s", top_k=60, limit=None, offset=0, resume_from=None,
                 question_data, embedding_provider, embedding_api_key,
                 embedding_model, use_cognitive, cognitive_provider,
                 llm_provider, top_k, reader_model=reader_model,
+                run_enrichment_pipeline_flag=use_enrichment,
             )
             results.append(entry)
             with open(output_file, "a") as f:
@@ -500,6 +558,7 @@ def run_benchmark(variant="s", top_k=60, limit=None, offset=0, resume_from=None,
                     question_data, embedding_provider, embedding_api_key,
                     embedding_model, use_cognitive, cognitive_provider,
                     llm_provider, top_k, reader_model,
+                    use_enrichment,
                 )
                 futures[future] = question_data["question_id"]
 
@@ -560,7 +619,19 @@ def main():
                         help="Number of parallel workers (default: 3)")
     parser.add_argument("--reader-model", type=str, default=None,
                         help="Override reader model (default: gpt-4o for OpenAI, Sonnet for Anthropic)")
+    parser.add_argument("--enrichment", action="store_true",
+                        help="Run full 4-phase sleeptime enrichment after ingestion")
+    parser.add_argument("--extraction-cache", type=str, default=None,
+                        help="Path to extraction cache JSON (from pre_extract.py)")
     args = parser.parse_args()
+
+    # Load extraction cache if provided
+    if args.extraction_cache and os.path.exists(args.extraction_cache):
+        global EXTRACTION_CACHE
+        with open(args.extraction_cache) as f:
+            EXTRACTION_CACHE = json.load(f)
+        valid = sum(1 for v in EXTRACTION_CACHE.values() if v is not None)
+        print(f"Loaded extraction cache: {valid} sessions from {args.extraction_cache}")
 
     run_benchmark(
         variant=args.dataset,
@@ -571,6 +642,7 @@ def main():
         use_cognitive=not args.no_cognitive,
         workers=args.workers,
         reader_model=args.reader_model,
+        use_enrichment=args.enrichment,
     )
 
 

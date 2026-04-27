@@ -1,6 +1,6 @@
 //! Sorted salience index for top-k retrieval by importance score.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,7 @@ pub struct SalienceIndex {
 
 struct SalienceInner {
     tree: BTreeMap<OrderedF32, Vec<MemoryId>>,
+    id_to_salience: HashMap<MemoryId, OrderedF32>,
 }
 
 impl SalienceIndex {
@@ -50,6 +51,7 @@ impl SalienceIndex {
         Self {
             inner: RwLock::new(SalienceInner {
                 tree: BTreeMap::new(),
+                id_to_salience: HashMap::new(),
             }),
         }
     }
@@ -59,6 +61,7 @@ impl SalienceIndex {
         let mut inner = self.inner.write();
         let key = OrderedF32::from_f32(salience);
         inner.tree.entry(key).or_default().push(id);
+        inner.id_to_salience.insert(id, key);
     }
 
     /// Update the salience score for a memory.
@@ -93,17 +96,13 @@ impl SalienceIndex {
                 inner.tree.remove(&key);
             }
         }
+        inner.id_to_salience.remove(&id);
     }
 
-    /// Get the salience score for a memory (linear scan: use sparingly).
+    /// Get the salience score for a memory (O(1) via reverse lookup).
     pub fn get_salience(&self, id: MemoryId) -> Option<f32> {
         let inner = self.inner.read();
-        for (&key, ids) in &inner.tree {
-            if ids.contains(&id) {
-                return Some(key.to_f32());
-            }
-        }
-        None
+        inner.id_to_salience.get(&id).map(|k| k.to_f32())
     }
 }
 
@@ -139,12 +138,20 @@ impl SalienceIndex {
             .map_err(|e| MenteError::Serialization(e.to_string()))?;
 
         let mut tree = BTreeMap::new();
+        let mut id_to_salience = HashMap::new();
         for (salience, ids) in snapshot.entries {
-            tree.insert(OrderedF32::from_f32(salience), ids);
+            let key = OrderedF32::from_f32(salience);
+            for &id in &ids {
+                id_to_salience.insert(id, key);
+            }
+            tree.insert(key, ids);
         }
 
         Ok(Self {
-            inner: RwLock::new(SalienceInner { tree }),
+            inner: RwLock::new(SalienceInner {
+                tree,
+                id_to_salience,
+            }),
         })
     }
 }
@@ -219,5 +226,63 @@ mod tests {
         let mut sorted_keys = keys.clone();
         sorted_keys.sort();
         assert_eq!(keys, sorted_keys);
+    }
+
+    #[test]
+    fn test_get_salience_o1() {
+        let idx = SalienceIndex::new();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
+
+        idx.insert(a, 0.3);
+        idx.insert(b, 0.7);
+        idx.insert(c, 0.5);
+
+        assert!((idx.get_salience(a).unwrap() - 0.3).abs() < 0.001);
+        assert!((idx.get_salience(b).unwrap() - 0.7).abs() < 0.001);
+        assert!((idx.get_salience(c).unwrap() - 0.5).abs() < 0.001);
+        assert!(idx.get_salience(MemoryId::new()).is_none());
+    }
+
+    #[test]
+    fn test_get_salience_after_update() {
+        let idx = SalienceIndex::new();
+        let a = MemoryId::new();
+
+        idx.insert(a, 0.3);
+        assert!((idx.get_salience(a).unwrap() - 0.3).abs() < 0.001);
+
+        idx.update(a, 0.3, 0.9);
+        assert!((idx.get_salience(a).unwrap() - 0.9).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_get_salience_after_remove() {
+        let idx = SalienceIndex::new();
+        let a = MemoryId::new();
+
+        idx.insert(a, 0.5);
+        assert!(idx.get_salience(a).is_some());
+
+        idx.remove(a, 0.5);
+        assert!(idx.get_salience(a).is_none());
+    }
+
+    #[test]
+    fn test_save_load_preserves_reverse_map() {
+        let idx = SalienceIndex::new();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        idx.insert(a, 0.4);
+        idx.insert(b, 0.8);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("salience.bin");
+        idx.save(&path).unwrap();
+
+        let loaded = SalienceIndex::load(&path).unwrap();
+        assert!((loaded.get_salience(a).unwrap() - 0.4).abs() < 0.001);
+        assert!((loaded.get_salience(b).unwrap() - 0.8).abs() < 0.001);
     }
 }

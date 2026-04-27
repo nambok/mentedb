@@ -159,6 +159,35 @@ class MenteDB:
         """
         return self._db.build_communities()
 
+    def run_enrichment(self, provider: str | None = None, current_turn: int = 0, skip_extraction: bool = False) -> dict:
+        """Run the full 4-phase sleeptime enrichment pipeline.
+
+        Phases:
+          1. Batch LLM extraction — episodic memories → semantic + entities
+          2. Entity linking — rule-based + LLM resolution
+          3. Community detection — category clustering + LLM summaries
+          4. User model — always-scoped profile from all knowledge
+
+        When skip_extraction=True, Phase 1 is skipped (useful when
+        memories have already been extracted during ingest).
+
+        Requires MENTEDB_LLM_PROVIDER and MENTEDB_LLM_API_KEY env vars.
+        Returns a dict with enrichment statistics.
+        """
+        return self._db.run_enrichment(provider=provider, current_turn=current_turn, skip_extraction=skip_extraction)
+
+    def needs_enrichment(self) -> bool:
+        """Check if enrichment is pending."""
+        return self._db.needs_enrichment()
+
+    def link_entities(self) -> dict:
+        """Link entities across sessions by name + embedding similarity."""
+        return self._db.link_entities()
+
+    def entity_memories(self) -> list:
+        """Get all entity memory nodes."""
+        return self._db.entity_memories()
+
     def close(self):
         """Flush and close the database."""
         self._db.close()
