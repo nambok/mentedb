@@ -112,16 +112,15 @@ impl Wal {
     /// should hold it only for the duration of append + fsync.
     pub fn lock_exclusive(&self) -> MenteResult<()> {
         use fs2::FileExt;
-        self.file.lock_exclusive().map_err(|e| {
-            MenteError::Storage(format!("WAL flock failed: {e}"))
-        })
+        self.file
+            .lock_exclusive()
+            .map_err(|e| MenteError::Storage(format!("WAL flock failed: {e}")))
     }
 
     /// Release the file lock on the WAL file.
     pub fn unlock(&self) -> MenteResult<()> {
-        fs2::FileExt::unlock(&self.file).map_err(|e| {
-            MenteError::Storage(format!("WAL unlock failed: {e}"))
-        })
+        fs2::FileExt::unlock(&self.file)
+            .map_err(|e| MenteError::Storage(format!("WAL unlock failed: {e}")))
     }
 
     /// Append an entry to the WAL and return its LSN.
