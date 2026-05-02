@@ -378,13 +378,14 @@ impl MenteDB {
     /// All passes merge via RRF (Reciprocal Rank Fusion), so results that
     /// appear in multiple strategies rank highest. This mirrors human memory:
     /// instant recall → active search → deep dig → exhaustive category scan.
-    #[pyo3(signature = (query, k=10, provider=None, tags=None, before=None))]
+    #[pyo3(signature = (query, k=10, provider=None, tags=None, tags_or=None, before=None))]
     fn search_expanded(
         &self,
         query: &str,
         k: usize,
         provider: Option<&str>,
         tags: Option<Vec<String>>,
+        tags_or: Option<bool>,
         before: Option<u64>,
     ) -> PyResult<Vec<SearchResult>> {
         let db = self
@@ -408,6 +409,8 @@ impl MenteDB {
         if debug {
             eprintln!("[search_expanded] synthesis model: {}", synth_model);
         }
+
+        let use_tags_or = tags_or.unwrap_or(false);
 
         // Adaptive K values for escalating retrieval depth
         let k1 = std::cmp::min(k, 10); // instant recall
@@ -505,7 +508,7 @@ impl MenteDB {
         }
 
         let pass1_hits = db
-            .recall_hybrid_multi(&embeddings, Some(&all_queries), k1, tag_refs, time_range)
+            .recall_hybrid_multi_mode(&embeddings, Some(&all_queries), k1, tag_refs, use_tags_or, time_range)
             .map_err(to_pyerr)?;
 
         // --- Pass 2: Direct text search with original query (active search) ---
@@ -516,7 +519,7 @@ impl MenteDB {
             hash_embedding(query, 384)
         };
         let pass2_hits = db
-            .recall_hybrid_at(
+            .recall_hybrid_at_mode(
                 &query_emb,
                 Some(query),
                 k2,
@@ -525,6 +528,7 @@ impl MenteDB {
                     .unwrap_or_default()
                     .as_micros() as u64,
                 tag_refs,
+                use_tags_or,
                 time_range,
             )
             .map_err(to_pyerr)?;
@@ -548,7 +552,7 @@ impl MenteDB {
             } else {
                 hash_embedding(nouns.trim(), 384)
             };
-            db.recall_hybrid_at(
+            db.recall_hybrid_at_mode(
                 &noun_emb,
                 Some(nouns.trim()),
                 k3,
@@ -557,6 +561,7 @@ impl MenteDB {
                     .unwrap_or_default()
                     .as_micros() as u64,
                 tag_refs,
+                use_tags_or,
                 time_range,
             )
             .map_err(to_pyerr)?
@@ -594,7 +599,7 @@ impl MenteDB {
                         hash_embedding(term, 384)
                     };
                     let hits = db
-                        .recall_hybrid_at(
+                        .recall_hybrid_at_mode(
                             &kw_emb,
                             Some(term),
                             k4_per,
@@ -603,6 +608,7 @@ impl MenteDB {
                                 .unwrap_or_default()
                                 .as_micros() as u64,
                             tag_refs,
+                            use_tags_or,
                             time_range,
                         )
                         .map_err(to_pyerr)?;
@@ -630,7 +636,7 @@ impl MenteDB {
                         hash_embedding(term, 384)
                     };
                     let hits = db
-                        .recall_hybrid_at(
+                        .recall_hybrid_at_mode(
                             &kw_emb,
                             Some(term),
                             k4_per,
@@ -639,6 +645,7 @@ impl MenteDB {
                                 .unwrap_or_default()
                                 .as_micros() as u64,
                             tag_refs,
+                            use_tags_or,
                             time_range,
                         )
                         .map_err(to_pyerr)?;
@@ -900,7 +907,7 @@ impl MenteDB {
                         hash_embedding(query, 384)
                     };
                     let window_hits = db
-                        .recall_hybrid_at(
+                        .recall_hybrid_at_mode(
                             &window_emb,
                             Some(query),
                             20,
@@ -909,6 +916,7 @@ impl MenteDB {
                                 .unwrap_or_default()
                                 .as_micros() as u64,
                             tag_refs,
+                            use_tags_or,
                             window_range,
                         )
                         .map_err(to_pyerr)?;
@@ -953,7 +961,7 @@ impl MenteDB {
                             hash_embedding(query, 384)
                         };
                         let wide_hits = db
-                            .recall_hybrid_at(
+                            .recall_hybrid_at_mode(
                                 &wide_emb,
                                 Some(query),
                                 30,
@@ -962,6 +970,7 @@ impl MenteDB {
                                     .unwrap_or_default()
                                     .as_micros() as u64,
                                 tag_refs,
+                                use_tags_or,
                                 wide_range,
                             )
                             .map_err(to_pyerr)?;
@@ -1139,7 +1148,7 @@ impl MenteDB {
                     .iter()
                     .enumerate()
                     .map(|(i, c)| {
-                        let snip = &c[..std::cmp::min(c.len(), 200)];
+                        let snip = &c[..c.floor_char_boundary(std::cmp::min(c.len(), 200))];
                         format!("[{}] {}", i, snip)
                     })
                     .collect::<Vec<_>>()
@@ -1197,7 +1206,7 @@ impl MenteDB {
                                             hash_embedding(term, 384)
                                         };
                                         let hits = db
-                                            .recall_hybrid_at(
+                                            .recall_hybrid_at_mode(
                                                 &kw_emb,
                                                 Some(term),
                                                 k5_per,
@@ -1207,6 +1216,7 @@ impl MenteDB {
                                                     .as_micros()
                                                     as u64,
                                                 tag_refs,
+                                                use_tags_or,
                                                 time_range,
                                             )
                                             .map_err(to_pyerr)?;
@@ -1368,7 +1378,11 @@ impl MenteDB {
                                 }
                                 for (i, (id, content)) in memory_contents.iter().enumerate() {
                                     let relevance = scores.get(i).copied().unwrap_or(0.0);
-                                    let snip = &content[..std::cmp::min(content.len(), 80)];
+                                    let snip = {
+                                        let max = std::cmp::min(content.len(), 80);
+                                        let end = content.floor_char_boundary(max);
+                                        &content[..end]
+                                    };
                                     if debug {
                                         eprintln!(
                                             "[rerank]   [{}] score={} | {}",
@@ -2087,7 +2101,7 @@ impl MenteDB {
                         if debug {
                             eprintln!(
                                 "[synthesis] Generated: {}",
-                                &final_synthesis[..std::cmp::min(final_synthesis.len(), 200)]
+                                &final_synthesis[..final_synthesis.floor_char_boundary(std::cmp::min(final_synthesis.len(), 200))]
                             );
                         }
 
@@ -2613,6 +2627,7 @@ impl MenteDB {
         }
 
         // Phase 2: Batch embed in chunks (OpenAI has payload limits)
+        let embed_start = std::time::Instant::now();
         let embed_keys: Vec<&str> = parsed.iter().map(|p| p.embed_key.as_str()).collect();
         let embeddings = if let Some(ref embedder) = self.embedder {
             let mut all_embs = Vec::with_capacity(embed_keys.len());
@@ -2624,6 +2639,7 @@ impl MenteDB {
         } else {
             embed_keys.iter().map(|k| hash_embedding(k, 384)).collect()
         };
+        let embed_ms = embed_start.elapsed().as_millis();
 
         // Phase 3: Store all memories with pre-computed embeddings.
         // Entity memories get attributes populated and graph edges created.
@@ -2631,23 +2647,36 @@ impl MenteDB {
         let mut stored_ids = Vec::with_capacity(parsed.len());
         let mut entity_ids: Vec<(String, String, MemoryId)> = Vec::new(); // (name, type, id)
 
-        // Build an index of existing entity nodes for resolution
+        // Build an index of existing entity nodes for resolution (only if batch has entities)
+        let has_entities = parsed.iter().any(|m| m.entity_name.is_some());
         let mut existing_entities: std::collections::HashMap<String, MemoryId> =
             std::collections::HashMap::new();
-        for mid in db.memory_ids() {
-            if let Ok(node) = db.get_memory(mid)
-                && node.tags.iter().any(|t| t.starts_with("entity_name:"))
-            {
-                let key = node
-                    .tags
-                    .iter()
-                    .filter(|t| t.starts_with("entity_name:") || t.starts_with("entity_type:"))
-                    .map(|t| t.to_lowercase())
-                    .collect::<Vec<_>>()
-                    .join("|");
-                existing_entities.insert(key, mid);
+        if has_entities {
+            for mid in db.memory_ids() {
+                if let Ok(node) = db.get_memory(mid)
+                    && node.tags.iter().any(|t| t.starts_with("entity_name:"))
+                {
+                    let key = node
+                        .tags
+                        .iter()
+                        .filter(|t| {
+                            t.starts_with("entity_name:") || t.starts_with("entity_type:")
+                        })
+                        .map(|t| t.to_lowercase())
+                        .collect::<Vec<_>>()
+                        .join("|");
+                    existing_entities.insert(key, mid);
+                }
             }
         }
+
+        // Separate batch-storable nodes from entity-resolution nodes
+        struct PendingNode {
+            node: MemoryNode,
+            entity_name: Option<String>,
+            entity_type: Option<String>,
+        }
+        let mut batch_nodes: Vec<PendingNode> = Vec::with_capacity(parsed.len());
 
         for (mem, emb) in parsed.into_iter().zip(embeddings.into_iter()) {
             let is_entity = mem.entity_name.is_some() && mem.entity_attributes.is_some();
@@ -2680,7 +2709,6 @@ impl MenteDB {
                                 );
                             }
                         }
-                        // Re-store the updated node
                         let _ = db.store(existing_node);
                         stored_ids.push(existing_id.to_string());
                         entity_ids.push((
@@ -2688,7 +2716,7 @@ impl MenteDB {
                             mem.entity_type.unwrap_or_default(),
                             existing_id,
                         ));
-                        continue; // Skip creating a new node
+                        continue;
                     }
                 }
             }
@@ -2775,11 +2803,36 @@ impl MenteDB {
             }
 
             let id = node.id;
-            db.store(node).map_err(to_pyerr)?;
-            stored_ids.push(id.to_string());
+            batch_nodes.push(PendingNode {
+                node,
+                entity_name: mem.entity_name,
+                entity_type: mem.entity_type,
+            });
+        }
 
-            // Track entity nodes for graph edge creation
-            if let (Some(name), Some(etype)) = (mem.entity_name, mem.entity_type) {
+        // Batch store all collected nodes in a single transaction
+        let store_start = std::time::Instant::now();
+        {
+            let nodes_vec: Vec<MemoryNode> =
+                batch_nodes.iter().map(|p| p.node.clone()).collect();
+            db.store_batch(nodes_vec).map_err(to_pyerr)?;
+        }
+        let store_ms = store_start.elapsed().as_millis();
+
+        if debug {
+            eprintln!(
+                "[store_extracted] embed={}ms store={}ms count={}",
+                embed_ms, store_ms, batch_nodes.len()
+            );
+        }
+
+        // Update tracking structures after batch store
+        for pending in &batch_nodes {
+            let id = pending.node.id;
+            stored_ids.push(id.to_string());
+            if let (Some(name), Some(etype)) =
+                (pending.entity_name.as_ref(), pending.entity_type.as_ref())
+            {
                 existing_entities.insert(
                     [
                         format!("entity_name:{}", name.to_lowercase()),
@@ -2788,7 +2841,7 @@ impl MenteDB {
                     .join("|"),
                     id,
                 );
-                entity_ids.push((name, etype, id));
+                entity_ids.push((name.clone(), etype.clone(), id));
             }
         }
 
@@ -3038,7 +3091,7 @@ impl MenteDB {
                     if debug {
                         eprintln!(
                             "[consolidate] Gist: {}",
-                            &gist_content[..std::cmp::min(gist_content.len(), 100)]
+                            &gist_content[..gist_content.floor_char_boundary(std::cmp::min(gist_content.len(), 100))]
                         );
                     }
 
@@ -3444,7 +3497,7 @@ impl MenteDB {
                         eprintln!(
                             "[community] {}: {}",
                             category,
-                            &summary_text[..std::cmp::min(summary_text.len(), 120)]
+                            &summary_text[..summary_text.floor_char_boundary(std::cmp::min(summary_text.len(), 120))]
                         );
                     }
 
@@ -3624,6 +3677,15 @@ impl MenteDB {
             db.close().map_err(to_pyerr)?;
         }
         Ok(())
+    }
+
+    /// Rebuild all indexes from storage. Use after index corruption.
+    fn rebuild_indexes(&self) -> PyResult<usize> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        db.rebuild_indexes().map_err(to_pyerr)
     }
 
     /// Check if enrichment is pending.

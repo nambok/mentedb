@@ -498,6 +498,40 @@ impl MenteDb {
         Ok(())
     }
 
+    /// Store multiple memories in a single batch transaction.
+    ///
+    /// Uses a single WAL lock for all writes, avoiding per-write overhead of
+    /// flock acquisition, header reload, and LSN scan. Significantly faster
+    /// for bulk inserts.
+    pub fn store_batch(&self, nodes: Vec<MemoryNode>) -> MenteResult<Vec<MemoryId>> {
+        // Validate all embeddings upfront
+        for node in &nodes {
+            if self.embedding_dim > 0
+                && !node.embedding.is_empty()
+                && node.embedding.len() != self.embedding_dim
+            {
+                return Err(MenteError::EmbeddingDimensionMismatch {
+                    got: node.embedding.len(),
+                    expected: self.embedding_dim,
+                });
+            }
+        }
+
+        let page_ids = self.storage.store_memory_batch(&nodes)?;
+
+        let mut ids = Vec::with_capacity(nodes.len());
+        let mut page_map = self.page_map.write();
+        for (node, page_id) in nodes.iter().zip(page_ids.iter()) {
+            page_map.insert(node.id, *page_id);
+            self.index.index_memory(node);
+            self.graph.add_memory(node.id);
+            ids.push(node.id);
+        }
+        drop(page_map);
+
+        Ok(ids)
+    }
+
     /// Recalls memories using an MQL query string.
     ///
     /// Parses the query, builds an execution plan, runs it against the
@@ -581,16 +615,31 @@ impl MenteDb {
         tags: Option<&[&str]>,
         time_range: Option<(Timestamp, Timestamp)>,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
+        self.recall_hybrid_at_mode(embedding, query_text, k, at, tags, false, time_range)
+    }
+
+    /// Hybrid recall with configurable tag mode (AND vs OR).
+    pub fn recall_hybrid_at_mode(
+        &self,
+        embedding: &[f32],
+        query_text: Option<&str>,
+        k: usize,
+        at: Timestamp,
+        tags: Option<&[&str]>,
+        tags_or: bool,
+        time_range: Option<(Timestamp, Timestamp)>,
+    ) -> MenteResult<Vec<(MemoryId, f32)>> {
         debug!(
-            "Recall hybrid, k={}, at={}, bm25={}",
+            "Recall hybrid, k={}, at={}, bm25={}, tags_or={}",
             k,
             at,
-            query_text.is_some()
+            query_text.is_some(),
+            tags_or
         );
         // Over-fetch to account for filtered-out results
         let results =
             self.index
-                .hybrid_search_with_query(embedding, query_text, tags, time_range, k * 3);
+                .hybrid_search_with_query_mode(embedding, query_text, tags, tags_or, time_range, k * 3);
         let graph = self.graph.graph();
         let pm = self.page_map.read();
         let filtered: Vec<(MemoryId, f32)> = results
@@ -645,6 +694,19 @@ impl MenteDb {
         tags: Option<&[&str]>,
         time_range: Option<(Timestamp, Timestamp)>,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
+        self.recall_hybrid_multi_mode(embeddings, query_texts, k, tags, false, time_range)
+    }
+
+    /// Multi-query hybrid search with configurable tag mode.
+    pub fn recall_hybrid_multi_mode(
+        &self,
+        embeddings: &[Vec<f32>],
+        query_texts: Option<&[String]>,
+        k: usize,
+        tags: Option<&[&str]>,
+        tags_or: bool,
+        time_range: Option<(Timestamp, Timestamp)>,
+    ) -> MenteResult<Vec<(MemoryId, f32)>> {
         use std::collections::HashMap;
 
         let rrf_k: f32 = 60.0;
@@ -657,7 +719,7 @@ impl MenteDb {
 
         for (i, emb) in embeddings.iter().enumerate() {
             let qt = query_texts.and_then(|texts| texts.get(i).map(|s| s.as_str()));
-            let results = self.recall_hybrid_at(emb, qt, k, now, tags, time_range)?;
+            let results = self.recall_hybrid_at_mode(emb, qt, k, now, tags, tags_or, time_range)?;
             for (rank, (id, _score)) in results.iter().enumerate() {
                 *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
             }
@@ -1135,6 +1197,26 @@ impl MenteDb {
         self.flush()?;
         self.storage.close()?;
         Ok(())
+    }
+
+    /// Rebuild all indexes by scanning every memory in storage.
+    ///
+    /// Use this after index corruption or when index files were overwritten.
+    /// Returns the number of memories re-indexed.
+    pub fn rebuild_indexes(&self) -> MenteResult<usize> {
+        info!("Rebuilding indexes from storage...");
+        let ids: Vec<MemoryId> = self.page_map.read().keys().copied().collect();
+        let total = ids.len();
+        let mut indexed = 0usize;
+        for id in ids {
+            if let Ok(node) = self.get_memory(id) {
+                self.index.index_memory(&node);
+                indexed += 1;
+            }
+        }
+        self.index.save(&self.path.join("indexes"))?;
+        info!(indexed, total, "index rebuild complete");
+        Ok(indexed)
     }
 
     /// Flush indexes, graph, and storage to disk without closing.

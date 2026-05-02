@@ -51,7 +51,36 @@ DATASET_FILES = {
     "oracle": "longmemeval_oracle.json",
 }
 
-READER_PROMPT = """I will give you several history chats between you and a user. Please answer the question based on the relevant chat history.
+READER_PROMPT = """You are an AI assistant with access to stored conversation history. Answer the question based ONLY on the provided history chats.
+
+INSTRUCTIONS:
+1. TEMPORAL QUESTIONS (how long ago, how many days/months/years, when did):
+   - Find the exact date of the event in the history
+   - Current date is {question_date}
+   - Calculate step by step: subtract event date from current date
+   - Example: Event on 2023-01-15, current date 2023-04-15 = exactly 3 months or ~90 days
+   - Give the specific number, not a vague answer
+
+2. KNOWLEDGE-UPDATE QUESTIONS (what is my current X, what did I change to):
+   - Look for the MOST RECENT information about the topic
+   - If something was updated/changed, give the NEW value, not the old one
+   - If multiple mentions exist across different dates, the LATEST date takes priority
+   - Pay attention to words like "changed", "updated", "switched", "new", "now"
+
+3. COUNTING / MULTI-SESSION QUESTIONS (how many times, list all, how many X):
+   - Search through ALL provided history chats carefully
+   - List each distinct item/instance you find BEFORE giving the count
+   - Only count unique items — do not double-count the same thing mentioned twice
+   - Give the final number after your enumeration
+
+4. PREFERENCE / RECOMMENDATION QUESTIONS (suggest, recommend, what would I like):
+   - Use the user's stated preferences, interests, hobbies, and past choices
+   - Base recommendations on specific details from the history
+   - Provide a concrete, personalized recommendation — DO NOT say you don't have information if you can see ANY relevant preferences
+
+5. ABSTENTION (if info is NOT in the history):
+   - ONLY say "I don't have enough information to answer this question." if the history truly contains NO relevant information at all
+   - If there is ANY relevant information, use it to answer — even partial info is better than abstaining
 
 History Chats:
 
@@ -119,12 +148,12 @@ def collect_unique_sessions(dataset):
     return [(sid, sess, date) for sid, (sess, date) in seen.items()]
 
 
-def global_ingest(db, unique_sessions, cognitive_provider, workers=10):
+def global_ingest(db, unique_sessions, cognitive_provider, workers=10, db_dir=None, resume_store=0):
     """Ingest all unique sessions into a single shared DB with LLM extraction."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    import json as _json
 
     total = len(unique_sessions)
-    print(f"\n  Phase 1a: Extracting {total} unique sessions...")
 
     texts = []
     dates = []
@@ -134,37 +163,78 @@ def global_ingest(db, unique_sessions, cognitive_provider, workers=10):
         dates.append(date)
         session_ids.append(sid)
 
-    # Extract in parallel
+    # Check for cached extraction results (supports partial resume)
+    cache_path = os.path.join(db_dir or "/tmp", "extraction_cache.jsonl")
     extracted = [None] * total
-    ok_count = 0
-    fail_count = 0
+    cached_indices = set()
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(_extract_one, db, text, cognitive_provider): i
-            for i, text in enumerate(texts)
-        }
-        for f in tqdm(as_completed(futures), total=total, desc="Extracting"):
-            idx = futures[f]
-            status, payload = f.result()
-            if status == "ok":
-                extracted[idx] = payload
-                ok_count += 1
-            else:
-                fail_count += 1
-                if status == "fatal":
-                    print(f"\n  FATAL: {payload[:200]}")
-                    break
+    if os.path.exists(cache_path):
+        with open(cache_path, "r") as f:
+            for line in f:
+                entry = _json.loads(line)
+                idx = entry["idx"]
+                extracted[idx] = entry["memories"]
+                cached_indices.add(idx)
+        print(f"\n  Phase 1a: Loaded {len(cached_indices)}/{total} cached extractions")
 
-    print(f"  Extraction done: {ok_count} ok, {fail_count} failed")
+    remaining = [(i, texts[i]) for i in range(total) if i not in cached_indices]
+    if remaining:
+        print(f"  Extracting {len(remaining)} remaining sessions...")
+        cache_f = open(cache_path, "a")
+        ok_count = len(cached_indices)
+        fail_count = 0
 
-    # Store extracted memories
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_extract_one, db, text, cognitive_provider): i
+                for i, text in remaining
+            }
+            for f in tqdm(as_completed(futures), total=len(remaining), desc="Extracting"):
+                idx = futures[f]
+                status, payload = f.result()
+                if status == "ok":
+                    extracted[idx] = payload
+                    ok_count += 1
+                    cache_f.write(_json.dumps({"idx": idx, "memories": payload}) + "\n")
+                    cache_f.flush()
+                else:
+                    fail_count += 1
+                    if status == "fatal":
+                        print(f"\n  FATAL: {payload[:200]}")
+                        break
+        cache_f.close()
+        print(f"  Extraction done: {ok_count} ok, {fail_count} failed")
+    else:
+        print(f"  All {total} extractions cached, skipping.")
+
+    # Store extracted memories in large batches to minimize embedding API calls.
+    # Strip entity fields — entity resolution scans all existing memories and
+    # becomes O(n²). The benchmark only needs memories + embeddings for search.
+    # Tag each memory with its source session_id for per-question filtering.
     print(f"  Phase 1b: Storing extracted memories...")
     memory_count = 0
-    for memories in tqdm(extracted, desc="Storing extracted"):
+    EXTRACT_BATCH = 500
+    flat = []
+    for idx, memories in enumerate(extracted):
         if memories is not None:
-            result = db.store_extracted(memories)
-            memory_count += result.get("stored_ids", []).__len__()
+            sid = session_ids[idx]
+            for mem in memories:
+                mem.pop("entity_name", None)
+                mem.pop("entity_type", None)
+                mem.pop("entity_attributes", None)
+                tags = mem.get("tags") or []
+                tags.append(f"sid:{sid}")
+                mem["tags"] = tags
+            flat.extend(memories)
+    all_batches = list(range(0, len(flat), EXTRACT_BATCH))
+    if resume_store > 0:
+        skip_items = resume_store * EXTRACT_BATCH
+        print(f"  Resuming from batch {resume_store} (skipping {skip_items} memories)")
+        all_batches = all_batches[resume_store:]
+    for i, start in enumerate(tqdm(all_batches, desc="Storing extracted")):
+        batch = flat[start:start + EXTRACT_BATCH]
+        result = db.store_extracted(batch)
+        memory_count += len(result.get("stored_ids", []))
 
     # Store raw sessions as semantic for BM25 keyword coverage.
     # Using semantic (not episodic) so enrichment_candidates() won't re-extract them.
@@ -175,7 +245,7 @@ def global_ingest(db, unique_sessions, cognitive_provider, workers=10):
         raw_memories.append({
             "content": content,
             "memory_type": "semantic",
-            "tags": [f"date:{date}", f"session_id:{session_ids[i]}", "raw"],
+            "tags": [f"date:{date}", f"sid:{session_ids[i]}", "raw"],
             "confidence": 0.3,
             "embedding_key": text[:500],
         })
@@ -183,7 +253,7 @@ def global_ingest(db, unique_sessions, cognitive_provider, workers=10):
     # Batch store in chunks to avoid memory pressure
     BATCH_SIZE = 100
     raw_count = 0
-    for start in tqdm(range(0, len(raw_memories), BATCH_SIZE), desc="Storing raw"):
+    for i, start in enumerate(tqdm(range(0, len(raw_memories), BATCH_SIZE), desc="Storing raw")):
         batch = raw_memories[start:start + BATCH_SIZE]
         result = db.store_extracted(batch)
         raw_count += len(result.get("stored_ids", []))
@@ -262,27 +332,92 @@ def run_enrichment_phase(db, cognitive_provider):
 
 # ─── Phase 2: Query ──────────────────────────────────────────────────────────
 
+QUERY_GEN_PROMPT = """Given this question about a user's past conversations, generate 3 alternative search queries to find relevant memories. Cover different angles: keywords, topics, and related concepts.
+
+Question: {question}
+
+Return ONLY a JSON array of 3 strings. Example: ["query 1", "query 2", "query 3"]"""
+
+
+def generate_search_queries(question, llm_client, llm_provider):
+    """Generate additional search queries for multi-query retrieval."""
+    try:
+        prompt = QUERY_GEN_PROMPT.format(question=question)
+        response = llm_chat(llm_client, llm_provider, prompt, temperature=0.0,
+                           max_tokens=150, json_mode=True, model_override="gpt-4o-mini")
+        queries = json.loads(response)
+        if isinstance(queries, list):
+            return [q for q in queries if isinstance(q, str)][:3]
+    except Exception:
+        pass
+    return []
+
+
 def answer_question(db, question_data, llm_client, llm_provider, top_k=60,
                     reader_model=None):
     """Search the shared DB and generate an answer for one question."""
     question = question_data["question"]
     question_date = question_data["question_date"]
-    before_ts = date_to_microseconds(question_date)
 
-    results = db.search_expanded(question, k=top_k, before=before_ts)
+    # Filter search to only this question's haystack sessions
+    haystack_sids = question_data.get("haystack_session_ids", [])
+    session_tags = [f"sid:{sid}" for sid in haystack_sids] if haystack_sids else None
 
+    # Primary search: use search_expanded (LLM-augmented) for main query
+    seen_ids = set()
     retrieved_parts = []
-    for r in results:
-        try:
-            mem = db.get_memory(r.id)
-            content = mem.get("content", "") if isinstance(mem, dict) else getattr(mem, "content", "")
-            if content:
-                retrieved_parts.append(content)
-        except Exception:
-            continue
+
+    try:
+        results = db.search_expanded(question, k=top_k, tags=session_tags,
+                                      tags_or=True)
+        for r in results:
+            if r.id in seen_ids:
+                continue
+            seen_ids.add(r.id)
+            try:
+                mem = db.get_memory(r.id)
+                content = mem.get("content", "") if isinstance(mem, dict) else getattr(mem, "content", "")
+                if content:
+                    retrieved_parts.append(content)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # Auxiliary search: ONLY for preference/recommendation questions
+    # Broad (untagged) search helps find preference memories that don't match query semantically
+    # But hurts knowledge-update by bringing in old info, so we limit to preference questions
+    pref_keywords = ["recommend", "suggest", "prefer", "would i like", "what kind of",
+                     "what type of", "would suit", "would complement", "what should i"]
+    is_preference_q = any(kw in question.lower() for kw in pref_keywords)
+
+    if is_preference_q:
+        extra_queries = generate_search_queries(question, llm_client, llm_provider)
+        extra_queries.append("user personal preferences interests hobbies likes favorites")
+        for query in extra_queries:
+            try:
+                results = db.search_text(query, 50)
+            except Exception:
+                continue
+            for r in results:
+                rid = r.id if hasattr(r, 'id') else r[0]
+                if rid in seen_ids:
+                    continue
+                seen_ids.add(rid)
+                try:
+                    mem = db.get_memory(rid)
+                    content = mem.get("content", "") if isinstance(mem, dict) else getattr(mem, "content", "")
+                    if content:
+                        retrieved_parts.append(content)
+                except Exception:
+                    continue
 
     if not retrieved_parts:
         return "I don't have enough information to answer this question."
+
+    # Limit context to avoid token overflow
+    max_memories = 150
+    retrieved_parts = retrieved_parts[:max_memories]
 
     retrieved_context = "\n\n---\n\n".join(retrieved_parts)
     prompt = READER_PROMPT.format(
@@ -291,7 +426,7 @@ def answer_question(db, question_data, llm_client, llm_provider, top_k=60,
         question=question,
     )
     return llm_chat(llm_client, llm_provider, prompt, temperature=0.0,
-                    max_tokens=300, model_override=reader_model).strip()
+                    max_tokens=500, model_override=reader_model).strip()
 
 
 def query_phase(db, dataset, llm_client, llm_provider, top_k, reader_model,
@@ -363,7 +498,7 @@ def query_phase(db, dataset, llm_client, llm_provider, top_k, reader_model,
 
 def run_enriched_benchmark(variant="s", top_k=60, limit=None, offset=0,
                            workers=3, reader_model=None, skip_enrichment=False,
-                           db_dir=None):
+                           skip_ingest=False, db_dir=None, resume_store=0):
     if not has_llm_key():
         print("Need OPENAI_API_KEY, ANTHROPIC_API_KEY, or OLLAMA_MODEL.")
         sys.exit(1)
@@ -461,11 +596,13 @@ def run_enriched_benchmark(variant="s", top_k=60, limit=None, offset=0,
         has_data = False
 
     ingest_start = time.time()
-    if has_data:
+    if skip_ingest:
+        print(f"\n  Skipping ingest (--skip-ingest)")
+    elif has_data:
         print(f"\n  DB already has data, skipping ingest (use a fresh --db-dir to re-ingest)")
     else:
         # Phase 1: Global ingest
-        global_ingest(db, unique_sessions, cognitive_provider, workers=workers)
+        global_ingest(db, unique_sessions, cognitive_provider, workers=workers, db_dir=tmp_dir, resume_store=resume_store)
 
         # Enrichment
         if not skip_enrichment:
@@ -521,7 +658,7 @@ def main():
         description="LongMemEval with Sleeptime Enrichment (two-phase)")
     parser.add_argument("--dataset", default=os.environ.get("DATASET", "s"),
                         choices=["s", "m", "oracle"])
-    parser.add_argument("--top-k", type=int, default=60)
+    parser.add_argument("--top-k", type=int, default=100)
     parser.add_argument("--limit", type=int, default=None,
                         help="Limit query phase to N questions")
     parser.add_argument("--offset", type=int, default=0,
@@ -530,8 +667,12 @@ def main():
     parser.add_argument("--reader-model", type=str, default=None)
     parser.add_argument("--skip-enrichment", action="store_true",
                         help="Skip enrichment (baseline with shared DB)")
+    parser.add_argument("--skip-ingest", action="store_true",
+                        help="Skip all ingest phases, go straight to query")
     parser.add_argument("--db-dir", type=str, default=None,
                         help="Reuse existing DB dir (skip ingest if populated)")
+    parser.add_argument("--resume-store", type=int, default=0,
+                        help="Resume store phase from batch N (skip first N batches)")
 
     args = parser.parse_args()
     run_enriched_benchmark(
@@ -542,7 +683,9 @@ def main():
         workers=args.workers,
         reader_model=args.reader_model,
         skip_enrichment=args.skip_enrichment,
+        skip_ingest=args.skip_ingest,
         db_dir=args.db_dir,
+        resume_store=args.resume_store,
     )
 
 

@@ -125,10 +125,60 @@ impl Wal {
 
     /// Re-read the WAL file to find the highest LSN, updating next_lsn.
     /// Must be called under flock to see writes from other processes.
+    ///
+    /// Fast path: reads each entry's raw payload and CRC-validates it, but
+    /// skips the expensive LZ4 decompression. Only extracts the LSN (first
+    /// 8 bytes of each payload).
     pub fn reload_lsn(&mut self) -> MenteResult<()> {
-        let entries = self.read_all_entries()?;
-        self.next_lsn = entries.last().map_or(1, |e| e.lsn + 1);
-        debug!(next_lsn = self.next_lsn, "reloaded WAL LSN");
+        self.file.seek(SeekFrom::Start(0))?;
+        let file_len = self.file.metadata()?.len();
+        let mut offset: u64 = 0;
+        let mut last_lsn: Option<u64> = None;
+
+        while offset + 4 <= file_len {
+            // Read payload length
+            let mut len_buf = [0u8; 4];
+            if self.file.read_exact(&mut len_buf).is_err() {
+                break;
+            }
+            let payload_len = u32::from_le_bytes(len_buf) as usize;
+            offset += 4;
+
+            if payload_len < MIN_PAYLOAD || offset + payload_len as u64 + 4 > file_len {
+                break;
+            }
+
+            // Read full payload (no decompress) for CRC validation
+            let mut payload = vec![0u8; payload_len];
+            if self.file.read_exact(&mut payload).is_err() {
+                break;
+            }
+            offset += payload_len as u64;
+
+            // Read and verify CRC
+            let mut crc_buf = [0u8; 4];
+            if self.file.read_exact(&mut crc_buf).is_err() {
+                break;
+            }
+            let stored_crc = u32::from_le_bytes(crc_buf);
+            offset += 4;
+
+            let computed_crc = {
+                let mut h = crc32fast::Hasher::new();
+                h.update(&payload);
+                h.finalize()
+            };
+            if computed_crc != stored_crc {
+                break; // Corruption — stop here, same as read_all_entries.
+            }
+
+            // Extract LSN from first 8 bytes of payload
+            let lsn = u64::from_le_bytes(payload[0..8].try_into().unwrap());
+            last_lsn = Some(lsn);
+        }
+
+        self.next_lsn = last_lsn.map_or(1, |l| l + 1);
+        debug!(next_lsn = self.next_lsn, "reloaded WAL LSN (fast scan)");
         Ok(())
     }
 
@@ -236,6 +286,11 @@ impl Wal {
     /// Current next LSN (useful for external callers).
     pub fn next_lsn(&self) -> Lsn {
         self.next_lsn
+    }
+
+    /// Returns the current WAL file size in bytes.
+    pub fn file_size(&self) -> u64 {
+        self.file.metadata().map(|m| m.len()).unwrap_or(0)
     }
 
     // ---- internal helpers ----

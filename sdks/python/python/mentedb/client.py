@@ -82,14 +82,16 @@ class MenteDB:
         return self._db.search_multi(queries, k, tags, before)
 
     def search_expanded(self, query: str, k: int = 10, provider: str | None = None,
-                        tags: list[str] | None = None, before: int | None = None):
+                        tags: list[str] | None = None, tags_or: bool = False,
+                        before: int | None = None):
         """Expanded search with engine-native query decomposition.
 
         Uses the engine's LLM to decompose the query into sub-queries,
         then runs multi-query RRF search for broader recall.
         Optionally filters by tags and/or time (before timestamp in microseconds).
+        When tags_or=True, matches memories with ANY of the given tags (OR mode).
         """
-        return self._db.search_expanded(query, k, provider, tags, before)
+        return self._db.search_expanded(query, k, provider, tags, tags_or, before)
 
     def get_memory(self, memory_id: str):
         """Retrieve a single memory by its UUID."""

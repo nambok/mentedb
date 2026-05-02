@@ -1,4 +1,4 @@
-# MenteDB Copilot Instructions
+# MenteDB Development Instructions
 
 ## Project overview
 
@@ -6,7 +6,27 @@ MenteDB is a purpose built Rust database engine for AI agent memory. It includes
 
 ## Workspace structure
 
-11 Rust crates under `crates/`, plus standalone SDKs under `sdks/python/` (PyO3) and `sdks/typescript/` (napi-rs). The SDKs are excluded from the Cargo workspace and build independently.
+```
+crates/
+  mentedb-core/       Core types, config, error, MVCC, multi agent
+  mentedb-storage/    Page manager, WAL, buffer pool, backup/restore
+  mentedb-index/      HNSW vector index, bitmap, temporal, salience
+  mentedb-graph/      CSR/CSC graph, traversal, belief propagation
+  mentedb-query/      MQL lexer, parser, planner
+  mentedb-context/    U curve attention layout, delta tracker, serializers
+  mentedb-cognitive/  Stream cognition, write inference, trajectory, phantoms, interference, pain, speculative
+  mentedb-consolidation/ Decay, archival, extraction, compression, GDPR forget
+  mentedb-embedding/  Provider trait, hash/HTTP providers, LRU cache
+  mentedb-server/     Axum REST API, JWT auth, rate limiting, WebSocket
+  mentedb/            Unified facade (MenteDb struct)
+sdks/
+  python/             PyO3 bindings + pure Python client
+  typescript/         napi-rs bindings + TypeScript client
+  python/integrations/langchain/  LangChain memory, retriever, chat history
+  python/integrations/crewai/     CrewAI memory and tool adapter
+```
+
+The SDKs are excluded from the Cargo workspace and build independently.
 
 ## Build, test, and lint
 
@@ -19,6 +39,23 @@ cargo test --workspace
 ```
 
 The server binary is `mentedb-server` and runs on axum with JWT auth, rate limiting, and WebSocket support.
+
+## Key types
+
+- `MemoryNode`: The fundamental storage unit (id, content, memory_type, embedding, metadata, timestamps)
+- `MemoryEdge`: Typed relationship between memories (caused, contradicts, relates_to, obsoletes, etc.)
+- `MenteDb`: The unified facade that coordinates all subsystems
+- `MenteConfig`: Top level config with sub configs for every subsystem
+- `MenteError` / `MenteResult<T>`: Error handling throughout
+
+## Architecture notes
+
+- Storage uses 16KB pages with CLOCK eviction buffer pool and WAL with LZ4 + CRC32
+- HNSW index is built from scratch (not a binding), configurable M and ef parameters
+- Graph uses CSR/CSC hybrid with delta log and compact() to merge
+- MQL is a custom query language parsed by hand written recursive descent parser
+- Context assembly uses U curve attention layout (primacy/recency bias) with delta aware serving
+- 7 cognitive features are unique to MenteDB and do not exist in any other database engine
 
 ## Conventions
 

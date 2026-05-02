@@ -159,6 +159,19 @@ impl IndexManager {
         time_range: Option<(Timestamp, Timestamp)>,
         k: usize,
     ) -> Vec<(MemoryId, f32)> {
+        self.hybrid_search_with_query_mode(query_embedding, query_text, tags, false, time_range, k)
+    }
+
+    /// Hybrid search with configurable tag mode (AND vs OR).
+    pub fn hybrid_search_with_query_mode(
+        &self,
+        query_embedding: &[f32],
+        query_text: Option<&str>,
+        tags: Option<&[&str]>,
+        tags_or: bool,
+        time_range: Option<(Timestamp, Timestamp)>,
+        k: usize,
+    ) -> Vec<(MemoryId, f32)> {
         if k == 0 {
             return Vec::new();
         }
@@ -193,6 +206,8 @@ impl IndexManager {
         let tag_filter: Option<HashSet<MemoryId>> = tags.map(|t| {
             if t.is_empty() {
                 HashSet::new()
+            } else if tags_or {
+                self.bitmap.query_tags_or(t).into_iter().collect()
             } else {
                 self.bitmap.query_tags_and(t).into_iter().collect()
             }

@@ -14,6 +14,9 @@ use crate::wal::{Wal, WalEntryType};
 /// Default number of page frames in the buffer pool.
 const DEFAULT_BUFFER_POOL_SIZE: usize = 1024;
 
+/// Auto-checkpoint when WAL file exceeds this size (8 MB).
+const WAL_AUTO_CHECKPOINT_BYTES: u64 = 8 * 1024 * 1024;
+
 /// The unified storage engine for MenteDB.
 ///
 /// Coordinates page allocation, caching, and write-ahead logging to provide
@@ -257,11 +260,12 @@ impl StorageEngine {
             // Allocate page (using fresh page_count from disk)
             let page_id = pm.allocate_page()?;
 
-            // WAL append + sync
+            // WAL append + sync (WAL fsync guarantees durability;
+            // page data is written but not fsynced — checkpoint handles that)
             let lsn = wal.append(WalEntryType::PageWrite, page_id.0, &buf)?;
             wal.sync()?;
 
-            // Write page data to disk
+            // Write page data to disk (no fsync — recoverable from WAL)
             let mut page = Page::zeroed();
             page.header.page_id = page_id.0;
             let copy_len = buf.len().min(PAGE_DATA_SIZE);
@@ -271,7 +275,6 @@ impl StorageEngine {
             page.header.free_space = (PAGE_DATA_SIZE - copy_len) as u16;
             page.header.checksum = page.compute_checksum();
             pm.write_page(page_id, &page)?;
-            pm.sync()?;
 
             // Release flock — other processes can now write
             wal.unlock()?;
@@ -282,12 +285,90 @@ impl StorageEngine {
         // Update buffer pool outside the flock (optional optimization)
         let _ = lsn; // buffer pool update uses the page already written to disk
 
+        // Auto-checkpoint when WAL exceeds threshold to prevent unbounded growth.
+        // This keeps reload_lsn() fast for subsequent writes.
+        if self.wal.lock().file_size() > WAL_AUTO_CHECKPOINT_BYTES {
+            if let Err(e) = self.checkpoint() {
+                tracing::warn!("auto-checkpoint failed: {e}");
+            }
+        }
+
         info!(
             page_id = page_id.0,
             bytes = serialized.len(),
             "stored memory node"
         );
         Ok(page_id)
+    }
+
+    /// Store multiple [`MemoryNode`]s in a single locked transaction.
+    ///
+    /// Acquires the WAL flock once, writes all nodes, then releases. This avoids
+    /// the per-write overhead of `reload_header` / `reload_lsn` for bulk inserts.
+    /// Auto-checkpoints after the batch if the WAL exceeds the threshold.
+    pub fn store_memory_batch(&self, nodes: &[MemoryNode]) -> MenteResult<Vec<PageId>> {
+        // Phase 1: serialize all nodes upfront (no locks held)
+        let mut bufs = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            let serialized =
+                serde_json::to_vec(node).map_err(|e| MenteError::Serialization(e.to_string()))?;
+            if serialized.len() + 4 > PAGE_DATA_SIZE {
+                return Err(MenteError::CapacityExceeded(format!(
+                    "memory node serialized to {} bytes (max {})",
+                    serialized.len(),
+                    PAGE_DATA_SIZE - 4,
+                )));
+            }
+            let mut buf = Vec::with_capacity(4 + serialized.len());
+            buf.extend_from_slice(&(serialized.len() as u32).to_le_bytes());
+            buf.extend_from_slice(&serialized);
+            bufs.push(buf);
+        }
+
+        // Phase 2: single locked transaction for all writes
+        let page_ids = {
+            let mut wal = self.wal.lock();
+            let mut pm = self.page_manager.lock();
+
+            wal.lock_exclusive()?;
+            pm.reload_header()?;
+            wal.reload_lsn()?;
+
+            let mut ids = Vec::with_capacity(bufs.len());
+            for buf in &bufs {
+                let page_id = pm.allocate_page()?;
+                let lsn = wal.append(WalEntryType::PageWrite, page_id.0, buf)?;
+
+                let mut page = Page::zeroed();
+                page.header.page_id = page_id.0;
+                let copy_len = buf.len().min(PAGE_DATA_SIZE);
+                page.data[..copy_len].copy_from_slice(&buf[..copy_len]);
+                page.header.lsn = lsn;
+                page.header.page_type = PageType::Data as u8;
+                page.header.free_space = (PAGE_DATA_SIZE - copy_len) as u16;
+                page.header.checksum = page.compute_checksum();
+                pm.write_page(page_id, &page)?;
+
+                ids.push(page_id);
+            }
+
+            // WAL fsync only — page data is recoverable from WAL on crash.
+            // Checkpoint handles page file fsync.
+            wal.sync()?;
+            wal.unlock()?;
+
+            ids
+        };
+
+        // Auto-checkpoint if WAL grew too large
+        if self.wal.lock().file_size() > WAL_AUTO_CHECKPOINT_BYTES {
+            if let Err(e) = self.checkpoint() {
+                tracing::warn!("auto-checkpoint failed: {e}");
+            }
+        }
+
+        info!(count = page_ids.len(), "stored memory batch");
+        Ok(page_ids)
     }
 
     /// Load and deserialize a [`MemoryNode`] from the given page.

@@ -1,10 +1,10 @@
-# MenteDB: Claude Code Instructions
+# MenteDB Development Instructions
 
-## What is this?
+## Project overview
 
-MenteDB is a cognition aware database engine for AI agent memory, written in Rust. It is not a wrapper around an existing database. It is a purpose built engine with custom storage, indexing, graph, query, and cognitive layers.
+MenteDB is a purpose built Rust database engine for AI agent memory. It includes custom storage (WAL, buffer pool, pages), HNSW vector indexing, CSR/CSC graph, a custom query language (MQL), context assembly with U curve attention layout, and 7 unique cognitive features (stream cognition, write time inference, trajectory tracking, phantom memories, interference detection, pain signals, speculative pre assembly).
 
-## Project structure
+## Workspace structure
 
 ```
 crates/
@@ -26,34 +26,19 @@ sdks/
   python/integrations/crewai/     CrewAI memory and tool adapter
 ```
 
-## Build and test commands
+The SDKs are excluded from the Cargo workspace and build independently.
+
+## Build, test, and lint
+
+Always run these before committing:
 
 ```bash
-# Check, lint, format (always run before committing)
 cargo fmt --all
 cargo clippy --workspace -- -D warnings
 cargo test --workspace
-
-# Run the server
-cargo run --bin mentedb-server -- --port 8080
-
-# Build Python SDK (requires maturin)
-cd sdks/python && maturin develop && pytest tests/
-
-# Build TypeScript SDK (requires napi-rs CLI)
-cd sdks/typescript && npm run build
 ```
 
-## Coding conventions
-
-- Rust edition 2024
-- All thresholds and heuristics must be configurable via Config structs, never hardcoded
-- Trait based abstractions (e.g. EmbeddingProvider trait)
-- No unwrap() in library code, use MenteResult<T> everywhere
-- No emojis in code, comments, docs, or commit messages
-- No dashes (em dash or en dash) in prose. Use commas instead. Dashes in CLI flags and code are fine.
-- Commit style: conventional (feat:, fix:, chore:), single line, no emojis
-- NEVER include Co-authored-by or Authored-by trailers in commits
+The server binary is `mentedb-server` and runs on axum with JWT auth, rate limiting, and WebSocket support.
 
 ## Key types
 
@@ -72,9 +57,28 @@ cd sdks/typescript && npm run build
 - Context assembly uses U curve attention layout (primacy/recency bias) with delta aware serving
 - 7 cognitive features are unique to MenteDB and do not exist in any other database engine
 
-## What NOT to do
+## Conventions
 
-- Do not add external database dependencies (SQLite, Postgres, etc.), this IS the database
-- Do not remove or weaken any cognitive features
-- Do not hardcode language specific heuristics (stopwords, patterns), use config
-- Do not modify sdks/python/ or sdks/typescript/ Cargo.toml to join the workspace (they build independently)
+- Rust edition 2024, Apache 2.0 license
+- All heuristics and thresholds must be in Config structs, never hardcoded magic numbers
+- Use `MenteResult<T>` for error handling, no `unwrap()` in library code
+- Commit messages: conventional style (feat:, fix:, chore:), single line, no emojis
+- No emojis or em/en dashes in prose anywhere (docs, README, comments). Use commas instead.
+- Trait based design: `EmbeddingProvider`, storage backends, etc.
+
+## Key files
+
+- `crates/mentedb/src/lib.rs`: Unified `MenteDb` facade (open, store, recall, relate, forget, close)
+- `crates/mentedb-core/src/config.rs`: All configuration (MenteConfig and sub configs)
+- `crates/mentedb-core/src/error.rs`: MenteError enum
+- `crates/mentedb-cognitive/src/`: 7 cognitive feature modules
+- `crates/mentedb-server/src/main.rs`: Axum server entry point
+- `.github/workflows/ci.yml`: CI pipeline (check, test, fmt, clippy)
+- `.github/workflows/release.yml`: Release pipeline (crates.io, PyPI, npm)
+
+## Do not
+
+- Add external database dependencies (this IS the database engine)
+- Remove cognitive features or weaken their configurability
+- Hardcode language specific patterns, use config structs
+- Modify SDK Cargo.toml files to join the root workspace
