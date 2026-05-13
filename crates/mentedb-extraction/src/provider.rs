@@ -141,6 +141,7 @@ impl HttpExtractionProvider {
     ) -> Result<String, ExtractionError> {
         let body = serde_json::json!({
             "model": self.config.model,
+            "temperature": 0,
             "response_format": { "type": "json_object" },
             "messages": [
                 { "role": "system", "content": system_prompt },
@@ -189,6 +190,7 @@ impl HttpExtractionProvider {
     ) -> Result<String, ExtractionError> {
         let body = serde_json::json!({
             "model": self.config.model,
+            "temperature": 0,
             "messages": [
                 { "role": "system", "content": system_prompt },
                 { "role": "user", "content": conversation }
@@ -235,6 +237,7 @@ impl HttpExtractionProvider {
         let body = serde_json::json!({
             "model": self.config.model,
             "max_tokens": 4096,
+            "temperature": 0,
             "system": system_prompt,
             "messages": [
                 { "role": "user", "content": conversation }

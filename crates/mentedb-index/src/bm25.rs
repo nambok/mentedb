@@ -129,6 +129,25 @@ impl Bm25Index {
 
     /// Search for documents matching the query, returning top-k by BM25 score.
     pub fn search(&self, query: &str, k: usize) -> Vec<(MemoryId, f32)> {
+        self.search_impl(query, k, None)
+    }
+
+    /// BM25 search restricted to a pre-filtered candidate set.
+    pub fn search_filtered(
+        &self,
+        query: &str,
+        k: usize,
+        candidates: &std::collections::HashSet<MemoryId>,
+    ) -> Vec<(MemoryId, f32)> {
+        self.search_impl(query, k, Some(candidates))
+    }
+
+    fn search_impl(
+        &self,
+        query: &str,
+        k: usize,
+        candidates: Option<&std::collections::HashSet<MemoryId>>,
+    ) -> Vec<(MemoryId, f32)> {
         if k == 0 {
             return Vec::new();
         }
@@ -157,6 +176,12 @@ impl Bm25Index {
                 let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
 
                 for &(doc_id, tf) in &posting.entries {
+                    // Skip if not in candidate set
+                    if let Some(cands) = candidates
+                        && !cands.contains(&doc_id)
+                    {
+                        continue;
+                    }
                     let dl = inner.doc_lengths.get(&doc_id).copied().unwrap_or(1) as f32;
                     let tf_f = tf as f32;
 

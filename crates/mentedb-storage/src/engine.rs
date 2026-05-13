@@ -287,10 +287,10 @@ impl StorageEngine {
 
         // Auto-checkpoint when WAL exceeds threshold to prevent unbounded growth.
         // This keeps reload_lsn() fast for subsequent writes.
-        if self.wal.lock().file_size() > WAL_AUTO_CHECKPOINT_BYTES {
-            if let Err(e) = self.checkpoint() {
-                tracing::warn!("auto-checkpoint failed: {e}");
-            }
+        if self.wal.lock().file_size() > WAL_AUTO_CHECKPOINT_BYTES
+            && let Err(e) = self.checkpoint()
+        {
+            tracing::warn!("auto-checkpoint failed: {e}");
         }
 
         info!(
@@ -361,10 +361,10 @@ impl StorageEngine {
         };
 
         // Auto-checkpoint if WAL grew too large
-        if self.wal.lock().file_size() > WAL_AUTO_CHECKPOINT_BYTES {
-            if let Err(e) = self.checkpoint() {
-                tracing::warn!("auto-checkpoint failed: {e}");
-            }
+        if self.wal.lock().file_size() > WAL_AUTO_CHECKPOINT_BYTES
+            && let Err(e) = self.checkpoint()
+        {
+            tracing::warn!("auto-checkpoint failed: {e}");
         }
 
         info!(count = page_ids.len(), "stored memory batch");

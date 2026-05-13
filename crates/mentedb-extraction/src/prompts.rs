@@ -37,6 +37,12 @@ CRITICAL RULES FOR COMPLETENESS:
    ✗ "User received a crystal chandelier from aunt" (WHEN?)
    ✓ "User received a crystal chandelier from aunt on March 4, 2023"
 
+   MULTI-EVENT CONVERSATIONS: When a conversation mentions events that happened on DIFFERENT dates (e.g., "I started X last Tuesday" and "yesterday I did Y"), resolve EACH event to its own specific date based on the conversation date:
+   - If conversation date is 2023/03/31 and user says "I started last Tuesday" → date is March 28, 2023
+   - If user says "today I discovered X" → date is March 31, 2023 (the conversation date)
+   - If user says "three days ago I did Y" → date is March 28, 2023
+   Each memory MUST have its OWN resolved date, even within the same conversation.
+
 3. ONE FACT PER MEMORY: Each memory should contain exactly ONE distinct fact. Do NOT combine multiple facts into a single memory. Instead of:
    ✗ "User takes yoga at Serenity Yoga and uses Down Dog app at home"
    Do this:

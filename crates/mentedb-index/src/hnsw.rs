@@ -621,6 +621,45 @@ impl HnswIndex {
             .collect()
     }
 
+    /// Brute-force search over a specific subset of memory IDs.
+    ///
+    /// Used for pre-filtered search when a tag/bitmap filter has already
+    /// identified the candidate set. Returns up to `k` results sorted by
+    /// distance (ascending = most similar first for cosine).
+    pub fn search_filtered(
+        &self,
+        query: &[f32],
+        candidates: &HashSet<MemoryId>,
+        k: usize,
+    ) -> Vec<(MemoryId, f32)> {
+        if k == 0 || candidates.is_empty() {
+            return Vec::new();
+        }
+
+        let inner = self.inner.read();
+        let metric = inner.metric;
+
+        let mut results: Vec<(MemoryId, f32)> = candidates
+            .iter()
+            .filter_map(|id| {
+                let idx = inner.id_to_idx.get(id)?;
+                if inner.deleted.contains(idx) {
+                    return None;
+                }
+                let node = &inner.nodes[*idx];
+                if node.vector.len() != query.len() {
+                    return None;
+                }
+                let dist = compute_distance(query, &node.vector, metric);
+                Some((*id, dist))
+            })
+            .collect();
+
+        results.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(k);
+        results
+    }
+
     /// Mark a node as deleted (tombstone). Does not reclaim memory.
     pub fn remove(&self, id: MemoryId) -> MenteResult<()> {
         let mut inner = self.inner.write();

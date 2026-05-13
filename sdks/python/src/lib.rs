@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use mentedb::MenteDb;
 use mentedb::CognitiveConfig;
+use mentedb::MenteDb;
 use mentedb::process_turn::ProcessTurnInput;
 use mentedb_cognitive::pain::{PainRegistry as RustPainRegistry, PainSignal};
 use mentedb_cognitive::stream::{
@@ -413,15 +413,20 @@ impl MenteDB {
         let use_tags_or = tags_or.unwrap_or(false);
 
         // Adaptive K values for escalating retrieval depth
-        let k1 = std::cmp::min(k, 10); // instant recall
-        let k2 = std::cmp::min(k * 3, 30); // active search
-        let k3 = std::cmp::min(k * 5, 50); // deep dig
+        // With pre-filtered tag search, higher k is cheap — let it flow through
+        let k1 = k; // instant recall (multi-query fusion)
+        let k2 = k * 2; // active search (BM25 + vector)
+        let k3 = k * 3; // deep dig (noun-based)
 
         let tag_strs: Option<Vec<&str>> = tags
             .as_ref()
             .map(|t| t.iter().map(|s| s.as_str()).collect());
         let tag_refs: Option<&[&str]> = tag_strs.as_deref();
-        let time_range = before.map(|b| (0u64, b));
+        // Don't use `before` as a hard time filter for search — memory timestamps
+        // may reflect extraction time, not original conversation time.
+        // `before` is used ONLY as temporal reference for date math computations.
+        let time_range: Option<(u64, u64)> = None;
+        let temporal_reference = before;
 
         // --- Pass 1: LLM query expansion + hybrid search (instant recall) ---
         let sub_queries = rt
@@ -465,7 +470,8 @@ impl MenteDB {
             || query_lower.contains("any tips")
             || query_lower.contains("any advice")
             || query_lower.contains("what should")
-            || query_lower.contains("do you think");
+            || query_lower.contains("do you think")
+            || query_lower.contains("can you help me find");
         // Knowledge-update detection (moved early for recency boosting)
         let is_knowledge_update = query_lower.contains("current")
             || query_lower.contains("latest")
@@ -475,6 +481,9 @@ impl MenteDB {
             || query_lower.contains("still")
             || query_lower.contains("most recent")
             || query_lower.contains("switch")
+            || query_lower.contains("previously")
+            || query_lower.contains("how often")
+            || query_lower.contains("how many followers")
             || query_lower.contains("new");
         for sq in &sub_queries {
             if sq.starts_with("ITEM_KEYWORDS:") {
@@ -508,7 +517,14 @@ impl MenteDB {
         }
 
         let pass1_hits = db
-            .recall_hybrid_multi_mode(&embeddings, Some(&all_queries), k1, tag_refs, use_tags_or, time_range)
+            .recall_hybrid_multi_mode(
+                &embeddings,
+                Some(&all_queries),
+                k1,
+                tag_refs,
+                use_tags_or,
+                time_range,
+            )
             .map_err(to_pyerr)?;
 
         // --- Pass 2: Direct text search with original query (active search) ---
@@ -577,7 +593,7 @@ impl MenteDB {
         let mut pass4_broad_hits: Vec<(mentedb_core::types::MemoryId, f32)> = Vec::new();
 
         if is_counting {
-            let k4_per = 8; // results per keyword
+            let k4_per = 15; // results per keyword (increased for exhaustive retrieval)
 
             // Search each item keyword individually (specific subtypes)
             if let Some(ref kw_str) = item_keywords {
@@ -831,7 +847,7 @@ impl MenteDB {
         let mut temporal_target_us: Option<u64> = None; // Target date in microseconds
 
         if is_temporal {
-            let before_us = time_range.map(|(_, b)| b).unwrap_or(0);
+            let before_us = temporal_reference.unwrap_or(0);
 
             if before_us > 0 {
                 // Parse temporal offset from query using regex-like matching
@@ -856,48 +872,135 @@ impl MenteDB {
                     }
                 }
 
-                // "last Saturday/Sunday/etc." → ~1 week ago
+                // "last Saturday/Sunday/etc." → compute exact weekday offset from before_us
                 if offset_us.is_none() && query_lower.contains("last") {
-                    for day_name in &[
-                        "saturday",
-                        "sunday",
-                        "monday",
-                        "tuesday",
-                        "wednesday",
-                        "thursday",
-                        "friday",
-                    ] {
+                    // Compute weekday of before_us (question date)
+                    // Unix epoch (1970-01-01) was a Thursday (weekday 3, where Mon=0)
+                    let question_day_num = (before_us / day_us) as i64; // days since epoch
+                    let question_weekday = ((question_day_num + 3) % 7) as u64; // Mon=0..Sun=6
+
+                    let day_targets: &[(&str, u64)] = &[
+                        ("saturday", 5),
+                        ("sunday", 6),
+                        ("monday", 0),
+                        ("tuesday", 1),
+                        ("wednesday", 2),
+                        ("thursday", 3),
+                        ("friday", 4),
+                    ];
+                    for (day_name, target_weekday) in day_targets {
                         if query_lower.contains(day_name) {
-                            offset_us = Some(week_us); // approximate: last [day] ≈ 1 week ago
+                            let mut days_back = (question_weekday as i64 - *target_weekday as i64)
+                                .rem_euclid(7)
+                                as u64;
+                            if days_back == 0 {
+                                days_back = 7;
+                            }
+                            offset_us = Some(days_back * day_us);
+                            if debug {
+                                eprintln!(
+                                    "[temporal] 'last {}': question_weekday={}, target={}, days_back={}",
+                                    day_name, question_weekday, target_weekday, days_back
+                                );
+                            }
                             break;
                         }
                     }
                 }
 
-                // "a week ago" / "a month ago"
+                // Comprehensive relative time expressions
                 if offset_us.is_none() {
-                    if query_lower.contains("a week ago") || query_lower.contains("one week ago") {
-                        offset_us = Some(week_us);
-                    } else if query_lower.contains("a month ago")
-                        || query_lower.contains("one month ago")
-                    {
-                        offset_us = Some(30 * day_us);
-                    } else if query_lower.contains("two weeks ago") {
-                        offset_us = Some(2 * week_us);
+                    let time_patterns: &[(&str, u64)] = &[
+                        ("a week ago", week_us),
+                        ("one week ago", week_us),
+                        ("two weeks ago", 2 * week_us),
+                        ("three weeks ago", 3 * week_us),
+                        ("four weeks ago", 4 * week_us),
+                        ("a month ago", 30 * day_us),
+                        ("one month ago", 30 * day_us),
+                        ("two months ago", 60 * day_us),
+                        ("three months ago", 90 * day_us),
+                        ("four months ago", 120 * day_us),
+                        ("six months ago", 180 * day_us),
+                        ("a year ago", 365 * day_us),
+                        ("last week", week_us),
+                        ("last month", 30 * day_us),
+                    ];
+                    for (pattern, offset) in time_patterns {
+                        if query_lower.contains(pattern) {
+                            offset_us = Some(*offset);
+                            break;
+                        }
+                    }
+                }
+
+                // Numeric N weeks/months/days ago pattern: "5 weeks ago", "3 months ago"
+                if offset_us.is_none() {
+                    let words: Vec<&str> = query_lower.split_whitespace().collect();
+                    for i in 0..words.len().saturating_sub(2) {
+                        if words.get(i + 2) == Some(&"ago") {
+                            let unit = words[i + 1];
+                            let num: Option<u64> =
+                                words[i].parse().ok().or_else(|| match words[i] {
+                                    "one" => Some(1),
+                                    "two" => Some(2),
+                                    "three" => Some(3),
+                                    "four" => Some(4),
+                                    "five" => Some(5),
+                                    "six" => Some(6),
+                                    "seven" => Some(7),
+                                    "eight" => Some(8),
+                                    "nine" => Some(9),
+                                    "ten" => Some(10),
+                                    _ => None,
+                                });
+                            if let Some(n) = num {
+                                let multiplier = if unit.starts_with("week") {
+                                    Some(week_us)
+                                } else if unit.starts_with("month") {
+                                    Some(30 * day_us)
+                                } else if unit.starts_with("day") {
+                                    Some(day_us)
+                                } else if unit.starts_with("year") {
+                                    Some(365 * day_us)
+                                } else {
+                                    None
+                                };
+                                if let Some(mult) = multiplier {
+                                    offset_us = Some(n * mult);
+                                    if debug {
+                                        eprintln!(
+                                            "[temporal] Parsed '{} {} ago' = {} days",
+                                            n,
+                                            unit,
+                                            n * mult / day_us
+                                        );
+                                    }
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
 
                 if let Some(off) = offset_us {
                     let target = before_us.saturating_sub(off);
                     temporal_target_us = Some(target);
-                    // Search within ±5 days of target date
-                    let window_margin = 5 * day_us;
+                    // Use tighter window (±2 days) for exact day-of-week calculations,
+                    // wider (±5 days) for approximate offsets like "3 months ago"
+                    let is_exact_day = off <= 7 * day_us; // Week or less = exact weekday math
+                    let window_margin = if is_exact_day { 2 * day_us } else { 5 * day_us };
                     let window_start = target.saturating_sub(window_margin);
                     let window_end = std::cmp::min(target + window_margin, before_us);
                     let window_range = Some((window_start, window_end));
 
                     if debug {
-                        eprintln!("[temporal_window] target={}, window=±5 days", target);
+                        eprintln!(
+                            "[temporal_window] target={}, window=±{} days (exact={})",
+                            target,
+                            if is_exact_day { 2 } else { 5 },
+                            is_exact_day
+                        );
                     }
 
                     // Semantic search within the time window
@@ -987,7 +1090,316 @@ impl MenteDB {
             }
         }
 
-        // --- Merge all passes with RRF ---
+        // --- Temporal target date injection ---
+        // If we computed a temporal target (e.g., "10 days ago" → specific date),
+        // convert it to human-readable date strings and add as additional search queries.
+        // This helps BM25 find memories that mention the target date explicitly.
+        let mut temporal_date_hits: Vec<(mentedb_core::types::MemoryId, f32)> = Vec::new();
+        if let Some(target_us) = temporal_target_us {
+            // Convert microseconds to date components
+            let target_secs = (target_us / 1_000_000) as i64;
+            let days_since_epoch = target_secs / 86400;
+            // Simple date calculation from days since unix epoch
+            let (year, month, day) = {
+                let mut y = 1970i32;
+                let mut remaining = days_since_epoch;
+                loop {
+                    let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+                        366
+                    } else {
+                        365
+                    };
+                    if remaining < days_in_year {
+                        break;
+                    }
+                    remaining -= days_in_year;
+                    y += 1;
+                }
+                let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+                let days_in_months = [
+                    31,
+                    if leap { 29 } else { 28 },
+                    31,
+                    30,
+                    31,
+                    30,
+                    31,
+                    31,
+                    30,
+                    31,
+                    30,
+                    31,
+                ];
+                let mut m = 0u32;
+                for dm in days_in_months.iter() {
+                    if remaining < *dm {
+                        break;
+                    }
+                    remaining -= dm;
+                    m += 1;
+                }
+                (y, m + 1, remaining as u32 + 1)
+            };
+            let month_names = [
+                "",
+                "January",
+                "February",
+                "March",
+                "April",
+                "May",
+                "June",
+                "July",
+                "August",
+                "September",
+                "October",
+                "November",
+                "December",
+            ];
+            let month_name = month_names[month as usize];
+            // Search for memories mentioning this date in various formats
+            let date_queries = vec![
+                format!("{} {}, {}", month_name, day, year),
+                format!("{} {}", month_name, day),
+                format!("{}/{:02}/{:02}", year, month, day),
+            ];
+            if debug {
+                eprintln!(
+                    "[temporal_date_inject] Target date: {} {}, {} — searching",
+                    month_name, day, year
+                );
+            }
+            for dq in &date_queries {
+                let date_emb = if let Some(ref embedder) = self.embedder {
+                    embedder.embed(dq).map_err(to_pyerr)?
+                } else {
+                    hash_embedding(dq, 384)
+                };
+                let date_hits = db
+                    .recall_hybrid_at_mode(
+                        &date_emb,
+                        Some(dq),
+                        15,
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_micros() as u64,
+                        tag_refs,
+                        use_tags_or,
+                        None,
+                    )
+                    .map_err(to_pyerr)?;
+                temporal_date_hits.extend(date_hits);
+            }
+            if debug {
+                eprintln!(
+                    "[temporal_date_inject] Found {} hits for target date",
+                    temporal_date_hits.len()
+                );
+            }
+        }
+
+        // --- Pass 7: Contextual inference (multi-hop follow-up) ---
+        // For questions requiring cross-memory reasoning (who/where/what about an event),
+        // extract key entities from top results and do follow-up searches.
+        let mut contextual_hits: Vec<(mentedb_core::types::MemoryId, f32)> = Vec::new();
+        let is_contextual = query_lower.contains("who did")
+            || query_lower.contains("who was")
+            || query_lower.contains("who accompanied")
+            || query_lower.contains("who joined")
+            || query_lower.contains("who came")
+            || query_lower.contains("where did we")
+            || query_lower.contains("what happened")
+            || query_lower.contains("what did we do")
+            || query_lower.contains("who else")
+            || query_lower.contains("who went");
+
+        if is_contextual && !pass1_hits.is_empty() {
+            // Extract key content snippets from top-5 primary results
+            let mut context_keywords: Vec<String> = Vec::new();
+            let top_n = std::cmp::min(pass1_hits.len(), 5);
+            for (mid, _) in pass1_hits.iter().take(top_n) {
+                if let Ok(node) = db.get_memory(*mid) {
+                    // Extract proper nouns and key phrases (simple heuristic: capitalized words > 3 chars)
+                    for word in node.content.split_whitespace() {
+                        let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
+                        if clean.len() > 3
+                            && clean.chars().next().is_some_and(|c| c.is_uppercase())
+                            && ![
+                                "The", "This", "That", "With", "From", "About", "When", "What",
+                                "Where", "Which", "User", "They", "Their", "Have", "Been", "Will",
+                                "Would", "Could", "Should",
+                            ]
+                            .contains(&clean)
+                        {
+                            context_keywords.push(clean.to_string());
+                        }
+                    }
+                }
+            }
+
+            // Deduplicate and limit
+            context_keywords.sort();
+            context_keywords.dedup();
+            context_keywords.truncate(10);
+
+            if debug && !context_keywords.is_empty() {
+                eprintln!(
+                    "[contextual] Extracted keywords from top results: {:?}",
+                    context_keywords
+                );
+            }
+
+            // Build a combined follow-up query from extracted keywords
+            if !context_keywords.is_empty() {
+                let followup_query = context_keywords.join(" ");
+                let followup_emb = if let Some(ref embedder) = self.embedder {
+                    embedder.embed(&followup_query).map_err(to_pyerr)?
+                } else {
+                    hash_embedding(&followup_query, 384)
+                };
+                let followup_hits = db
+                    .recall_hybrid_at_mode(
+                        &followup_emb,
+                        Some(&followup_query),
+                        20,
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_micros() as u64,
+                        tag_refs,
+                        use_tags_or,
+                        time_range,
+                    )
+                    .map_err(to_pyerr)?;
+                contextual_hits = followup_hits;
+                if debug {
+                    eprintln!(
+                        "[contextual] Follow-up search found {} hits",
+                        contextual_hits.len()
+                    );
+                }
+            }
+        }
+
+        // --- Pass 8: Preference retrieval (broader search for preference queries) ---
+        // Preference questions fail when relevant memories don't match semantically.
+        // Search with preference-specific terms to find scattered preference signals.
+        let mut preference_hits: Vec<(mentedb_core::types::MemoryId, f32)> = Vec::new();
+        if is_preference {
+            // Extract topic from query for targeted preference mining
+            let topic_words: Vec<&str> = query_lower
+                .split_whitespace()
+                .filter(|w| {
+                    ![
+                        "can",
+                        "you",
+                        "suggest",
+                        "recommend",
+                        "a",
+                        "an",
+                        "the",
+                        "for",
+                        "my",
+                        "me",
+                        "i",
+                        "do",
+                        "any",
+                        "some",
+                        "good",
+                        "best",
+                        "upcoming",
+                        "trip",
+                        "to",
+                        "hotel",
+                        "what",
+                        "should",
+                    ]
+                    .contains(w)
+                })
+                .collect();
+            let topic = topic_words.join(" ");
+            let pref_queries = [
+                format!("{} preferences interests likes", query),
+                format!("user prefers likes enjoys {}", topic),
+                format!("user {} favorite", topic),
+                "user likes enjoys prefers favorite hobby interests".to_string(),
+            ];
+            for pq in &pref_queries {
+                let pref_emb = if let Some(ref embedder) = self.embedder {
+                    embedder.embed(pq).map_err(to_pyerr)?
+                } else {
+                    hash_embedding(pq, 384)
+                };
+                let hits = db
+                    .recall_hybrid_at_mode(
+                        &pref_emb,
+                        Some(pq),
+                        40,
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_micros() as u64,
+                        tag_refs,
+                        use_tags_or,
+                        time_range,
+                    )
+                    .map_err(to_pyerr)?;
+                preference_hits.extend(hits);
+            }
+            if debug {
+                eprintln!(
+                    "[preference] Broad preference search found {} hits",
+                    preference_hits.len()
+                );
+            }
+        }
+
+        // --- Pass 9: Knowledge recency retrieval (for knowledge-update queries) ---
+        // For "what is my current X", "do I still Y", "what's my latest Z" type questions,
+        // search specifically for the most recent memories about the topic.
+        let mut recency_hits: Vec<(mentedb_core::types::MemoryId, f32)> = Vec::new();
+        if is_knowledge_update {
+            // Search with the query but bias heavily towards recency
+            let recency_emb = if let Some(ref embedder) = self.embedder {
+                embedder.embed(query).map_err(to_pyerr)?
+            } else {
+                hash_embedding(query, 384)
+            };
+            // Get a large pool and then we'll sort by recency in post-processing
+            let hits = db
+                .recall_hybrid_at_mode(
+                    &recency_emb,
+                    Some(query),
+                    40,
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_micros() as u64,
+                    tag_refs,
+                    use_tags_or,
+                    time_range,
+                )
+                .map_err(to_pyerr)?;
+            // Sort by created_at descending (most recent first)
+            let mut hits_with_ts: Vec<(mentedb_core::types::MemoryId, u64)> = Vec::new();
+            for (mid, _score) in &hits {
+                if let Ok(node) = db.get_memory(*mid) {
+                    hits_with_ts.push((*mid, node.created_at));
+                }
+            }
+            hits_with_ts.sort_by(|a, b| b.1.cmp(&a.1));
+            // Take top 15 most recent as high-priority results
+            for (mid, _ts) in hits_with_ts.iter().take(15) {
+                recency_hits.push((*mid, 1.0));
+            }
+            if debug {
+                eprintln!(
+                    "[knowledge-recency] Found {} recent memories for knowledge-update",
+                    recency_hits.len()
+                );
+            }
+        }
+
         use std::collections::HashMap;
         let rrf_k: f32 = 60.0;
         let mut rrf_scores: HashMap<String, f32> = HashMap::new();
@@ -1021,6 +1433,22 @@ impl MenteDB {
         for (rank, (id, _)) in temporal_window_hits.iter().enumerate() {
             *rrf_scores.entry(id.to_string()).or_insert(0.0) += 1.8 / (rrf_k + rank as f32);
         }
+        // Pass 7 contextual inference: follow-up search for cross-memory reasoning
+        for (rank, (id, _)) in contextual_hits.iter().enumerate() {
+            *rrf_scores.entry(id.to_string()).or_insert(0.0) += 1.2 / (rrf_k + rank as f32);
+        }
+        // Pass 8 preference: broader preference-specific retrieval (boosted weight)
+        for (rank, (id, _)) in preference_hits.iter().enumerate() {
+            *rrf_scores.entry(id.to_string()).or_insert(0.0) += 1.5 / (rrf_k + rank as f32);
+        }
+        // Pass 9 knowledge recency: very high weight — most recent memories for knowledge-update
+        for (rank, (id, _)) in recency_hits.iter().enumerate() {
+            *rrf_scores.entry(id.to_string()).or_insert(0.0) += 2.0 / (rrf_k + rank as f32);
+        }
+        // Temporal date injection: high weight — BM25 matches on computed target date
+        for (rank, (id, _)) in temporal_date_hits.iter().enumerate() {
+            *rrf_scores.entry(id.to_string()).or_insert(0.0) += 2.0 / (rrf_k + rank as f32);
+        }
 
         let mut merged: Vec<(String, f32)> = rrf_scores.into_iter().collect();
         merged.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -1039,13 +1467,16 @@ impl MenteDB {
                     && let Ok(node) = db.get_memory(mem_id)
                 {
                     if is_knowledge_update {
-                        // Knowledge-update: prefer most recent version of a fact
+                        // Knowledge-update: strongly prefer most recent version of a fact
+                        // Recency score: linear from 0 (oldest) to 1 (newest)
                         let recency = if before_us > 0 {
                             (node.created_at as f64 / before_us as f64).min(1.0) as f32
                         } else {
                             0.0
                         };
-                        *score += recency * 0.015;
+                        // Strong boost: recency can contribute up to 0.10 to RRF score
+                        // This ensures the most recent memory about a topic outranks older ones
+                        *score += recency * 0.10;
                     }
 
                     // Temporal proximity: if we have a target date, boost memories near it
@@ -1053,9 +1484,9 @@ impl MenteDB {
                         let dist = node.created_at.abs_diff(target);
                         let day_us: u64 = 86_400_000_000;
                         let days_away = dist as f64 / day_us as f64;
-                        // Gaussian-like proximity: max boost at 0 days, decays to ~0 at 14 days
-                        let proximity = (-days_away * days_away / 50.0).exp() as f32;
-                        *score += proximity * 0.02;
+                        // Gaussian-like proximity: max boost at 0 days, decays to ~0 at 7 days
+                        let proximity = (-days_away * days_away / 25.0).exp() as f32;
+                        *score += proximity * 0.04;
                     }
                 }
             }
@@ -1071,8 +1502,12 @@ impl MenteDB {
             }
         }
 
-        // Counting queries need more results to ensure completeness
-        let final_k = if is_counting { std::cmp::max(k, 80) } else { k };
+        // Counting and temporal queries need more results to ensure completeness
+        let final_k = if is_counting || is_temporal {
+            std::cmp::max(k, 120)
+        } else {
+            k
+        };
         merged.truncate(final_k);
 
         // --- Entity graph expansion ---
@@ -1126,7 +1561,7 @@ impl MenteDB {
         // Inspired by Iter-RetGen (2023) and IRCoT (ACL 2023): use Round 1 results
         // to inform a targeted Round 2 retrieval. The LLM examines what was found
         // and generates specific keywords for items that might be missing.
-        if (is_counting || is_temporal_ordering) && !expanded.is_empty() {
+        if (is_counting || is_temporal) && !expanded.is_empty() {
             // Collect top-20 memory contents for the LLM to analyze
             let gap_limit = std::cmp::min(expanded.len(), 30);
             let mut found_items: Vec<String> = Vec::new();
@@ -1268,6 +1703,9 @@ impl MenteDB {
             }
         }
 
+        // Track the current synthesis ID to avoid filtering it out later
+        let mut current_synth_id: Option<String> = None;
+
         // --- Cognitive re-ranking + reconstructive synthesis for counting queries ---
         // Two-phase approach inspired by RankGPT (EMNLP 2023) and Chain-of-Noting:
         //
@@ -1294,10 +1732,11 @@ impl MenteDB {
                 if let Ok(mem_id) = parse_memory_id(id_str)
                     && let Ok(node) = db.get_memory(mem_id)
                 {
-                    // Skip entity/community nodes from reranker — they duplicate facts
+                    // Skip entity/community/old-synthesis nodes from reranker
                     let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
                     let is_community = node.tags.iter().any(|t| t == "community_summary");
-                    if is_entity || is_community {
+                    let is_old_synth = node.tags.iter().any(|t| t == "synthesis:true");
+                    if is_entity || is_community || is_old_synth {
                         continue;
                     }
                     memory_contents.push((id_str.clone(), node.content.clone()));
@@ -1563,8 +2002,42 @@ impl MenteDB {
                 evidence_items.sort_by(|a, b| a.date.cmp(&b.date));
             }
 
+            // Deduplicate near-identical content (saves token budget)
+            // Two memories with >90% character overlap are likely duplicates from extraction
+            let mut deduped_items: Vec<EvidenceItem> = Vec::new();
+            for item in evidence_items {
+                let dominated = deduped_items.iter().any(|existing| {
+                    // Quick length check first
+                    let len_a = existing.content.len();
+                    let len_b = item.content.len();
+                    if len_a.abs_diff(len_b) * 10 > std::cmp::max(len_a, len_b) {
+                        return false; // Length differs by >10%, not a dupe
+                    }
+                    // Compare first 100 chars
+                    let prefix_a = &existing.content[..existing
+                        .content
+                        .floor_char_boundary(std::cmp::min(100, len_a))];
+                    let prefix_b = &item.content
+                        [..item.content.floor_char_boundary(std::cmp::min(100, len_b))];
+                    prefix_a == prefix_b
+                });
+                if !dominated {
+                    deduped_items.push(item);
+                }
+            }
+            let evidence_items = deduped_items;
+
+            if debug && evidence_items.len() < evidence_budget {
+                eprintln!(
+                    "[synthesis] Deduped to {} items (budget={})",
+                    evidence_items.len(),
+                    evidence_budget
+                );
+            }
+
             // Apply evidence budget
-            evidence_items.truncate(evidence_budget);
+            let evidence_items: Vec<EvidenceItem> =
+                evidence_items.into_iter().take(evidence_budget).collect();
 
             // Group by session and inject session date headers
             let mut synth_contents: Vec<String> = Vec::new();
@@ -1831,8 +2304,120 @@ impl MenteDB {
                     )
                 } else {
                     // Fallback: flat evidence (no graph structure available)
+                    // Build temporal context header if we have temporal info
+                    let temporal_context = if let Some(ref_us) = temporal_reference.filter(|_| is_temporal) {
+                        let ref_secs = (ref_us / 1_000_000) as i64;
+                        let ref_days = ref_secs / 86400;
+                        let (ry, rm, rd) = {
+                            let mut y = 1970i32;
+                            let mut remaining = ref_days;
+                            loop {
+                                let diy = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+                                    366
+                                } else {
+                                    365
+                                };
+                                if remaining < diy {
+                                    break;
+                                }
+                                remaining -= diy;
+                                y += 1;
+                            }
+                            let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+                            let dim = [
+                                31,
+                                if leap { 29 } else { 28 },
+                                31,
+                                30,
+                                31,
+                                30,
+                                31,
+                                31,
+                                30,
+                                31,
+                                30,
+                                31,
+                            ];
+                            let mut m = 0u32;
+                            for d in dim.iter() {
+                                if remaining < *d {
+                                    break;
+                                }
+                                remaining -= d;
+                                m += 1;
+                            }
+                            (y, m + 1, remaining as u32 + 1)
+                        };
+                        let month_names = [
+                            "",
+                            "January",
+                            "February",
+                            "March",
+                            "April",
+                            "May",
+                            "June",
+                            "July",
+                            "August",
+                            "September",
+                            "October",
+                            "November",
+                            "December",
+                        ];
+                        let mut ctx = format!(
+                            "\n[TEMPORAL CONTEXT] The question is being asked on: {} {}, {}\n",
+                            month_names[rm as usize], rd, ry
+                        );
+                        if let Some(target) = temporal_target_us {
+                            let t_secs = (target / 1_000_000) as i64;
+                            let t_days = t_secs / 86400;
+                            let (ty, tm, td) = {
+                                let mut y = 1970i32;
+                                let mut remaining = t_days;
+                                loop {
+                                    let diy = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+                                        366
+                                    } else {
+                                        365
+                                    };
+                                    if remaining < diy {
+                                        break;
+                                    }
+                                    remaining -= diy;
+                                    y += 1;
+                                }
+                                let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+                                let dim = [
+                                    31,
+                                    if leap { 29 } else { 28 },
+                                    31,
+                                    30,
+                                    31,
+                                    30,
+                                    31,
+                                    31,
+                                    30,
+                                    31,
+                                    30,
+                                    31,
+                                ];
+                                let mut m = 0u32;
+                                for d in dim.iter() {
+                                    if remaining < *d {
+                                        break;
+                                    }
+                                    remaining -= d;
+                                    m += 1;
+                                }
+                                (y, m + 1, remaining as u32 + 1)
+                            };
+                            ctx.push_str(&format!("[COMPUTED TARGET DATE] The referenced time resolves to: {} {}, {}\n", month_names[tm as usize], td, ty));
+                        }
+                        ctx
+                    } else {
+                        String::new()
+                    };
                     format!(
-                        "Question: {}\n\n\
+                        "Question: {}\n{}\n\
                          Evidence from memory:\n{}\n\n\
                          Answer the question using ONLY the evidence above.\n\n\
                          RULES:\n\
@@ -1856,7 +2441,13 @@ impl MenteDB {
                          - Each piece of evidence may come from a DIFFERENT date — do not assume they happened on the same day\n\n\
                          KNOWLEDGE UPDATES:\n\
                          - For questions about current/latest values: report the MOST RECENT value from evidence (latest date overrides earlier ones)\n\
-                         - If you see the same fact with different values at different dates, use the newest one\n\n\
+                         - If you see the same fact with different values at different dates, ALWAYS use the newest one — even if older values appear more often\n\
+                         - For 'previously vs now' questions: identify the CHANGE by finding the old value AND the new value with their dates\n\
+                         - Frequency changes (e.g., 'every week' → 'every other week'): state both the old and new frequency\n\n\
+                         DURATION AGGREGATION:\n\
+                         - For 'how many weeks/months total spent on X, Y, and Z': find the INDIVIDUAL duration for each item, then ADD them\n\
+                         - Do NOT conflate duration with time-since — 'spent 2 weeks reading' means duration=2 weeks, not when it happened\n\
+                         - State each duration separately, then sum: e.g., '2 + 4 + 2 = 8 weeks total'\n\n\
                          ABSTENTION RULES:\n\
                          - If the topic is NEVER mentioned in evidence, say 'I don't have information about [topic] in our conversations'\n\
                          - Absence of evidence is NOT evidence of zero — do NOT say 'Total: 0' if the topic simply wasn't discussed\n\
@@ -1868,20 +2459,383 @@ impl MenteDB {
                          - Do NOT abstain on recommendation questions — instead use whatever preferences and context you find in evidence\n\
                          - Combine multiple preference signals (e.g., likes outdoor activities + prefers mornings → suggest morning hike)\n\n\
                          List each item with a citation [N] to the evidence entry that supports it, then state the total.",
-                        query, evidence
+                        query, temporal_context, evidence
                     )
                 };
-                let synth_system = "You recall facts from memory evidence. Be thorough — list every relevant item. When in doubt, include it. NEVER invent facts not in the evidence. Quote numbers exactly, add them up for totals. For temporal questions: find the date of each event in the evidence, show your calculation, then answer. For knowledge-update questions: report the MOST RECENT value. If the topic was never discussed, say so — do not guess.";
+                let synth_system = "You recall facts from memory evidence. Be thorough — list every relevant item. When in doubt, include it. NEVER invent facts not in the evidence. Quote numbers exactly, add them up for totals. For temporal questions: use the [TEMPORAL CONTEXT] dates provided — they are pre-computed and correct. Find the date of each event in evidence, show your calculation, then answer. For knowledge-update questions: report the MOST RECENT value. For preference/recommendation questions: you MUST provide a recommendation based on user's interests and habits — NEVER abstain on these. If the topic was never discussed, say so — do not guess.";
 
                 match rt.block_on(synth_provider.call_text_with_retry(&synth_prompt, synth_system))
                 {
                     Ok(synthesis) => {
                         let mut final_synthesis = synthesis.trim().to_string();
 
-                        // --- Chain-of-enumeration + dual-path verification ---
-                        // For counting queries: LLM enumerates items as JSON, code counts.
-                        // Compare with the synthesis answer. If they disagree, use union + verify.
-                        if is_counting {
+                        // --- Temporal date computation pass ---
+                        // For "how many days/weeks between X and Y" or "X weeks/months ago" questions,
+                        // extract dates from evidence and compute the answer in code (LLMs are bad at date math).
+                        let is_temporal_math = query_lower.contains("how many days")
+                            || query_lower.contains("how many weeks")
+                            || query_lower.contains("how many months")
+                            || query_lower.contains("how long")
+                            || (query_lower.contains("weeks ago")
+                                && query_lower.contains("how many"))
+                            || (query_lower.contains("months ago")
+                                && query_lower.contains("how many"));
+
+                        let mut temporal_math_succeeded = false;
+                        if is_temporal_math {
+                            // Ask LLM to extract dates from evidence as structured JSON
+                            let date_extract_prompt = format!(
+                                "Question: {}\n\n\
+                                 Evidence:\n{}\n\n\
+                                 Extract the specific dates mentioned in the evidence that are relevant to this question.\n\
+                                 Return a JSON object with:\n\
+                                 - \"events\": array of {{\"description\": \"...\", \"date\": \"YYYY-MM-DD\", \"evidence_idx\": N}}\n\
+                                 - \"reference_date\": the date from which to calculate (if question says 'ago', use the latest conversation date; otherwise null)\n\n\
+                                 RULES:\n\
+                                 - Extract ONLY dates explicitly stated in evidence (e.g., 'on March 15, 2023' → '2023-03-15')\n\
+                                 - If a day of week is mentioned with a session date context, resolve to the exact date\n\
+                                 - If evidence says 'last Tuesday' in a session from May 10, compute the actual date\n\
+                                 - Return ONLY valid JSON",
+                                query, evidence
+                            );
+                            let date_system = "You extract dates from evidence. Return only valid JSON with exact dates in YYYY-MM-DD format.";
+
+                            if let Ok(date_response) = rt.block_on(
+                                synth_provider
+                                    .call_text_with_retry(&date_extract_prompt, date_system),
+                            ) {
+                                let cleaned = date_response
+                                    .trim()
+                                    .trim_start_matches("```json")
+                                    .trim_end_matches("```")
+                                    .trim();
+                                if let Ok(date_json) =
+                                    serde_json::from_str::<serde_json::Value>(cleaned)
+                                    && let Some(events) =
+                                        date_json.get("events").and_then(|v| v.as_array())
+                                {
+                                        // Parse dates and compute differences
+                                        let mut parsed_dates: Vec<(String, i64)> = Vec::new(); // (description, days_since_epoch)
+                                        for event in events {
+                                            if let (Some(desc), Some(date_str)) = (
+                                                event.get("description").and_then(|v| v.as_str()),
+                                                event.get("date").and_then(|v| v.as_str()),
+                                            ) {
+                                                // Parse YYYY-MM-DD to days since epoch
+                                                let parts: Vec<&str> =
+                                                    date_str.split('-').collect();
+                                                if parts.len() == 3
+                                                    && let (Ok(y), Ok(m), Ok(d)) = (
+                                                        parts[0].parse::<i64>(),
+                                                        parts[1].parse::<i64>(),
+                                                        parts[2].parse::<i64>(),
+                                                    )
+                                                {
+                                                        // Days since epoch (approximate but accurate enough for differences)
+                                                        let days = (y - 1970) * 365
+                                                            + (y - 1969) / 4
+                                                            - (y - 1901) / 100
+                                                            + (y - 1601) / 400
+                                                            + (367 * m - 362) / 12
+                                                            + d
+                                                            - 1
+                                                            + if m > 2 {
+                                                                if y % 4 == 0
+                                                                    && (y % 100 != 0
+                                                                        || y % 400 == 0)
+                                                                {
+                                                                    -1
+                                                                } else {
+                                                                    -2
+                                                                }
+                                                            } else {
+                                                                0
+                                                            };
+                                                        parsed_dates.push((desc.to_string(), days));
+                                                    }
+                                                }
+                                        }
+                                        if parsed_dates.len() >= 2 {
+                                            // Compute difference between first two events
+                                            let diff_days = (parsed_dates[1].1 - parsed_dates[0].1)
+                                                .unsigned_abs();
+                                            let diff_weeks = diff_days / 7;
+                                            let diff_months = diff_days / 30; // approximate
+
+                                            let computed_answer = if query_lower
+                                                .contains("how many days")
+                                            {
+                                                format!(
+                                                    "[VERIFIED COMPUTATION]\n\
+                                                     Event 1: {}\n\
+                                                     Event 2: {}\n\
+                                                     Date arithmetic: {} days between the two events.\n\
+                                                     ANSWER: {} days.",
+                                                    parsed_dates[0].0,
+                                                    parsed_dates[1].0,
+                                                    diff_days,
+                                                    diff_days
+                                                )
+                                            } else if query_lower.contains("how many weeks") {
+                                                format!(
+                                                    "[VERIFIED COMPUTATION]\n\
+                                                     Event 1: {}\n\
+                                                     Event 2: {}\n\
+                                                     Date arithmetic: {} days = {} weeks between the two events.\n\
+                                                     ANSWER: {} weeks.",
+                                                    parsed_dates[0].0,
+                                                    parsed_dates[1].0,
+                                                    diff_days,
+                                                    diff_weeks,
+                                                    diff_weeks
+                                                )
+                                            } else if query_lower.contains("how many months") || query_lower.contains("how long") {
+                                                format!(
+                                                    "[VERIFIED COMPUTATION]\n\
+                                                     Event 1: {}\n\
+                                                     Event 2: {}\n\
+                                                     Date arithmetic: {} days = approximately {} months between the two events.\n\
+                                                     ANSWER: {} months.",
+                                                    parsed_dates[0].0,
+                                                    parsed_dates[1].0,
+                                                    diff_days,
+                                                    diff_months,
+                                                    diff_months
+                                                )
+                                            } else {
+                                                format!(
+                                                    "[VERIFIED COMPUTATION]\n\
+                                                     Event 1: {}\n\
+                                                     Event 2: {}\n\
+                                                     Date arithmetic: {} days ({} weeks, ~{} months) between the two events.\n\
+                                                     ANSWER: {} days.",
+                                                    parsed_dates[0].0,
+                                                    parsed_dates[1].0,
+                                                    diff_days,
+                                                    diff_weeks,
+                                                    diff_months,
+                                                    diff_days
+                                                )
+                                            };
+                                            if debug {
+                                                eprintln!(
+                                                    "[temporal-compute] Computed date difference: {} days between '{}' and '{}'",
+                                                    diff_days, parsed_dates[0].0, parsed_dates[1].0
+                                                );
+                                            }
+                                            final_synthesis = computed_answer;
+                                            temporal_math_succeeded = true;
+                                        } else if parsed_dates.len() == 1
+                                            && query_lower.contains("ago")
+                                        {
+                                            // "How many weeks ago did X happen?"
+                                            // Compute from reference date
+                                            let event_days = parsed_dates[0].1;
+                                            let local_day_us: u64 = 86_400_000_000;
+                                            let local_before_us = temporal_reference.unwrap_or(
+                                                std::time::SystemTime::now()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_micros()
+                                                    as u64,
+                                            );
+                                            let ref_days = (local_before_us / local_day_us) as i64;
+                                            let diff_days = (ref_days - event_days).unsigned_abs();
+                                            let diff_weeks = diff_days / 7;
+
+                                            let diff_months = diff_days / 30;
+                                            let computed_answer = if query_lower
+                                                .contains("how many weeks")
+                                            {
+                                                format!(
+                                                    "[VERIFIED COMPUTATION]\n\
+                                                     Event: {}\n\
+                                                     Date arithmetic: {} days = {} weeks ago from reference date.\n\
+                                                     ANSWER: {} weeks ago.",
+                                                    parsed_dates[0].0,
+                                                    diff_days,
+                                                    diff_weeks,
+                                                    diff_weeks
+                                                )
+                                            } else if query_lower.contains("how many months") {
+                                                format!(
+                                                    "[VERIFIED COMPUTATION]\n\
+                                                     Event: {}\n\
+                                                     Date arithmetic: {} days = approximately {} months ago from reference date.\n\
+                                                     ANSWER: {} months ago.",
+                                                    parsed_dates[0].0,
+                                                    diff_days,
+                                                    diff_months,
+                                                    diff_months
+                                                )
+                                            } else if query_lower.contains("how many days") {
+                                                format!(
+                                                    "[VERIFIED COMPUTATION]\n\
+                                                     Event: {}\n\
+                                                     Date arithmetic: {} days ago from reference date.\n\
+                                                     ANSWER: {} days ago.",
+                                                    parsed_dates[0].0,
+                                                    diff_days,
+                                                    diff_days
+                                                )
+                                            } else {
+                                                format!(
+                                                    "[VERIFIED COMPUTATION]\n\
+                                                     Event: {}\n\
+                                                     Date arithmetic: {} days (~{} months, ~{} weeks) ago from reference date.\n\
+                                                     ANSWER: {} days ago.",
+                                                    parsed_dates[0].0,
+                                                    diff_days,
+                                                    diff_months,
+                                                    diff_weeks,
+                                                    diff_days
+                                                )
+                                            };
+                                            if debug {
+                                                eprintln!(
+                                                    "[temporal-compute] Event '{}' was {} days ago",
+                                                    parsed_dates[0].0, diff_days
+                                                );
+                                            }
+                                            final_synthesis = computed_answer;
+                                            temporal_math_succeeded = true;
+                                        }
+                                    }
+                                }
+                            }
+
+                        // --- Temporal ordering engine ---
+                        // For "what is the order of X from earliest to latest" questions,
+                        // extract events with dates and sort them chronologically in code.
+                        // This bypasses LLM ordering errors.
+                        if is_temporal_ordering && !temporal_math_succeeded {
+                            let ordering_prompt = format!(
+                                "Question: {}\n\n\
+                                 Evidence:\n{}\n\n\
+                                 Extract ALL events/items mentioned in the evidence that are relevant to this ordering question.\n\
+                                 Return a JSON object with:\n\
+                                 - \"events\": array of {{\"description\": \"short description of event/item\", \"date\": \"YYYY-MM-DD\"}}\n\n\
+                                 RULES:\n\
+                                 - Include EVERY relevant event mentioned in evidence\n\
+                                 - Use the session date or explicit date from evidence for each event\n\
+                                 - If exact date unknown but session context gives it, use that\n\
+                                 - Return ONLY valid JSON",
+                                query, evidence
+                            );
+                            let ordering_system = "You extract events with dates from evidence for chronological ordering. Return only valid JSON.";
+
+                            if let Ok(ordering_response) = rt.block_on(
+                                synth_provider.call_text_with_retry(&ordering_prompt, ordering_system),
+                            ) {
+                                let cleaned = ordering_response
+                                    .trim()
+                                    .trim_start_matches("```json")
+                                    .trim_end_matches("```")
+                                    .trim();
+                                if let Ok(ordering_json) =
+                                    serde_json::from_str::<serde_json::Value>(cleaned)
+                                    && let Some(events) =
+                                        ordering_json.get("events").and_then(|v| v.as_array())
+                                {
+                                    let mut dated_events: Vec<(String, i64)> = Vec::new();
+                                    for event in events {
+                                        if let (Some(desc), Some(date_str)) = (
+                                            event.get("description").and_then(|v| v.as_str()),
+                                            event.get("date").and_then(|v| v.as_str()),
+                                        ) {
+                                            let parts: Vec<&str> = date_str.split('-').collect();
+                                            if parts.len() == 3
+                                                && let (Ok(y), Ok(m), Ok(d)) = (
+                                                    parts[0].parse::<i64>(),
+                                                    parts[1].parse::<i64>(),
+                                                    parts[2].parse::<i64>(),
+                                                )
+                                            {
+                                                let days = (y - 1970) * 365
+                                                    + (y - 1969) / 4
+                                                    - (y - 1901) / 100
+                                                    + (y - 1601) / 400
+                                                    + (367 * m - 362) / 12
+                                                    + d
+                                                    - 1
+                                                    + if m > 2 {
+                                                        if y % 4 == 0
+                                                            && (y % 100 != 0 || y % 400 == 0)
+                                                        {
+                                                            -1
+                                                        } else {
+                                                            -2
+                                                        }
+                                                    } else {
+                                                        0
+                                                    };
+                                                dated_events.push((desc.to_string(), days));
+                                            }
+                                        }
+                                    }
+
+                                    if dated_events.len() >= 2 {
+                                        // Sort by date (earliest first)
+                                        dated_events.sort_by_key(|(_, d)| *d);
+
+                                        let mut ordered_list = String::new();
+                                        for (i, (desc, _)) in dated_events.iter().enumerate() {
+                                            ordered_list.push_str(&format!("{}. {}\n", i + 1, desc));
+                                        }
+
+                                        let computed_answer = format!(
+                                            "[VERIFIED COMPUTATION]\n\
+                                             Chronological ordering (earliest to latest):\n\
+                                             {}\n\
+                                             ANSWER: The order from earliest to latest is: {}",
+                                            ordered_list,
+                                            dated_events.iter().map(|(d, _)| d.as_str()).collect::<Vec<_>>().join(", then ")
+                                        );
+
+                                        if debug {
+                                            eprintln!(
+                                                "[temporal-ordering] Sorted {} events chronologically",
+                                                dated_events.len()
+                                            );
+                                        }
+                                        final_synthesis = computed_answer;
+                                        temporal_math_succeeded = true;
+                                    }
+                                }
+                            }
+                        }
+
+                        // --- Chain-of-enumeration for SUM queries only ---
+                        // For sum/aggregation queries (money, hours, days): LLM enumerates items,
+                        // code parses amounts and sums them. This is deterministic and reliable.
+                        // We do NOT run enumeration for pure COUNT queries — the LLM enumeration
+                        // is unreliable and can override correct synthesis with wrong counts.
+                        // Skip if temporal math already computed the answer (e.g., "how many days between X and Y")
+                        let is_sum_query = query_lower.contains("how much")
+                            && (query_lower.contains("money")
+                                || query_lower.contains("spend")
+                                || query_lower.contains("spent")
+                                || query_lower.contains("cost")
+                                || query_lower.contains("paid")
+                                || query_lower.contains("save")
+                                || query_lower.contains("earn")
+                                || query_lower.contains("raised"))
+                            || (query_lower.contains("total")
+                                && (query_lower.contains("money")
+                                    || query_lower.contains("spend")
+                                    || query_lower.contains("spent")
+                                    || query_lower.contains("cost")
+                                    || query_lower.contains("hours")
+                                    || query_lower.contains("days")
+                                    || query_lower.contains("miles")
+                                    || query_lower.contains("raised")))
+                            || (query_lower.contains("how many")
+                                && (query_lower.contains("spend") || query_lower.contains("spent"))
+                                && (query_lower.contains("hours")
+                                    || query_lower.contains("days")
+                                    || query_lower.contains("miles")));
+
+                        if is_sum_query && !temporal_math_succeeded {
                             let enum_prompt = format!(
                                 "Question: {}\n\n\
                                  Evidence from memory:\n{}\n\n\
@@ -1933,6 +2887,63 @@ impl MenteDB {
                                                         .unwrap_or(false)
                                                 })
                                                 .collect();
+
+                                            // Dedup qualifying items by normalized name
+                                            // Removes duplicates where the same item appears with slightly different descriptions
+                                            let mut deduped: Vec<&serde_json::Value> = Vec::new();
+                                            let mut seen_names: Vec<String> = Vec::new();
+                                            for item in &qualifying {
+                                                let name = item
+                                                    .get("name")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("")
+                                                    .to_lowercase();
+                                                // Normalize: remove common prefixes, articles, extra whitespace
+                                                let normalized = name
+                                                    .replace("the ", "")
+                                                    .replace("a ", "")
+                                                    .replace("an ", "")
+                                                    .replace("my ", "")
+                                                    .trim()
+                                                    .to_string();
+                                                // Check for substring matches or high overlap
+                                                let is_dup = seen_names.iter().any(|existing| {
+                                                    existing.contains(&normalized)
+                                                        || normalized.contains(existing.as_str())
+                                                        || {
+                                                            // Jaccard similarity on words
+                                                            let a_words: std::collections::HashSet<
+                                                                &str,
+                                                            > = normalized
+                                                                .split_whitespace()
+                                                                .collect();
+                                                            let b_words: std::collections::HashSet<
+                                                                &str,
+                                                            > = existing
+                                                                .split_whitespace()
+                                                                .collect();
+                                                            let intersection = a_words
+                                                                .intersection(&b_words)
+                                                                .count();
+                                                            let union =
+                                                                a_words.union(&b_words).count();
+                                                            union > 0
+                                                                && (intersection as f32
+                                                                    / union as f32)
+                                                                    > 0.6
+                                                        }
+                                                });
+                                                if !is_dup && !normalized.is_empty() {
+                                                    seen_names.push(normalized);
+                                                    deduped.push(item);
+                                                } else if debug && is_dup {
+                                                    eprintln!(
+                                                        "[chain-enum-dedup] Removed duplicate: '{}'",
+                                                        name
+                                                    );
+                                                }
+                                            }
+                                            let qualifying = deduped;
                                             let enum_count = qualifying.len();
 
                                             if debug {
@@ -1988,7 +2999,37 @@ impl MenteDB {
                                                     }
                                                 );
                                             } else {
-                                                // Build verified synthesis with code-counted result
+                                                // Since we only run enumeration for sum queries,
+                                                // always try to compute the sum
+                                                let mut total = 0.0_f64;
+                                                let mut found_any = false;
+                                                for item in &qualifying {
+                                                    if let Some(amt) =
+                                                        item.get("amount").and_then(|v| v.as_str())
+                                                    {
+                                                        let cleaned: String = amt
+                                                            .chars()
+                                                            .filter(|c| {
+                                                                c.is_ascii_digit()
+                                                                    || *c == '.'
+                                                                    || *c == '-'
+                                                            })
+                                                            .collect();
+                                                        if let Ok(val) = cleaned.parse::<f64>()
+                                                            && val > 0.0
+                                                        {
+                                                            total += val;
+                                                            found_any = true;
+                                                        }
+                                                    } else if let Some(amt) =
+                                                        item.get("amount").and_then(|v| v.as_f64())
+                                                    {
+                                                        total += amt;
+                                                        found_any = true;
+                                                    }
+                                                }
+
+                                                // Build item list with amounts
                                                 let item_list = qualifying
                                                     .iter()
                                                     .enumerate()
@@ -2001,72 +3042,58 @@ impl MenteDB {
                                                             .get("reason")
                                                             .and_then(|v| v.as_str())
                                                             .unwrap_or("");
-                                                        format!("{}. {} ({})", i + 1, name, reason)
+                                                        let amt = item
+                                                            .get("amount")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("unknown amount");
+                                                        format!(
+                                                            "{}. {} — {} ({})",
+                                                            i + 1,
+                                                            name,
+                                                            amt,
+                                                            reason
+                                                        )
                                                     })
                                                     .collect::<Vec<_>>()
                                                     .join("\n");
 
-                                                // Extract count from initial synthesis to detect disagreement
-                                                let synth_count = {
-                                                    let re_nums: Vec<usize> = final_synthesis
-                                                        .split_whitespace()
-                                                        .filter_map(|w| {
-                                                            w.trim_matches(|c: char| {
-                                                                !c.is_numeric()
-                                                            })
-                                                            .parse::<usize>()
-                                                            .ok()
-                                                        })
-                                                        .collect();
-                                                    // Also check word numbers
-                                                    let word_nums = [
-                                                        ("one", 1),
-                                                        ("two", 2),
-                                                        ("three", 3),
-                                                        ("four", 4),
-                                                        ("five", 5),
-                                                        ("six", 6),
-                                                        ("seven", 7),
-                                                        ("eight", 8),
-                                                        ("nine", 9),
-                                                        ("ten", 10),
-                                                    ];
-                                                    let synth_lower =
-                                                        final_synthesis.to_lowercase();
-                                                    let mut found = re_nums;
-                                                    for (word, num) in &word_nums {
-                                                        if synth_lower.contains(word) {
-                                                            found.push(*num);
+                                                if found_any {
+                                                    let is_money =
+                                                        query_lower.contains("money")
+                                                            || query_lower.contains("spend")
+                                                            || query_lower.contains("spent")
+                                                            || query_lower.contains("cost")
+                                                            || query_lower.contains("paid")
+                                                            || query_lower.contains("save")
+                                                            || query_lower.contains("earn")
+                                                            || query_lower.contains("raised");
+                                                    let formatted_total = if is_money {
+                                                        if total == total.floor() {
+                                                            format!("${}", total as i64)
+                                                        } else {
+                                                            format!("${:.2}", total)
                                                         }
-                                                    }
-                                                    found.first().copied()
-                                                };
-
-                                                // If enumeration disagrees with synthesis, use enumeration.
-                                                // The code-counted enumeration is more reliable than LLM prose counting.
-                                                // AgentMemory's key insight: enumerate first, count from enumeration.
-                                                let synth_disagrees = synth_count
-                                                    .map(|sc| sc != enum_count)
-                                                    .unwrap_or(true);
-
-                                                if synth_disagrees || synth_count.is_none() {
+                                                    } else if query_lower.contains("hours") {
+                                                        format!("{} hours", total)
+                                                    } else if query_lower.contains("days") {
+                                                        format!("{} days", total)
+                                                    } else if query_lower.contains("miles") {
+                                                        format!("{} miles", total)
+                                                    } else {
+                                                        format!("{}", total)
+                                                    };
                                                     if debug {
                                                         eprintln!(
-                                                            "[chain-enum] Synthesis={:?} vs Enumeration={} — using enumeration",
-                                                            synth_count, enum_count
+                                                            "[chain-enum] SUM query: {} items, total = {}",
+                                                            enum_count, formatted_total
                                                         );
                                                     }
                                                     final_synthesis = format!(
-                                                        "Based on the evidence, the answer is {}.\n\n{}\n\nTotal: {}",
-                                                        enum_count, item_list, enum_count
-                                                    );
-                                                } else {
-                                                    // Agreement — append enumeration for verification
-                                                    final_synthesis = format!(
-                                                        "{}\n\n---\nVerified enumeration ({} items):\n{}",
-                                                        final_synthesis, enum_count, item_list
+                                                        "[VERIFIED COMPUTATION]\nBased on the evidence, the total is {}.\n\n{}\n\nTotal: {}",
+                                                        formatted_total, item_list, formatted_total
                                                     );
                                                 }
+                                                // If no amounts found, keep original synthesis
 
                                                 if debug && let Some(gc) = graph_count {
                                                     if gc != enum_count {
@@ -2101,7 +3128,9 @@ impl MenteDB {
                         if debug {
                             eprintln!(
                                 "[synthesis] Generated: {}",
-                                &final_synthesis[..final_synthesis.floor_char_boundary(std::cmp::min(final_synthesis.len(), 200))]
+                                &final_synthesis[..final_synthesis.floor_char_boundary(
+                                    std::cmp::min(final_synthesis.len(), 200)
+                                )]
                             );
                         }
 
@@ -2120,6 +3149,7 @@ impl MenteDB {
                             vec!["synthesis:true".to_string(), "ephemeral:true".to_string()];
                         let synth_id = synth_node.id;
                         db.store(synth_node).map_err(to_pyerr)?;
+                        current_synth_id = Some(synth_id.to_string());
 
                         // Prepend synthesis as first result — original order preserved after it
                         let top_score = expanded.first().map(|(_, s)| *s).unwrap_or(1.0);
@@ -2134,16 +3164,20 @@ impl MenteDB {
             }
         }
 
-        // Filter entity nodes from final results — they duplicate facts.
+        // Filter entity nodes and old synthesis results from final results.
         // Keep community summaries — they're unique aggregated indexes that bridge
         // semantic gaps (e.g., "Health Device Summary" links hearing aids to health).
+        // Keep the current synthesis (just created above) but filter out old ones
+        // that would pollute evidence with potentially wrong previous answers.
         let mut filtered_results: Vec<(String, f32)> = Vec::new();
         for (id_str, score) in expanded {
             if let Ok(mem_id) = parse_memory_id(&id_str)
                 && let Ok(node) = db.get_memory(mem_id)
             {
                 let is_entity = node.tags.iter().any(|t| t.starts_with("entity_name:"));
-                if is_entity {
+                let is_old_synthesis = node.tags.iter().any(|t| t == "synthesis:true")
+                    && Some(id_str.as_str()) != current_synth_id.as_deref();
+                if is_entity || is_old_synthesis {
                     continue;
                 }
             }
@@ -2659,9 +3693,7 @@ impl MenteDB {
                     let key = node
                         .tags
                         .iter()
-                        .filter(|t| {
-                            t.starts_with("entity_name:") || t.starts_with("entity_type:")
-                        })
+                        .filter(|t| t.starts_with("entity_name:") || t.starts_with("entity_type:"))
                         .map(|t| t.to_lowercase())
                         .collect::<Vec<_>>()
                         .join("|");
@@ -2802,7 +3834,7 @@ impl MenteDB {
                 }
             }
 
-            let id = node.id;
+            let _id = node.id;
             batch_nodes.push(PendingNode {
                 node,
                 entity_name: mem.entity_name,
@@ -2813,8 +3845,7 @@ impl MenteDB {
         // Batch store all collected nodes in a single transaction
         let store_start = std::time::Instant::now();
         {
-            let nodes_vec: Vec<MemoryNode> =
-                batch_nodes.iter().map(|p| p.node.clone()).collect();
+            let nodes_vec: Vec<MemoryNode> = batch_nodes.iter().map(|p| p.node.clone()).collect();
             db.store_batch(nodes_vec).map_err(to_pyerr)?;
         }
         let store_ms = store_start.elapsed().as_millis();
@@ -2822,7 +3853,9 @@ impl MenteDB {
         if debug {
             eprintln!(
                 "[store_extracted] embed={}ms store={}ms count={}",
-                embed_ms, store_ms, batch_nodes.len()
+                embed_ms,
+                store_ms,
+                batch_nodes.len()
             );
         }
 
@@ -3091,7 +4124,8 @@ impl MenteDB {
                     if debug {
                         eprintln!(
                             "[consolidate] Gist: {}",
-                            &gist_content[..gist_content.floor_char_boundary(std::cmp::min(gist_content.len(), 100))]
+                            &gist_content[..gist_content
+                                .floor_char_boundary(std::cmp::min(gist_content.len(), 100))]
                         );
                     }
 
@@ -3497,7 +4531,8 @@ impl MenteDB {
                         eprintln!(
                             "[community] {}: {}",
                             category,
-                            &summary_text[..summary_text.floor_char_boundary(std::cmp::min(summary_text.len(), 120))]
+                            &summary_text[..summary_text
+                                .floor_char_boundary(std::cmp::min(summary_text.len(), 120))]
                         );
                     }
 
@@ -3598,10 +4633,7 @@ impl MenteDB {
                 .map(|id| id.to_string())
                 .collect::<Vec<_>>(),
         )?;
-        dict.set_item(
-            "episodic_id",
-            result.episodic_id.map(|id| id.to_string()),
-        )?;
+        dict.set_item("episodic_id", result.episodic_id.map(|id| id.to_string()))?;
         let pain_list: Vec<PyObject> = result
             .pain_warnings
             .iter()
@@ -3815,10 +4847,8 @@ impl MenteDB {
             .ok_or_else(|| PyRuntimeError::new_err("no embedding provider configured"))?;
 
         let config = build_extraction_config_from_env(provider)?;
-        let http_provider =
-            HttpExtractionProvider::new(config.clone()).map_err(to_pyerr)?;
-        let judge =
-            mentedb_extraction::cognitive_adapter::ExtractionLlmJudge::new(http_provider);
+        let http_provider = HttpExtractionProvider::new(config.clone()).map_err(to_pyerr)?;
+        let judge = mentedb_extraction::cognitive_adapter::ExtractionLlmJudge::new(http_provider);
         let cognitive_llm = mentedb_cognitive::CognitiveLlmService::new(judge);
 
         let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
@@ -3838,7 +4868,10 @@ impl MenteDB {
         d.set_item("edges_created", enrichment_result.edges_created)?;
         d.set_item("entities_extracted", enrichment_result.entities_extracted)?;
         d.set_item("duplicates_skipped", enrichment_result.duplicates_skipped)?;
-        d.set_item("contradictions_found", enrichment_result.contradictions_found)?;
+        d.set_item(
+            "contradictions_found",
+            enrichment_result.contradictions_found,
+        )?;
         d.set_item("sync_linked", enrichment_result.sync_linked)?;
         d.set_item("llm_linked", enrichment_result.llm_linked)?;
         d.set_item("communities_created", enrichment_result.communities_created)?;
