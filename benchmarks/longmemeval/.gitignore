@@ -3,4 +3,5 @@ data/
 
 # Benchmark results and eval logs
 results/
+!results/longmemeval_s_results.jsonl
 extraction_cache.json
