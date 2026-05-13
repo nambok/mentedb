@@ -157,6 +157,8 @@ impl AsyncEmbeddingProvider for HttpEmbeddingProvider {
 mod http_impl {
     use super::*;
     use serde_json::json;
+    use std::time::Duration;
+    use ureq::config::Config;
 
     #[derive(Deserialize)]
     struct OpenAIEmbeddingResponse {
@@ -169,8 +171,17 @@ mod http_impl {
     }
 
     impl HttpEmbeddingProvider {
+        /// Create a ureq agent with a 60-second global timeout to prevent hangs.
+        fn agent(&self) -> ureq::Agent {
+            Config::builder()
+                .timeout_global(Some(Duration::from_secs(60)))
+                .build()
+                .new_agent()
+        }
+
         /// Retry-aware single embedding call with exponential backoff.
         fn embed_with_retry(&self, text: &str, max_attempts: u32) -> MenteResult<Vec<f32>> {
+            let agent = self.agent();
             let mut last_err = None;
             for attempt in 0..max_attempts {
                 if attempt > 0 {
@@ -182,7 +193,8 @@ mod http_impl {
                     "input": text,
                 });
 
-                let mut req = ureq::post(&self.config.api_url)
+                let mut req = agent
+                    .post(&self.config.api_url)
                     .header("Authorization", &format!("Bearer {}", self.config.api_key));
 
                 for (k, v) in &self.config.headers {
@@ -223,6 +235,7 @@ mod http_impl {
             texts: &[&str],
             max_attempts: u32,
         ) -> MenteResult<Vec<Vec<f32>>> {
+            let agent = self.agent();
             let mut last_err = None;
             for attempt in 0..max_attempts {
                 if attempt > 0 {
@@ -234,7 +247,8 @@ mod http_impl {
                     "input": texts,
                 });
 
-                let mut req = ureq::post(&self.config.api_url)
+                let mut req = agent
+                    .post(&self.config.api_url)
                     .header("Authorization", &format!("Bearer {}", self.config.api_key));
 
                 for (k, v) in &self.config.headers {

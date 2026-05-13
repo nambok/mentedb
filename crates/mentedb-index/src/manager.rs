@@ -176,33 +176,7 @@ impl IndexManager {
             return Vec::new();
         }
 
-        let fetch_k = k * 4;
-        let rrf_k: f32 = 60.0;
-
-        // Step 1: Vector search candidates
-        let vector_candidates = self.hnsw.search(query_embedding, fetch_k);
-
-        // Step 2: BM25 search candidates (if query text provided and index has docs)
-        let bm25_candidates = match query_text {
-            Some(qt) if !self.bm25.is_empty() => self.bm25.search(qt, fetch_k),
-            _ => Vec::new(),
-        };
-
-        if vector_candidates.is_empty() && bm25_candidates.is_empty() {
-            return Vec::new();
-        }
-
-        // Step 3: Merge via RRF
-        let mut rrf_scores: HashMap<MemoryId, f32> = HashMap::new();
-
-        for (rank, (id, _)) in vector_candidates.iter().enumerate() {
-            *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
-        }
-        for (rank, (id, _)) in bm25_candidates.iter().enumerate() {
-            *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
-        }
-
-        // Build set of tag-filtered ids (if tags are specified)
+        // Build tag filter set (if tags are specified)
         let tag_filter: Option<HashSet<MemoryId>> = tags.map(|t| {
             if t.is_empty() {
                 HashSet::new()
@@ -213,48 +187,89 @@ impl IndexManager {
             }
         });
 
-        // Build set of time-range-filtered ids (if time range is specified)
+        // Build time-range filter set
         let time_filter: Option<HashSet<MemoryId>> =
             time_range.map(|(start, end)| self.temporal.range(start, end).into_iter().collect());
 
-        // Step 4: Filter and boost with salience/recency
-        let max_ts = rrf_scores
-            .keys()
-            .filter_map(|id| self.temporal.get_timestamp(*id))
-            .max()
-            .unwrap_or(1) as f64;
+        // Combine filters into a single candidate set
+        let candidate_set: Option<HashSet<MemoryId>> = match (&tag_filter, &time_filter) {
+            (Some(tf), Some(trf)) => Some(tf.intersection(trf).copied().collect()),
+            (Some(tf), None) => Some(tf.clone()),
+            (None, Some(trf)) => Some(trf.clone()),
+            (None, None) => None,
+        };
 
+        // Pre-filtered path: when we have a candidate set and it's reasonably sized,
+        // do brute-force search directly over the candidates instead of global search + post-filter.
+        // This is critical for OR-tag queries with many tags where global top-k misses most matches.
+        let use_prefilter = candidate_set.as_ref().is_some_and(|cs| {
+            let cs_len = cs.len();
+            // Use pre-filter when candidate set is non-trivial but manageable for brute-force
+            // (up to 500K is fine — brute-force cosine on 384-dim vectors is fast)
+            cs_len > 0 && cs_len <= 500_000
+        });
+
+        let fetch_k = k * 4;
+        let rrf_k: f32 = 60.0;
+
+        let (vector_candidates, bm25_candidates) = if use_prefilter {
+            let cs = candidate_set.as_ref().unwrap();
+            let vc = self.hnsw.search_filtered(query_embedding, cs, fetch_k);
+            let bc = match query_text {
+                Some(qt) if !self.bm25.is_empty() => self.bm25.search_filtered(qt, fetch_k, cs),
+                _ => Vec::new(),
+            };
+            (vc, bc)
+        } else {
+            let vc = self.hnsw.search(query_embedding, fetch_k);
+            let bc = match query_text {
+                Some(qt) if !self.bm25.is_empty() => self.bm25.search(qt, fetch_k),
+                _ => Vec::new(),
+            };
+            (vc, bc)
+        };
+
+        if vector_candidates.is_empty() && bm25_candidates.is_empty() {
+            return Vec::new();
+        }
+
+        // Merge via RRF
+        let mut rrf_scores: HashMap<MemoryId, f32> = HashMap::new();
+
+        for (rank, (id, _)) in vector_candidates.iter().enumerate() {
+            *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
+        }
+        for (rank, (id, _)) in bm25_candidates.iter().enumerate() {
+            *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
+        }
+
+        // Post-filter only needed when NOT using pre-filter path
         let mut scored: Vec<(MemoryId, f32)> = rrf_scores
             .into_iter()
             .filter(|(id, _)| {
-                if let Some(ref tf) = tag_filter
-                    && !tf.contains(id)
-                {
-                    return false;
-                }
-                if let Some(ref trf) = time_filter
-                    && !trf.contains(id)
-                {
-                    return false;
+                if !use_prefilter {
+                    if let Some(ref tf) = tag_filter
+                        && !tf.contains(id)
+                    {
+                        return false;
+                    }
+                    if let Some(ref trf) = time_filter
+                        && !trf.contains(id)
+                    {
+                        return false;
+                    }
                 }
                 true
             })
             .map(|(id, rrf_score)| {
                 let salience = self.salience.get_salience(id).unwrap_or(0.5);
-                let ts = self.temporal.get_timestamp(id).unwrap_or(0) as f64;
-                let recency = if max_ts > 0.0 {
-                    (ts / max_ts) as f32
-                } else {
-                    0.0
-                };
+                let recency = 0.5f32;
 
-                // RRF is the primary signal, salience and recency are light boosts
                 let combined = rrf_score * 0.7 + salience * 0.05 + recency * 0.02;
                 (id, combined)
             })
             .collect();
 
-        // Sort descending by combined score
         scored.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(k);
         scored

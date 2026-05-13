@@ -619,6 +619,7 @@ impl MenteDb {
     }
 
     /// Hybrid recall with configurable tag mode (AND vs OR).
+    #[allow(clippy::too_many_arguments)]
     pub fn recall_hybrid_at_mode(
         &self,
         embedding: &[f32],
@@ -637,9 +638,14 @@ impl MenteDb {
             tags_or
         );
         // Over-fetch to account for filtered-out results
-        let results =
-            self.index
-                .hybrid_search_with_query_mode(embedding, query_text, tags, tags_or, time_range, k * 3);
+        let results = self.index.hybrid_search_with_query_mode(
+            embedding,
+            query_text,
+            tags,
+            tags_or,
+            time_range,
+            k * 3,
+        );
         let graph = self.graph.graph();
         let pm = self.page_map.read();
         let filtered: Vec<(MemoryId, f32)> = results
