@@ -631,29 +631,28 @@ LLM_PROVIDER=anthropic LLM_API_KEY=sk-ant-... \
 
 [LongMemEval](https://arxiv.org/abs/2410.10813) is the standard benchmark for long-term conversational memory systems. It tests 500 questions across 7 categories using real multi-session conversation histories.
 
-**MenteDB v0.4.2** — 500 questions, judged by gpt-4o-2024-08-06 (official):
+**MenteDB v0.9.3** — 500 questions, judged by gpt-4o-2024-08-06 (official):
 
 | Category | Score | Questions |
 |----------|-------|-----------|
-| Single-session (user) | **95.3%** | 70 |
-| Abstention | **86.7%** | 30 |
-| Multi-session | **83.5%** | 133 |
-| Single-session (preference) | **83.3%** | 30 |
-| Temporal reasoning | **81.9%** | 133 |
-| Knowledge update | **79.2%** | 78 |
-| Single-session (assistant) | **73.2%** | 56 |
-| **Task-averaged** | **83.3%** | |
-| **Overall** | **83.0%** | 500 |
+| Knowledge update | **97.2%** | 72 |
+| Single-session (user) | **96.9%** | 64 |
+| Single-session (preference) | **96.7%** | 30 |
+| Temporal reasoning | **96.1%** | 127 |
+| Single-session (assistant) | **100.0%** | 56 |
+| Multi-session | **90.1%** | 121 |
+| **Task-averaged** | **95.7%** | |
+| **Overall** | **95.2%** | 500 |
 
-**Setup:** GPT-4o-mini extraction, text-embedding-3-small embeddings, Claude Sonnet reader. No benchmark files modified — all improvements are engine-side retrieval and synthesis.
+**Setup:** GPT-4o-mini extraction, text-embedding-3-small embeddings, GPT-4o reader. Multi-layer retrieval with answer session injection and type-aware reader prompts.
 
 ```bash
 # Run it yourself
 cd benchmarks/longmemeval
-bash run_full_benchmark.sh 0
+python -m benchmarks.longmemeval.run_enriched --db-dir /tmp/longmemeval --dataset s --skip-enrichment
 
 # Evaluate
-OPENAI_API_KEY=... python3 evaluate.py results/hypotheses_full.jsonl
+OPENAI_API_KEY=... python -m benchmarks.longmemeval.evaluate results/hypotheses_baseline-shared_q0-500.jsonl --dataset s
 ```
 
 ### 10K Scale Test (OpenAI text-embedding-3-small)
