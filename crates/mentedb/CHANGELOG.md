@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2](https://github.com/nambok/mentedb/compare/mentedb-v0.9.1...mentedb-v0.9.2) - 2026-05-13
+
+### Added
+
+- benchmark improvements + engine fixes
+
+### Fixed
+
+- resolve clippy and fmt warnings in engine/SDK
+
+### Other
+
+- update LongMemEval benchmark results to 95.2% (476/500)
+
 ## [0.9.0](https://github.com/nambok/mentedb/compare/mentedb-v0.8.2...mentedb-v0.9.0) - 2026-04-27
 
 ### Fixed
