@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2](https://github.com/nambok/mentedb/compare/mentedb-query-v0.9.1...mentedb-query-v0.9.2) - 2026-05-13
+
+### Other
+
+- update LongMemEval benchmark results to 95.2% (476/500)
+
 ## [0.8.2](https://github.com/nambok/mentedb/compare/mentedb-query-v0.8.1...mentedb-query-v0.8.2) - 2026-04-26
 
 ### Other
