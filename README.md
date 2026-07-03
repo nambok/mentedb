@@ -126,7 +126,7 @@ The result: a clean, curated memory that actually helps the AI perform better.
 | Entity understanding | Manual schemas | None | **Auto-extracted typed entities with graph edges** |
 | Query result | Raw data | Similarity scores | **Token budget optimized context** |
 | Memory quality | Manual | None | **LLM extract + quality filter + dedup + contradiction** |
-| Retrieval strategy | Index scan | Single-pass kNN | **Adaptive multi-pass + entity graph expansion** |
+| Retrieval strategy | Index scan | Single-pass kNN | **Hybrid vector + BM25 + graph traversal** |
 | Understands AI attention? | No | No | **Yes, U curve ordering** |
 | Tracks what AI knows? | No | No | **Epistemic state tracking** |
 | Multi-agent isolation? | Schema level | Collection level | **Memory spaces with ACLs** |
@@ -135,8 +135,8 @@ The result: a clean, curated memory that actually helps the AI perform better.
 ### Core Features
 
 - **Automatic Memory Extraction** LLM powered pipeline extracts structured memories from raw conversations
-- **Entity-Centric Memory** Extracts typed entities (person, pet, place, event, item, organization) with structured attributes. Entity resolution merges attributes across mentions. Graph edges link memories to the entities they reference
-- **Adaptive Multi-Pass Retrieval** Engine-level 3-pass search (instant recall → active search → deep dig) with progressively increasing depth, reciprocal rank fusion, and entity graph expansion
+- **Entity-Centric Memory** Extracts typed entities (person, pet, place, event, item, organization) with structured attributes. Entity resolution merges attributes across mentions. `Derived` and labeled `Related` edges link entities to the memories they came from
+- **Hybrid Retrieval** Vector similarity (HNSW) fused with BM25 keyword search via reciprocal rank fusion, plus tag, temporal, and validity filtering
 - **Write Time Intelligence** Quality filter, deduplication, and contradiction detection at ingest
 - **LLM Powered Cognitive Inference** CognitiveLlmService judges whether new memories invalidate, update, or are compatible with existing ones (supports Anthropic, OpenAI, Ollama)
 - **Bi-Temporal Validity** Memories and edges carry `valid_from`/`valid_until` timestamps. Temporal invalidation instead of deletion. Point-in-time queries via `recall_similar_at(embedding, k, timestamp)`
@@ -149,7 +149,7 @@ The result: a clean, curated memory that actually helps the AI perform better.
 - **MQL** Mente Query Language with full boolean logic (AND, OR, NOT) and ordering (ASC/DESC)
 - **Type Safe IDs** MemoryId, AgentId, SpaceId newtypes prevent accidental mixing
 - **Binary Embeddings** Base64 encoded storage, 65% smaller than JSON arrays
-- **Local Candle Embeddings** Zero config semantic search using all-MiniLM-L6-v2 (384 dims), no API key required
+- **Local Candle Embeddings** Zero config semantic search using all-MiniLM-L6-v2 (384 dims), no API key required (Docker image includes it; source builds need `--features local-embeddings`)
 - **gRPC + REST + MCP** Three integration paths for any use case
 
 ### Entity-Centric Memory
@@ -163,13 +163,13 @@ Entity: MAX (pet)
   ──linked to──> "User takes Max to the park on weekends"
 ```
 
-**How it works:**
+**How it works** (via the background enrichment pipeline, requires an LLM provider):
 1. **Extraction** — The LLM identifies entities (people, pets, places, events, items) and their attributes, even from incidental mentions
 2. **Resolution** — Multiple mentions of the same entity are merged: "Max", "my dog", "the Golden Retriever" all resolve to one entity node
-3. **Graph linking** — `PartOf` edges connect every memory that mentions an entity back to the entity node
-4. **Search expansion** — When search hits an entity, the engine traverses its subgraph to surface all related memories
+3. **Graph linking** — `Derived` edges connect each entity node back to the episodic memories it was extracted from, and same-entity memories are linked with labeled `Related` edges
+4. **Retrieval** — Entity nodes are indexed like any memory, so "What breed is my dog?" surfaces the MAX entity (with its breed attribute) through hybrid search; the surrounding subgraph can be walked with an MQL `TRAVERSE` query
 
-This means asking *"What breed is my dog?"* finds the entity MAX, follows its edges, and returns the breed attribute — even if no single memory explicitly says "my dog is a Golden Retriever".
+So asking *"What breed is my dog?"* retrieves the entity MAX with its breed attribute, even if no single conversation turn explicitly says "my dog is a Golden Retriever".
 
 ### Performance Targets (10M memories)
 
@@ -307,13 +307,13 @@ graph TD
     subgraph Graph["Knowledge Graph"]
         CSR["CSR/CSC Storage"]
         TRAV["BFS / DFS Traversal"]
-        ENTG["Entity Graph<br/>PartOf edges, resolution"]
+        ENTG["Entity Graph<br/>Derived edges, resolution"]
     end
 
     subgraph Storage["Storage Engine"]
         BUF["Buffer Pool<br/>CLOCK eviction"]
         WAL["Write Ahead Log<br/>LZ4, crash safe"]
-        PAGE["Page Manager<br/>16KB pages"]
+        PAGE["Page Manager<br/>64KB pages"]
     end
 
     LLM --> ENT --> QF --> DEDUP --> CONTRA_EX --> WI
@@ -340,14 +340,14 @@ graph TD
 
 MenteDB isn't just a memory store — it's a cognitive engine that automatically maintains memory health. All cognitive features are wired into the core `MenteDb` facade and run automatically.
 
-### Write Inference (automatic on `store()`)
+### Write Inference (automatic on `store()` and `store_batch()`)
 
-Every time a memory is stored, the engine finds the 20 most similar existing memories and runs heuristic inference:
+Every time a memory is stored, the engine finds the 20 most similar existing memories and runs heuristic inference. The bands are mutually exclusive — each memory pair gets at most one action:
 
 | Cosine Similarity | Action | What happens |
 |-------------------|--------|-------------|
-| **> 0.95** | Contradiction detected | Creates `Contradicts` edge, flags conflict |
-| **> 0.85** | Supersedes old memory | Invalidates older memory (`valid_until` set), creates `Supersedes` edge |
+| **> 0.95** | Contradiction detected | Creates `Contradicts` edge, flags conflict for review (both memories stay valid; a byte-identical duplicate is superseded instead) |
+| **0.85 – 0.95** | Supersedes old memory | Invalidates older memory (`valid_until` set), creates `Supersedes` edge |
 | **0.6 – 0.85** | Related | Creates `Related` edge with similarity as weight |
 | **< 0.6** | No action | Memories are independent |
 
@@ -551,6 +551,9 @@ Configure the extraction pipeline via environment variables:
 | `MENTEDB_LLM_BASE_URL` | Custom base URL (Ollama, proxies) | Provider default |
 | `MENTEDB_EXTRACTION_QUALITY_THRESHOLD` | Min confidence to store (0.0 to 1.0) | 0.7 |
 | `MENTEDB_EXTRACTION_DEDUP_THRESHOLD` | Similarity threshold for dedup (0.0 to 1.0) | 0.85 |
+| `MENTEDB_EMBEDDING_PROVIDER` | Server embeddings: candle, hash, none | candle when built with `local-embeddings`, else hash |
+
+Semantic search, auto-linking, and contradiction detection all depend on real embeddings. The Docker image ships with local Candle embeddings; a plain `cargo install mentedb-server` falls back to non-semantic hash embeddings and warns loudly at startup — build with `--features local-embeddings` for full quality.
 
 ## MQL Examples
 

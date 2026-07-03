@@ -34,9 +34,15 @@ pub struct StorageConfig {
     /// Directory for data files.
     pub data_dir: String,
     /// Number of pages in the buffer pool.
+    ///
+    /// Currently informational: the storage engine uses a fixed pool of 1024
+    /// frames and does not read this field yet.
     #[serde(default = "default_buffer_pool_size")]
     pub buffer_pool_size: usize,
     /// Page size in bytes.
+    ///
+    /// Currently informational: pages are a fixed 64 KB compile-time constant
+    /// (`mentedb_storage::PAGE_SIZE`) and the engine does not read this field.
     #[serde(default = "default_page_size")]
     pub page_size: usize,
 }
@@ -45,7 +51,7 @@ fn default_buffer_pool_size() -> usize {
     1024
 }
 fn default_page_size() -> usize {
-    16384
+    65536
 }
 
 impl Default for StorageConfig {
@@ -316,7 +322,7 @@ mod tests {
 
         assert_eq!(cfg.storage.data_dir, "data");
         assert_eq!(cfg.storage.buffer_pool_size, 1024);
-        assert_eq!(cfg.storage.page_size, 16384);
+        assert_eq!(cfg.storage.page_size, 65536);
 
         assert_eq!(cfg.index.hnsw_m, 16);
         assert_eq!(cfg.index.hnsw_ef_construction, 200);
