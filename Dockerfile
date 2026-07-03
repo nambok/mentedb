@@ -6,7 +6,9 @@ RUN apt-get update && apt-get install -y pkg-config libssl-dev protobuf-compiler
 WORKDIR /build
 COPY . .
 
-RUN cargo build --release --bin mentedb-server
+# local-embeddings bundles the Candle model loader so the container has
+# zero-config semantic search (model downloads on first start).
+RUN cargo build --release --bin mentedb-server --features mentedb-server/local-embeddings
 
 # Production stage
 FROM debian:bookworm-slim

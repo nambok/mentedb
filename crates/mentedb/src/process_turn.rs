@@ -227,9 +227,7 @@ impl MenteDb {
         );
 
         // §1: Embed query
-        let query_embedding = self
-            .embed_text(&input.user_message)?
-            .unwrap_or_else(|| vec![0.0; 384]);
+        let query_embedding = self.embed_or_empty(&input.user_message)?;
 
         // §1b: Try speculative cache, fall back to hybrid search
         let (context, current_ids, cache_hit) =
@@ -423,15 +421,36 @@ impl MenteDb {
             .collect()
     }
 
+    /// Embed text, or return an empty embedding when no provider is configured.
+    ///
+    /// An empty embedding degrades honestly: store() skips the vector index,
+    /// write inference skips similarity checks, and retrieval falls back to
+    /// keyword (BM25) matching. A zero vector would instead pollute the HNSW
+    /// index and silently make every cosine similarity zero.
+    fn embed_or_empty(&self, text: &str) -> crate::MenteResult<Vec<f32>> {
+        match self.embed_text(text)? {
+            Some(embedding) => Ok(embedding),
+            None => {
+                static NO_EMBEDDER_WARN: std::sync::Once = std::sync::Once::new();
+                NO_EMBEDDER_WARN.call_once(|| {
+                    warn!(
+                        "no embedding provider configured: semantic search, auto-linking, and \
+                         contradiction detection are DISABLED; retrieval falls back to keyword \
+                         (BM25) matching only. Configure a provider via open_with_embedder()."
+                    );
+                });
+                Ok(Vec::new())
+            }
+        }
+    }
+
     fn store_episodic(
         &self,
         conversation: &str,
         agent_id: AgentId,
         project_context: &Option<String>,
     ) -> crate::MenteResult<(Vec<MemoryId>, Option<MemoryId>)> {
-        let embedding = self
-            .embed_text(conversation)?
-            .unwrap_or_else(|| vec![0.0; 384]);
+        let embedding = self.embed_or_empty(conversation)?;
         let mut node = MemoryNode::new(
             agent_id,
             MemoryType::Episodic,
@@ -656,9 +675,7 @@ impl MenteDb {
         }
 
         let correction_content = format!("Correction: {}", user_message);
-        let embedding = self
-            .embed_text(&correction_content)?
-            .unwrap_or_else(|| vec![0.0; 384]);
+        let embedding = self.embed_or_empty(&correction_content)?;
         let mut node = MemoryNode::new(
             agent_id,
             MemoryType::Semantic,
@@ -737,9 +754,7 @@ impl MenteDb {
             input.user_message.clone()
         };
 
-        let topic_embedding = self
-            .embed_text(&raw_topic)?
-            .unwrap_or_else(|| vec![0.0; 384]);
+        let topic_embedding = self.embed_or_empty(&raw_topic)?;
 
         let node = TrajectoryNode {
             turn_id: input.turn_id,
