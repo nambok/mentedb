@@ -535,6 +535,14 @@ impl MenteDb {
         }
         drop(page_map);
 
+        // Batch inserts get the same auto-linking, contradiction detection,
+        // and invalidation as single stores.
+        if self.cognitive_config.write_inference {
+            for node in &nodes {
+                self.run_write_inference(node);
+            }
+        }
+
         Ok(ids)
     }
 

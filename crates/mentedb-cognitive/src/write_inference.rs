@@ -126,37 +126,41 @@ impl WriteInferenceEngine {
 
             let sim = cosine_similarity(&new_memory.embedding, &existing.embedding);
 
-            // Very high similarity: potential duplicate or contradiction
-            if sim > self.config.contradiction_threshold
-                && existing.agent_id == new_memory.agent_id
-                && existing.content != new_memory.content
+            // The bands are mutually exclusive: each pair gets at most one
+            // action. A contradiction is flagged for review, NOT silently
+            // invalidated; an exact duplicate (same content) is superseded.
+            if sim > self.config.contradiction_threshold {
+                if existing.agent_id == new_memory.agent_id
+                    && existing.content != new_memory.content
+                {
+                    actions.push(InferredAction::FlagContradiction {
+                        existing: existing.id,
+                        new: new_memory.id,
+                        reason: format!(
+                            "High embedding similarity ({:.3}) with different content from same agent",
+                            sim
+                        ),
+                    });
+                } else if new_memory.created_at > existing.created_at {
+                    // Same content (or cross-agent duplicate): supersede the old copy.
+                    actions.push(InferredAction::InvalidateMemory {
+                        memory: existing.id,
+                        superseded_by: new_memory.id,
+                        valid_until: new_memory.created_at,
+                    });
+                }
+            } else if sim > self.config.obsolete_threshold
+                && new_memory.created_at > existing.created_at
             {
-                actions.push(InferredAction::FlagContradiction {
-                    existing: existing.id,
-                    new: new_memory.id,
-                    reason: format!(
-                        "High embedding similarity ({:.3}) with different content from same agent",
-                        sim
-                    ),
-                });
-            }
-
-            // High similarity: mark older as obsolete if newer timestamp
-            if sim > self.config.obsolete_threshold && new_memory.created_at > existing.created_at {
-                actions.push(InferredAction::MarkObsolete {
-                    memory: existing.id,
-                    superseded_by: new_memory.id,
-                });
-                // Also emit temporal invalidation so the old memory gets valid_until set
+                // InvalidateMemory both sets valid_until and creates the
+                // Supersedes edge; emitting MarkObsolete as well would
+                // duplicate the edge and invalidate twice.
                 actions.push(InferredAction::InvalidateMemory {
                     memory: existing.id,
                     superseded_by: new_memory.id,
                     valid_until: new_memory.created_at,
                 });
-            }
-
-            // Moderate similarity: create Related edge
-            if sim > self.config.related_min && sim <= self.config.related_max {
+            } else if sim > self.config.related_min && sim <= self.config.related_max {
                 actions.push(InferredAction::CreateEdge {
                     source: new_memory.id,
                     target: existing.id,
@@ -228,20 +232,12 @@ impl WriteInferenceEngine {
                 if let Ok(verdict) = llm.judge_invalidation(&old_summary, &new_summary).await {
                     match verdict {
                         InvalidationVerdict::Invalidate { reason: _ } => {
-                            actions.push(InferredAction::MarkObsolete {
-                                memory: existing.id,
-                                superseded_by: new_memory.id,
-                            });
+                            // InvalidateMemory sets valid_until and creates the
+                            // Supersedes edge; no separate MarkObsolete/CreateEdge.
                             actions.push(InferredAction::InvalidateMemory {
                                 memory: existing.id,
                                 superseded_by: new_memory.id,
                                 valid_until: new_memory.created_at,
-                            });
-                            actions.push(InferredAction::CreateEdge {
-                                source: new_memory.id,
-                                target: existing.id,
-                                edge_type: EdgeType::Supersedes,
-                                weight: 1.0,
                             });
                             actions.push(InferredAction::UpdateConfidence {
                                 memory: existing.id,
@@ -289,20 +285,10 @@ impl WriteInferenceEngine {
                             } else {
                                 (new_memory.id, existing.id)
                             };
-                            actions.push(InferredAction::MarkObsolete {
-                                memory: obsolete,
-                                superseded_by: superseder,
-                            });
                             actions.push(InferredAction::InvalidateMemory {
                                 memory: obsolete,
                                 superseded_by: superseder,
                                 valid_until: new_memory.created_at,
-                            });
-                            actions.push(InferredAction::CreateEdge {
-                                source: superseder,
-                                target: obsolete,
-                                edge_type: EdgeType::Supersedes,
-                                weight: 1.0,
                             });
                         }
                         ContradictionVerdict::Compatible { .. } => {}
@@ -334,12 +320,6 @@ impl WriteInferenceEngine {
         {
             let sim = cosine_similarity(&new_memory.embedding, &original.embedding);
             if sim > self.config.correction_threshold {
-                actions.push(InferredAction::CreateEdge {
-                    source: new_memory.id,
-                    target: original.id,
-                    edge_type: EdgeType::Supersedes,
-                    weight: 1.0,
-                });
                 actions.push(InferredAction::InvalidateMemory {
                     memory: original.id,
                     superseded_by: new_memory.id,
@@ -463,11 +443,21 @@ mod tests {
             "Expected InvalidateMemory from LLM verdict, got: {:?}",
             actions
         );
-        assert!(
-            actions
-                .iter()
-                .any(|a| matches!(a, InferredAction::MarkObsolete { .. })),
-            "Expected MarkObsolete from LLM verdict, got: {:?}",
+        // Exactly one invalidation action: InvalidateMemory both sets
+        // valid_until and creates the Supersedes edge, so a MarkObsolete
+        // alongside it would duplicate the edge.
+        let invalidation_count = actions
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a,
+                    InferredAction::InvalidateMemory { .. } | InferredAction::MarkObsolete { .. }
+                )
+            })
+            .count();
+        assert_eq!(
+            invalidation_count, 1,
+            "Expected a single invalidation action, got: {:?}",
             actions
         );
     }
