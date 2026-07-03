@@ -78,7 +78,7 @@ One function call runs the full 14-step cognitive pipeline: embedding, speculati
 **Via MCP (zero code):**
 
 ```bash
-npx mentedb-mcp@latest setup copilot  # or claude, cursor, vscode
+npx mentedb-mcp@latest setup copilot  # or claude, cursor
 ```
 
 Your AI assistant calls `process_turn` automatically every turn.
