@@ -483,7 +483,9 @@ impl MenteDb {
                         valid_until: None,
                         label: None,
                     };
-                    let _ = self.relate(edge);
+                    if let Err(e) = self.relate(edge) {
+                        tracing::warn!("failed to create inferred edge: {e}");
+                    }
                     applied += 1;
                 }
                 crate::InferredAction::MarkObsolete {
@@ -500,7 +502,9 @@ impl MenteDb {
                         valid_until: None,
                         label: None,
                     };
-                    let _ = self.relate(edge);
+                    if let Err(e) = self.relate(edge) {
+                        tracing::warn!("failed to create inferred edge: {e}");
+                    }
                     applied += 1;
                 }
                 crate::InferredAction::CreateEdge {
@@ -519,7 +523,9 @@ impl MenteDb {
                         valid_until: None,
                         label: None,
                     };
-                    let _ = self.relate(edge);
+                    if let Err(e) = self.relate(edge) {
+                        tracing::warn!("failed to create inferred edge: {e}");
+                    }
                     applied += 1;
                 }
                 crate::InferredAction::UpdateConfidence {
@@ -599,7 +605,9 @@ impl MenteDb {
                         valid_until: None,
                         label: None,
                     };
-                    let _ = self.relate(edge);
+                    if let Err(e) = self.relate(edge) {
+                        tracing::warn!("failed to create inferred edge: {e}");
+                    }
                     edges_created += 1;
                 }
             }

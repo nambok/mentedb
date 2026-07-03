@@ -343,12 +343,9 @@ impl MenteDb {
             IndexManager::default()
         };
 
-        let graph = if graph_dir.join("graph.json").exists() {
-            debug!("Loading graph from {}", graph_dir.display());
-            GraphManager::load(&graph_dir)?
-        } else {
-            GraphManager::new()
-        };
+        // Directory-backed graph: loads the snapshot and replays the edge log,
+        // so edges created since the last flush survive a crash.
+        let graph = GraphManager::open(&graph_dir)?;
 
         // Rebuild page map by scanning all pages
         let entries = storage.scan_all_memories();
@@ -358,6 +355,15 @@ impl MenteDb {
         }
         if !page_map.is_empty() {
             info!(memories = page_map.len(), "rebuilt page map from storage");
+        }
+
+        // Every stored memory must be a graph node, even when the graph
+        // snapshot/log is missing or behind storage (e.g. after a crash);
+        // otherwise relate() and write inference fail for surviving memories.
+        for memory_id in page_map.keys() {
+            if !graph.read_graph().contains_node(*memory_id) {
+                graph.add_memory(*memory_id);
+            }
         }
 
         let write_inference =
