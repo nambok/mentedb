@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.10.0...mentedb-consolidation-v0.10.1) - 2026-07-03
+
+### Other
+
+- lead with Claude Code hooks and connector integration paths, bump benchmark version to 0.10.0 ([#92](https://github.com/nambok/mentedb/pull/92))
+
 ## [0.10.0](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.9.2...mentedb-consolidation-v0.10.0) - 2026-07-03
 
 ### Other
