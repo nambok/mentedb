@@ -47,6 +47,7 @@ struct ServerConfig {
     llm_base_url: Option<String>,
     extraction_quality_threshold: Option<f32>,
     extraction_dedup_threshold: Option<f32>,
+    embedding_provider: Option<String>,
 }
 fn parse_args() -> ServerConfig {
     let args: Vec<String> = env::args().collect();
@@ -63,6 +64,7 @@ fn parse_args() -> ServerConfig {
     let mut llm_base_url: Option<String> = None;
     let mut extraction_quality_threshold: Option<f32> = None;
     let mut extraction_dedup_threshold: Option<f32> = None;
+    let mut embedding_provider: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -162,6 +164,15 @@ fn parse_args() -> ServerConfig {
                     std::process::exit(1);
                 }
             }
+            "--embedding-provider" => {
+                if i + 1 < args.len() {
+                    embedding_provider = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --embedding-provider requires a value (candle, hash, none)");
+                    std::process::exit(1);
+                }
+            }
             _ => {
                 eprintln!("Unknown argument: {}", args[i]);
                 std::process::exit(1);
@@ -211,6 +222,11 @@ fn parse_args() -> ServerConfig {
     {
         extraction_dedup_threshold = v.parse().ok();
     }
+    if embedding_provider.is_none()
+        && let Ok(v) = env::var("MENTEDB_EMBEDDING_PROVIDER")
+    {
+        embedding_provider = Some(v);
+    }
     ServerConfig {
         data_dir,
         port,
@@ -225,6 +241,76 @@ fn parse_args() -> ServerConfig {
         llm_base_url,
         extraction_quality_threshold,
         extraction_dedup_threshold,
+        embedding_provider,
+    }
+}
+
+/// Build the embedding provider for the server.
+///
+/// Without an embedder the engine's semantic search, auto-linking, and
+/// contradiction detection are inert (only keyword retrieval works), so the
+/// server always wires one and is loud about quality degradation.
+///
+/// Selection: `candle` (semantic, requires the `local-embeddings` build
+/// feature), `hash` (deterministic but non-semantic), `none` (disable).
+/// Default: candle when compiled in, hash otherwise.
+fn build_embedder(
+    choice: Option<&str>,
+) -> Option<Box<dyn mentedb_embedding::provider::EmbeddingProvider>> {
+    let choice = choice.unwrap_or(if cfg!(feature = "local-embeddings") {
+        "candle"
+    } else {
+        "hash"
+    });
+
+    match choice {
+        "none" => {
+            eprintln!(
+                "WARNING: embeddings disabled (--embedding-provider none). Semantic search, \
+                 auto-linking, and contradiction detection will not work; retrieval is \
+                 keyword-only."
+            );
+            None
+        }
+        "candle" => {
+            #[cfg(feature = "local-embeddings")]
+            {
+                match mentedb_embedding::CandleEmbeddingProvider::new() {
+                    Ok(provider) => {
+                        tracing::info!("using local Candle embeddings (all-MiniLM-L6-v2)");
+                        return Some(Box::new(provider));
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "WARNING: failed to load Candle embedding model ({e}); falling back \
+                             to non-semantic hash embeddings. Semantic search quality will be \
+                             severely degraded."
+                        );
+                        return Some(Box::new(mentedb_embedding::HashEmbeddingProvider::new(384)));
+                    }
+                }
+            }
+            #[cfg(not(feature = "local-embeddings"))]
+            {
+                eprintln!(
+                    "Error: --embedding-provider candle requires a build with \
+                     --features local-embeddings"
+                );
+                std::process::exit(1);
+            }
+        }
+        "hash" => {
+            eprintln!(
+                "WARNING: using non-semantic hash embeddings. Only byte-identical text matches; \
+                 semantic search, auto-linking, and contradiction detection are effectively \
+                 disabled. Rebuild with --features local-embeddings for real semantic search."
+            );
+            Some(Box::new(mentedb_embedding::HashEmbeddingProvider::new(384)))
+        }
+        other => {
+            eprintln!("Error: unknown embedding provider '{other}' (expected candle, hash, none)");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -262,7 +348,10 @@ async fn main() -> Result<()> {
 
     std::fs::create_dir_all(&data_dir)?;
 
-    let db = MenteDb::open(&data_dir)?;
+    let db = match build_embedder(config.embedding_provider.as_deref()) {
+        Some(embedder) => MenteDb::open_with_embedder(&data_dir, embedder)?,
+        None => MenteDb::open(&data_dir)?,
+    };
     let db = Arc::new(db);
 
     let auth_mode = if jwt_secret.is_some() {

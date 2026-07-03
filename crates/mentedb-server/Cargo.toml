@@ -15,6 +15,7 @@ mentedb = { workspace = true }
 mentedb-core = { workspace = true }
 mentedb-cognitive = { workspace = true }
 mentedb-extraction = { workspace = true }
+mentedb-embedding = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { version = "0.1", features = ["net"] }
 serde = { workspace = true }
@@ -31,6 +32,12 @@ http-body-util = "0.1"
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 tonic = "0.13"
 prost = "0.13"
+
+[features]
+default = []
+# Bundle the local Candle embedding model (all-MiniLM-L6-v2) so the server has
+# zero-config semantic search. Enabled in release/Docker builds.
+local-embeddings = ["mentedb-embedding/local"]
 
 [build-dependencies]
 tonic-build = "0.13"
