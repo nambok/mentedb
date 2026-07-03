@@ -150,6 +150,23 @@ impl BufferPool {
         }
     }
 
+    /// Drop a page from the pool without flushing, discarding any dirty state.
+    ///
+    /// Used when a page is freed: the on-disk state is already authoritative,
+    /// so a stale cached copy must never be served or flushed back. A no-op if
+    /// the page is not cached.
+    pub fn invalidate(&self, page_id: PageId) {
+        let mut inner = self.inner.lock();
+        if let Some(fid) = inner.page_table.remove(&page_id) {
+            let frame = &mut inner.frames[fid];
+            frame.page_id = None;
+            frame.pin_count = 0;
+            frame.dirty = false;
+            frame.reference = false;
+            debug!(page_id = page_id.0, "invalidated cached page");
+        }
+    }
+
     /// Replace the cached copy of a page and mark it dirty.
     pub fn update_page(&self, page_id: PageId, page: &Page) -> MenteResult<()> {
         let mut inner = self.inner.lock();

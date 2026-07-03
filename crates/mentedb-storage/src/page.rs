@@ -324,6 +324,34 @@ impl PageManager {
         Ok(())
     }
 
+    /// Rebuild the free list by scanning page types.
+    ///
+    /// Used after WAL recovery: header updates are not fsynced per write, so
+    /// the persisted free list can disagree with WAL-replayed page states.
+    /// Page types are WAL-authoritative; the chain is derived from them.
+    pub fn rebuild_free_list(&mut self) -> MenteResult<()> {
+        let mut head = 0u64;
+        let mut freed = 0usize;
+        for i in (1..self.page_count).rev() {
+            let page = self.read_page(PageId(i))?;
+            if PageType::from(page.header.page_type) == PageType::Free {
+                let mut fresh = Page::zeroed();
+                fresh.header.page_id = i;
+                fresh.header.page_type = PageType::Free as u8;
+                fresh.data[..8].copy_from_slice(&head.to_le_bytes());
+                self.write_page_raw(PageId(i), &fresh)?;
+                head = i;
+                freed += 1;
+            }
+        }
+        self.free_list_head = head;
+        self.write_file_header()?;
+        if freed > 0 {
+            debug!(freed, head, "rebuilt free list from page types");
+        }
+        Ok(())
+    }
+
     /// Total number of pages (including the header page).
     pub fn page_count(&self) -> u64 {
         self.page_count

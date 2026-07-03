@@ -63,6 +63,81 @@ fn test_forget_memory() {
 }
 
 #[test]
+fn test_forget_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let kept = make_memory("keep me", vec![1.0, 0.0, 0.0, 0.0]);
+    let forgotten = make_memory("forget me", vec![0.0, 1.0, 0.0, 0.0]);
+    let (kept_id, forgotten_id) = (kept.id, forgotten.id);
+
+    {
+        let db = MenteDb::open(dir.path()).unwrap();
+        db.store(kept).unwrap();
+        db.store(forgotten).unwrap();
+        db.forget(forgotten_id).unwrap();
+        db.close().unwrap();
+    }
+    {
+        let db = MenteDb::open(dir.path()).unwrap();
+        assert_eq!(db.memory_count(), 1, "forgotten memory must not resurrect");
+        assert!(db.get_memory(kept_id).is_ok());
+        assert!(
+            db.get_memory(forgotten_id).is_err(),
+            "forgotten memory must stay forgotten after reopen"
+        );
+        db.close().unwrap();
+    }
+}
+
+#[test]
+fn test_forget_survives_crash() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = make_memory("forget me before crash", vec![0.0, 1.0, 0.0, 0.0]);
+    let id = node.id;
+
+    {
+        let db = MenteDb::open(dir.path()).unwrap();
+        db.store(node).unwrap();
+        db.forget(id).unwrap();
+        // Simulate crash: no close, no flush.
+        std::mem::forget(db);
+    }
+    {
+        let db = MenteDb::open(dir.path()).unwrap();
+        assert!(
+            db.get_memory(id).is_err(),
+            "forget must be WAL-durable across a crash"
+        );
+        assert_eq!(db.memory_count(), 0);
+        db.close().unwrap();
+    }
+}
+
+#[test]
+fn test_invalidation_updates_in_place_across_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = make_memory("versioned fact", vec![1.0, 0.0, 0.0, 0.0]);
+    let id = node.id;
+
+    {
+        let db = MenteDb::open(dir.path()).unwrap();
+        db.store(node).unwrap();
+        db.invalidate_memory(id, 12345).unwrap();
+        db.close().unwrap();
+    }
+    {
+        let db = MenteDb::open(dir.path()).unwrap();
+        assert_eq!(
+            db.memory_count(),
+            1,
+            "in-place update must not orphan a duplicate copy"
+        );
+        let loaded = db.get_memory(id).unwrap();
+        assert_eq!(loaded.valid_until, Some(12345));
+        db.close().unwrap();
+    }
+}
+
+#[test]
 fn test_relate_memories() {
     let dir = tempfile::tempdir().unwrap();
     let db = MenteDb::open(dir.path()).unwrap();
