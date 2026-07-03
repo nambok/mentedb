@@ -1,6 +1,6 @@
 //! Page Manager: file-backed page storage with free list management.
 //!
-//! Pages are 16KB fixed-size blocks used as the fundamental I/O unit.
+//! Pages are 64KB fixed-size blocks used as the fundamental I/O unit.
 //! The page file layout:
 //! - Page 0: file header (magic, version, page count, free list head)
 //! - Page 1..N: data pages

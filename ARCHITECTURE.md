@@ -103,7 +103,7 @@ Owns all durable state. Implements a page oriented storage engine with
 write ahead logging and a buffer pool.
 
 **Page Manager** (`page.rs`):
-Pages are 16 KB, the same size PostgreSQL uses. Each page carries a header
+Pages are 64 KB, sized to fit large embedding vectors and long content in a single page. Each page carries a header
 with its ID, LSN (log sequence number), checksum, free space counter, slot count,
 and page type (Free, Data, Index, Overflow). The page manager maps a directory
 to a single data file, maintains a free list for page allocation, and provides

@@ -43,7 +43,7 @@ pub mod backup;
 pub mod buffer;
 /// Unified storage facade for memory persistence.
 pub mod engine;
-/// File backed 16KB page manager with free list allocation.
+/// File backed 64KB page manager with free list allocation.
 pub mod page;
 /// Append only write ahead log with CRC checks and LZ4 compression.
 pub mod wal;
