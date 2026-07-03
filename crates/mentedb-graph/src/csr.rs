@@ -415,11 +415,20 @@ impl CsrGraph {
             edge_data,
         }
     }
-    /// Save the graph to a binary file.
+    /// Save the graph snapshot to a file.
     pub fn save(&self, path: &std::path::Path) -> MenteResult<()> {
         let data =
             serde_json::to_vec(self).map_err(|e| MenteError::Serialization(e.to_string()))?;
-        std::fs::write(path, data)?;
+        // Atomic snapshot: write to a temp file, fsync, then rename over the
+        // old snapshot so a crash mid-save never leaves a truncated graph.
+        let tmp_path = path.with_extension("json.tmp");
+        {
+            use std::io::Write;
+            let mut file = std::fs::File::create(&tmp_path)?;
+            file.write_all(&data)?;
+            file.sync_data()?;
+        }
+        std::fs::rename(&tmp_path, path)?;
         Ok(())
     }
 

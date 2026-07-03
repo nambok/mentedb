@@ -138,6 +138,114 @@ fn test_invalidation_updates_in_place_across_reopen() {
 }
 
 #[test]
+fn test_edges_survive_crash() {
+    let dir = tempfile::tempdir().unwrap();
+    let m1 = make_memory("cause", vec![1.0, 0.0, 0.0, 0.0]);
+    let m2 = make_memory("effect", vec![0.0, 1.0, 0.0, 0.0]);
+    let (id1, id2) = (m1.id, m2.id);
+
+    {
+        let db = MenteDb::open(dir.path()).unwrap();
+        db.store(m1).unwrap();
+        db.store(m2).unwrap();
+        db.relate(MemoryEdge {
+            source: id1,
+            target: id2,
+            edge_type: EdgeType::Caused,
+            weight: 0.9,
+            created_at: 0,
+            valid_from: None,
+            valid_until: None,
+            label: Some("crash-edge".into()),
+        })
+        .unwrap();
+        // Simulate crash: no close, no flush — the graph snapshot was never
+        // written, so the edge only exists in the edge log.
+        std::mem::forget(db);
+    }
+    {
+        let db = MenteDb::open(dir.path()).unwrap();
+        let g = db.graph().read_graph();
+        let out = g.outgoing(id1);
+        assert_eq!(out.len(), 1, "edge must survive a crash via the edge log");
+        assert_eq!(out[0].0, id2);
+        assert_eq!(out[0].1.label.as_deref(), Some("crash-edge"));
+        drop(g);
+        db.close().unwrap();
+    }
+}
+
+#[test]
+fn test_relate_works_after_crash() {
+    let dir = tempfile::tempdir().unwrap();
+    let m1 = make_memory("first", vec![1.0, 0.0, 0.0, 0.0]);
+    let m2 = make_memory("second", vec![0.0, 1.0, 0.0, 0.0]);
+    let (id1, id2) = (m1.id, m2.id);
+
+    {
+        let db = MenteDb::open(dir.path()).unwrap();
+        db.store(m1).unwrap();
+        db.store(m2).unwrap();
+        // Crash before any flush: no graph snapshot exists on disk.
+        std::mem::forget(db);
+    }
+    {
+        // Graph nodes must be rebuilt from storage so surviving memories can
+        // still be linked.
+        let db = MenteDb::open(dir.path()).unwrap();
+        db.relate(MemoryEdge {
+            source: id1,
+            target: id2,
+            edge_type: EdgeType::Supports,
+            weight: 0.5,
+            created_at: 0,
+            valid_from: None,
+            valid_until: None,
+            label: None,
+        })
+        .expect("relate must work on memories that survived a crash");
+        db.close().unwrap();
+    }
+}
+
+#[test]
+fn test_forgotten_memory_edges_do_not_resurrect() {
+    let dir = tempfile::tempdir().unwrap();
+    let m1 = make_memory("keep", vec![1.0, 0.0, 0.0, 0.0]);
+    let m2 = make_memory("forget", vec![0.0, 1.0, 0.0, 0.0]);
+    let (id1, id2) = (m1.id, m2.id);
+
+    {
+        let db = MenteDb::open(dir.path()).unwrap();
+        db.store(m1).unwrap();
+        db.store(m2).unwrap();
+        db.relate(MemoryEdge {
+            source: id1,
+            target: id2,
+            edge_type: EdgeType::Related,
+            weight: 0.5,
+            created_at: 0,
+            valid_from: None,
+            valid_until: None,
+            label: None,
+        })
+        .unwrap();
+        db.forget(id2).unwrap();
+        std::mem::forget(db); // crash: RemoveNode only in the edge log
+    }
+    {
+        let db = MenteDb::open(dir.path()).unwrap();
+        let g = db.graph().read_graph();
+        assert!(
+            g.outgoing(id1).is_empty(),
+            "edges to a forgotten memory must not survive the crash"
+        );
+        drop(g);
+        db.close().unwrap();
+    }
+}
+
+#[test]
 fn test_relate_memories() {
     let dir = tempfile::tempdir().unwrap();
     let db = MenteDb::open(dir.path()).unwrap();
