@@ -78,7 +78,7 @@ One function call runs the full 14-step cognitive pipeline: embedding, speculati
 **Via MCP (zero code):**
 
 ```bash
-npx mentedb-mcp@latest setup copilot  # or claude, cursor
+npx mentedb-mcp@latest setup claude-code  # or copilot, claude, cursor
 ```
 
 Your AI assistant calls `process_turn` automatically every turn.
@@ -183,9 +183,21 @@ So asking *"What breed is my dog?"* retrieves the entity MAX with its breed attr
 
 ## Integration Options
 
-### 1. MCP Server (AI Clients)
+### 1. Claude Code (lifecycle hooks)
 
-For Claude CLI, Copilot CLI, Cursor, Windsurf, and any MCP compatible client.
+On Claude Code, MenteDB runs through lifecycle hooks instead of MCP tools: zero tool-schema tokens, memory on every turn, and re-injection after context compaction.
+
+```bash
+npx mentedb-mcp@latest setup claude-code
+```
+
+### 2. Claude app (custom connector)
+
+On claude.ai and the Claude apps, add MenteDB as a custom connector with just the URL (`https://api.mentedb.com/mcp`): sign in once, no install. Discovery, dynamic registration, and PKCE are handled automatically.
+
+### 3. MCP Server (other AI clients)
+
+For Copilot CLI, Cursor, Claude Desktop, and any MCP compatible client.
 
 ```bash
 npx mentedb-mcp@latest setup copilot
@@ -634,7 +646,7 @@ LLM_PROVIDER=anthropic LLM_API_KEY=sk-ant-... \
 
 [LongMemEval](https://arxiv.org/abs/2410.10813) is the standard benchmark for long-term conversational memory systems. It tests 500 questions across 7 categories using real multi-session conversation histories.
 
-**MenteDB v0.9.3** — 500 questions, judged by gpt-4o-2024-08-06 (official):
+**MenteDB v0.10.0** — 500 questions, judged by gpt-4o-2024-08-06 (official):
 
 | Category | Score | Questions |
 |----------|-------|-----------|
