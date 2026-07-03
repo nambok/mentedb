@@ -167,9 +167,22 @@ impl CsrGraph {
     }
 
     /// Add an edge to the delta log.
+    ///
+    /// Deduplicates: if a currently-valid edge with the same source, target,
+    /// and type already exists (in CSR or the delta log), the graph is left
+    /// unchanged. Write inference and pipeline passes may infer the same
+    /// relationship more than once; parallel duplicates carry no information.
     pub fn add_edge(&mut self, edge: &MemoryEdge) {
         let source_idx = self.add_node(edge.source);
         let target_idx = self.add_node(edge.target);
+
+        let duplicate = self.outgoing_by_idx(source_idx).into_iter().any(|(t, e)| {
+            t == edge.target && e.edge_type == edge.edge_type && e.valid_until.is_none()
+        });
+        if duplicate {
+            return;
+        }
+
         self.delta_edges.push(DeltaEdge {
             source_idx,
             target_idx,
@@ -178,18 +191,38 @@ impl CsrGraph {
     }
 
     /// Strengthen an edge by incrementing its weight (Hebbian learning).
-    /// Adds a delta edge with the new weight; compaction will merge it.
+    ///
+    /// Updates the existing edge rather than appending a parallel duplicate:
+    /// a delta edge is bumped in place; a compressed (CSR) edge is marked
+    /// removed and replaced with a delta override, so compaction keeps
+    /// exactly one copy.
     pub fn strengthen_edge(&mut self, source: MemoryId, target: MemoryId, delta: f32) {
-        // Find the existing edge to get its current data
+        let (Some(&source_idx), Some(&target_idx)) =
+            (self.id_to_idx.get(&source), self.id_to_idx.get(&target))
+        else {
+            return;
+        };
+
+        // Bump an existing delta edge in place.
         if let Some(existing) = self
-            .outgoing(source)
+            .delta_edges
+            .iter_mut()
+            .find(|e| e.source_idx == source_idx && e.target_idx == target_idx)
+        {
+            existing.data.weight = (existing.data.weight + delta).min(1.0);
+            return;
+        }
+
+        // Edge lives in compressed storage: suppress the CSR copy and push a
+        // delta override. Removed-edge filtering only applies to compressed
+        // edges, so the override remains visible.
+        if let Some((_, stored)) = self
+            .outgoing_by_idx(source_idx)
             .into_iter()
             .find(|(id, _)| *id == target)
         {
-            let (_, stored) = existing;
             let new_weight = (stored.weight + delta).min(1.0);
-            let source_idx = self.add_node(source);
-            let target_idx = self.add_node(target);
+            self.removed_edges.push((source_idx, target_idx));
             self.delta_edges.push(DeltaEdge {
                 source_idx,
                 target_idx,

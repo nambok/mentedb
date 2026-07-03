@@ -485,13 +485,15 @@ fn test_write_inference_invalidates_superseded_memory() {
     let m1_id = m1.id;
     db.store(m1).unwrap();
 
-    // Very similar embedding (sim > 0.85) = should mark m1 as obsolete.
+    // Similarity in the supersede band (0.85 < sim <= 0.95) marks m1 obsolete.
+    // Above 0.95 the engine flags a contradiction instead of invalidating.
     let m2 = MemoryNode::new(
         agent,
         MemoryType::Semantic,
         "Project version is 3.0".to_string(),
-        vec![0.99, 0.05, 0.0, 0.0],
+        vec![0.90, 0.43589, 0.0, 0.0],
     );
+    let m2_id = m2.id;
     db.store(m2).unwrap();
 
     // m1 should now have valid_until set (invalidated).
@@ -500,6 +502,104 @@ fn test_write_inference_invalidates_superseded_memory() {
         m1_after.valid_until.is_some(),
         "Superseded memory should have valid_until set, got None"
     );
+
+    // Exactly one Supersedes edge, not parallel duplicates.
+    let g = db.graph().read_graph();
+    let supersedes: Vec<_> = g
+        .outgoing(m2_id)
+        .into_iter()
+        .filter(|(t, e)| *t == m1_id && e.edge_type == EdgeType::Supersedes)
+        .collect();
+    assert_eq!(
+        supersedes.len(),
+        1,
+        "supersede must create exactly one edge, got {}",
+        supersedes.len()
+    );
+    drop(g);
+
+    db.close().unwrap();
+}
+
+#[test]
+fn test_contradiction_does_not_invalidate() {
+    // Above 0.95 similarity with different content: flag the contradiction,
+    // keep both memories valid for review.
+    let dir = tempfile::tempdir().unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
+    let agent = AgentId::new();
+
+    let m1 = MemoryNode::new(
+        agent,
+        MemoryType::Semantic,
+        "User loves PostgreSQL".to_string(),
+        vec![1.0, 0.0, 0.0, 0.0],
+    );
+    let m1_id = m1.id;
+    db.store(m1).unwrap();
+
+    let m2 = MemoryNode::new(
+        agent,
+        MemoryType::Semantic,
+        "User hates PostgreSQL".to_string(),
+        vec![0.99, 0.14106736, 0.0, 0.0],
+    );
+    let m2_id = m2.id;
+    db.store(m2).unwrap();
+
+    let m1_after = db.get_memory(m1_id).unwrap();
+    assert!(
+        m1_after.valid_until.is_none(),
+        "a flagged contradiction must not silently invalidate the old memory"
+    );
+
+    let g = db.graph().read_graph();
+    let edges = g.outgoing(m2_id);
+    assert_eq!(edges.len(), 1, "exactly one edge expected, got {edges:?}");
+    assert_eq!(edges[0].1.edge_type, EdgeType::Contradicts);
+    drop(g);
+
+    db.close().unwrap();
+}
+
+#[test]
+fn test_store_batch_runs_write_inference() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
+    let agent = AgentId::new();
+
+    let m1 = MemoryNode::new(
+        agent,
+        MemoryType::Semantic,
+        "User works at Acme".to_string(),
+        vec![1.0, 0.0, 0.0, 0.0],
+    );
+    let m1_id = m1.id;
+    db.store(m1).unwrap();
+
+    // Batch-stored memory in the supersede band must invalidate + link like store().
+    let m2 = MemoryNode::new(
+        agent,
+        MemoryType::Semantic,
+        "User works at Globex now".to_string(),
+        vec![0.90, 0.43589, 0.0, 0.0],
+    );
+    let m2_id = m2.id;
+    db.store_batch(vec![m2]).unwrap();
+
+    let m1_after = db.get_memory(m1_id).unwrap();
+    assert!(
+        m1_after.valid_until.is_some(),
+        "store_batch must run write inference (supersede old memory)"
+    );
+    let g = db.graph().read_graph();
+    assert!(
+        g.outgoing(m2_id)
+            .iter()
+            .any(|(t, e)| *t == m1_id && e.edge_type == EdgeType::Supersedes),
+        "store_batch must create the Supersedes edge"
+    );
+    drop(g);
 
     db.close().unwrap();
 }
