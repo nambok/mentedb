@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/nambok/mentedb/compare/mentedb-v0.9.2...mentedb-v0.10.0) - 2026-07-03
+
+### Fixed
+
+- dedup write-inference edges, make similarity bands exclusive, run inference in store_batch
+- wire embedding provider into server and stop silent zero-vector fallback in process_turn
+- crash-durable graph edges via edge log and rebuild graph nodes from storage on open
+- make forget durable via WAL-logged page free and update memories in place
+
+### Other
+
+- remove unimplemented vscode setup target from README
+- align README and architecture docs with actual engine behavior
+
 ## [0.9.2](https://github.com/nambok/mentedb/compare/mentedb-v0.9.1...mentedb-v0.9.2) - 2026-05-13
 
 ### Added

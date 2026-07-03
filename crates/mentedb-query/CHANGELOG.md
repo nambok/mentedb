@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/nambok/mentedb/compare/mentedb-query-v0.9.2...mentedb-query-v0.10.0) - 2026-07-03
+
+### Other
+
+- remove unimplemented vscode setup target from README
+- align README and architecture docs with actual engine behavior
+
 ## [0.9.2](https://github.com/nambok/mentedb/compare/mentedb-query-v0.9.1...mentedb-query-v0.9.2) - 2026-05-13
 
 ### Other
