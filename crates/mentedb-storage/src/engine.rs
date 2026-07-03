@@ -92,11 +92,30 @@ impl StorageEngine {
         // Refresh page count from disk — another process may have written pages.
         pm.reload_header()?;
 
+        // Replay with last-op-wins per page: every PageWrite carries a full page
+        // image and PageFree discards the page, so only the final entry for each
+        // page matters. This is what makes free-then-reuse sequences safe: a
+        // PageFree followed by a later PageWrite for the same page must not
+        // leave the page on the free list.
+        let mut last_op: std::collections::HashMap<u64, &crate::wal::WalEntry> = Default::default();
+        let mut order: Vec<u64> = Vec::new();
         for entry in &entries {
             match entry.entry_type {
-                WalEntryType::PageWrite => {
-                    let page_id = PageId(entry.page_id);
+                WalEntryType::PageWrite | WalEntryType::PageFree => {
+                    if !last_op.contains_key(&entry.page_id) {
+                        order.push(entry.page_id);
+                    }
+                    last_op.insert(entry.page_id, entry);
+                }
+                WalEntryType::Checkpoint | WalEntryType::Commit => {}
+            }
+        }
 
+        for page_id_raw in order {
+            let entry = last_op[&page_id_raw];
+            let page_id = PageId(entry.page_id);
+            match entry.entry_type {
+                WalEntryType::PageWrite => {
                     while pm.page_count() <= entry.page_id {
                         pm.allocate_page()?;
                     }
@@ -116,11 +135,29 @@ impl StorageEngine {
                     pm.write_page(page_id, &page)?;
                     count += 1;
                 }
+                WalEntryType::PageFree => {
+                    // Mark the page Free without touching the free list; the
+                    // list is rebuilt from page types after replay so it stays
+                    // consistent with WAL-derived page states.
+                    if entry.page_id < pm.page_count() {
+                        let mut page = Page::zeroed();
+                        page.header.page_id = entry.page_id;
+                        page.header.page_type = PageType::Free as u8;
+                        pm.write_page(page_id, &page)?;
+                        self.buffer_pool.invalidate(page_id);
+                        count += 1;
+                    }
+                }
                 WalEntryType::Checkpoint | WalEntryType::Commit => {}
             }
         }
 
         if count > 0 {
+            // Header updates (free list head, page count) are not fsynced on
+            // every write, so after a crash the free list can disagree with the
+            // replayed page states. Rebuild it from page types: the WAL is the
+            // sole source of truth for which pages are Free vs Data.
+            pm.rebuild_free_list()?;
             pm.sync()?;
             let next_lsn = wal.next_lsn();
             wal.truncate(next_lsn)?;
@@ -282,8 +319,10 @@ impl StorageEngine {
             (page_id, lsn)
         };
 
-        // Update buffer pool outside the flock (optional optimization)
-        let _ = lsn; // buffer pool update uses the page already written to disk
+        // Drop any stale cached copy (the page may have been reused from the
+        // free list); the next read loads the fresh data from disk.
+        let _ = lsn;
+        self.buffer_pool.invalidate(page_id);
 
         // Auto-checkpoint when WAL exceeds threshold to prevent unbounded growth.
         // This keeps reload_lsn() fast for subsequent writes.
@@ -360,6 +399,11 @@ impl StorageEngine {
             ids
         };
 
+        // Drop stale cached copies for pages reused from the free list.
+        for page_id in &page_ids {
+            self.buffer_pool.invalidate(*page_id);
+        }
+
         // Auto-checkpoint if WAL grew too large
         if self.wal.lock().file_size() > WAL_AUTO_CHECKPOINT_BYTES
             && let Err(e) = self.checkpoint()
@@ -369,6 +413,60 @@ impl StorageEngine {
 
         info!(count = page_ids.len(), "stored memory batch");
         Ok(page_ids)
+    }
+
+    /// Update a [`MemoryNode`] in place on its existing page.
+    ///
+    /// The write goes through the WAL-protected `write_page` path, so it is
+    /// crash-durable and keeps the buffer pool coherent. Unlike storing to a
+    /// fresh page, this never orphans the old copy.
+    pub fn update_memory(&self, page_id: PageId, node: &MemoryNode) -> MenteResult<()> {
+        let serialized =
+            serde_json::to_vec(node).map_err(|e| MenteError::Serialization(e.to_string()))?;
+
+        if serialized.len() + 4 > PAGE_DATA_SIZE {
+            return Err(MenteError::CapacityExceeded(format!(
+                "memory node serialized to {} bytes (max {})",
+                serialized.len(),
+                PAGE_DATA_SIZE - 4,
+            )));
+        }
+
+        let mut buf = Vec::with_capacity(4 + serialized.len());
+        buf.extend_from_slice(&(serialized.len() as u32).to_le_bytes());
+        buf.extend_from_slice(&serialized);
+
+        self.write_page(page_id, &buf)
+    }
+
+    /// Delete a memory by returning its page to the free list.
+    ///
+    /// The deletion is WAL-logged before the page is freed, so it survives a
+    /// crash: recovery replays the `PageFree` entry and the memory does not
+    /// resurrect on reopen. The freed page is reused by later allocations.
+    pub fn delete_memory(&self, page_id: PageId) -> MenteResult<()> {
+        {
+            let mut wal = self.wal.lock();
+            let mut pm = self.page_manager.lock();
+
+            wal.lock_exclusive()?;
+            pm.reload_header()?;
+            wal.reload_lsn()?;
+
+            // WAL fsync guarantees the deletion is durable before the page
+            // is touched; the free-list update itself is recoverable.
+            wal.append(WalEntryType::PageFree, page_id.0, &[])?;
+            wal.sync()?;
+
+            pm.free_page(page_id)?;
+            wal.unlock()?;
+        }
+
+        // A stale cached copy must never be served or flushed back.
+        self.buffer_pool.invalidate(page_id);
+
+        info!(page_id = page_id.0, "deleted memory node");
+        Ok(())
     }
 
     /// Load and deserialize a [`MemoryNode`] from the given page.
@@ -385,6 +483,13 @@ impl StorageEngine {
     pub fn load_memory(&self, page_id: PageId) -> MenteResult<MemoryNode> {
         let page = self.read_page(page_id)?;
         self.buffer_pool.unpin_page(page_id, false).ok();
+
+        if PageType::from(page.header.page_type) != PageType::Data {
+            return Err(MenteError::Storage(format!(
+                "page {} is not a data page",
+                page_id.0
+            )));
+        }
 
         let len = u32::from_le_bytes(page.data[..4].try_into().unwrap()) as usize;
         if len == 0 || len + 4 > PAGE_DATA_SIZE {
@@ -644,6 +749,141 @@ mod tests {
                 let loaded = engine.load_memory(*pid).unwrap();
                 assert_eq!(&loaded.content, expected);
             }
+        }
+    }
+
+    #[test]
+    fn test_delete_memory_durable() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid;
+        {
+            let engine = StorageEngine::open(dir.path()).unwrap();
+            let node = MemoryNode::new(
+                AgentId::new(),
+                MemoryType::Semantic,
+                "to be deleted".to_string(),
+                vec![1.0],
+            );
+            pid = engine.store_memory(&node).unwrap();
+            engine.delete_memory(pid).unwrap();
+            assert!(engine.load_memory(pid).is_err());
+            assert!(engine.scan_all_memories().is_empty());
+            engine.close().unwrap();
+        }
+        {
+            let engine = StorageEngine::open(dir.path()).unwrap();
+            assert!(
+                engine.load_memory(pid).is_err(),
+                "deleted memory must not resurrect on reopen"
+            );
+            assert!(engine.scan_all_memories().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_delete_survives_crash() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid;
+        {
+            let engine = StorageEngine::open(dir.path()).unwrap();
+            let node = MemoryNode::new(
+                AgentId::new(),
+                MemoryType::Semantic,
+                "crash delete".to_string(),
+                vec![1.0],
+            );
+            pid = engine.store_memory(&node).unwrap();
+            engine.delete_memory(pid).unwrap();
+            // Simulate crash: no close, no checkpoint.
+        }
+        {
+            let engine = StorageEngine::open(dir.path()).unwrap();
+            assert!(
+                engine.load_memory(pid).is_err(),
+                "deletion must survive a crash via WAL replay"
+            );
+            assert!(engine.scan_all_memories().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_deleted_page_reused() {
+        let (_dir, engine) = setup();
+
+        let a = MemoryNode::new(AgentId::new(), MemoryType::Semantic, "a".into(), vec![1.0]);
+        let pid_a = engine.store_memory(&a).unwrap();
+        engine.delete_memory(pid_a).unwrap();
+
+        let b = MemoryNode::new(AgentId::new(), MemoryType::Semantic, "b".into(), vec![2.0]);
+        let pid_b = engine.store_memory(&b).unwrap();
+        assert_eq!(pid_a, pid_b, "freed page should be reused");
+
+        let loaded = engine.load_memory(pid_b).unwrap();
+        assert_eq!(loaded.content, "b");
+    }
+
+    #[test]
+    fn test_delete_reuse_crash_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid;
+        let b_id;
+        {
+            let engine = StorageEngine::open(dir.path()).unwrap();
+            let a = MemoryNode::new(AgentId::new(), MemoryType::Semantic, "a".into(), vec![1.0]);
+            pid = engine.store_memory(&a).unwrap();
+            engine.delete_memory(pid).unwrap();
+            let b = MemoryNode::new(AgentId::new(), MemoryType::Semantic, "b".into(), vec![2.0]);
+            let pid_b = engine.store_memory(&b).unwrap();
+            assert_eq!(pid, pid_b);
+            b_id = b.id;
+            // Simulate crash: the WAL now holds PageFree(p) then PageWrite(p).
+        }
+        {
+            let engine = StorageEngine::open(dir.path()).unwrap();
+            let loaded = engine.load_memory(pid).unwrap();
+            assert_eq!(loaded.content, "b", "later write must win over the free");
+            assert_eq!(loaded.id, b_id);
+            // The page must NOT be on the free list: a fresh allocation must
+            // not clobber b.
+            let c = MemoryNode::new(AgentId::new(), MemoryType::Semantic, "c".into(), vec![3.0]);
+            let pid_c = engine.store_memory(&c).unwrap();
+            assert_ne!(pid_c, pid, "recovered free list must exclude reused page");
+            assert_eq!(engine.load_memory(pid).unwrap().content, "b");
+        }
+    }
+
+    #[test]
+    fn test_update_memory_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid;
+        let id;
+        {
+            let engine = StorageEngine::open(dir.path()).unwrap();
+            let mut node = MemoryNode::new(
+                AgentId::new(),
+                MemoryType::Semantic,
+                "original".to_string(),
+                vec![1.0],
+            );
+            pid = engine.store_memory(&node).unwrap();
+            id = node.id;
+
+            node.content = "updated".to_string();
+            engine.update_memory(pid, &node).unwrap();
+
+            let loaded = engine.load_memory(pid).unwrap();
+            assert_eq!(loaded.content, "updated");
+            // No orphan copy: exactly one entry in a full scan.
+            let scanned = engine.scan_all_memories();
+            assert_eq!(scanned.len(), 1);
+            engine.close().unwrap();
+        }
+        {
+            let engine = StorageEngine::open(dir.path()).unwrap();
+            let loaded = engine.load_memory(pid).unwrap();
+            assert_eq!(loaded.content, "updated");
+            assert_eq!(loaded.id, id);
+            assert_eq!(engine.scan_all_memories().len(), 1);
         }
     }
 

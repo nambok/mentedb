@@ -27,6 +27,8 @@ pub enum WalEntryType {
     /// Reserved for future transaction support. Not currently emitted.
     Commit = 2,
     Checkpoint = 3,
+    /// The page was returned to the free list (memory deleted).
+    PageFree = 4,
 }
 
 impl TryFrom<u8> for WalEntryType {
@@ -36,6 +38,7 @@ impl TryFrom<u8> for WalEntryType {
             1 => Ok(Self::PageWrite),
             2 => Ok(Self::Commit),
             3 => Ok(Self::Checkpoint),
+            4 => Ok(Self::PageFree),
             _ => Err(MenteError::Storage(format!("invalid WAL entry type: {v}"))),
         }
     }

@@ -751,8 +751,7 @@ impl MenteDb {
             .ok_or(MenteError::MemoryNotFound(id))?;
         let mut node = self.storage.load_memory(page_id)?;
         node.invalidate(at);
-        let new_page_id = self.storage.store_memory(&node)?;
-        self.page_map.write().insert(id, new_page_id);
+        self.storage.update_memory(page_id, &node)?;
         Ok(())
     }
 
@@ -788,10 +787,13 @@ impl MenteDb {
     pub fn forget(&self, id: MemoryId) -> MenteResult<()> {
         debug!("Forgetting memory {}", id);
 
-        if let Some(&page_id) = self.page_map.read().get(&id)
-            && let Ok(node) = self.storage.load_memory(page_id)
-        {
-            self.index.remove_memory(id, &node);
+        if let Some(&page_id) = self.page_map.read().get(&id) {
+            if let Ok(node) = self.storage.load_memory(page_id) {
+                self.index.remove_memory(id, &node);
+            }
+            // Durable delete: WAL-logged page free, so the memory does not
+            // resurrect when the page map is rebuilt on reopen.
+            self.storage.delete_memory(page_id)?;
         }
 
         self.graph.remove_memory(id);
@@ -989,8 +991,9 @@ impl MenteDb {
                 debug!("Updating confidence for {} to {}", memory, new_confidence);
                 if let Ok(mut node) = self.get_memory(memory) {
                     node.confidence = new_confidence;
-                    let new_page_id = self.storage.store_memory(&node)?;
-                    self.page_map.write().insert(memory, new_page_id);
+                    if let Some(&pid) = self.page_map.read().get(&memory) {
+                        self.storage.update_memory(pid, &node)?;
+                    }
                 }
             }
             InferredAction::PropagateBeliefChange { root, delta } => {
@@ -1001,8 +1004,10 @@ impl MenteDb {
                     for (affected_id, new_conf) in affected {
                         if let Ok(mut affected_node) = self.get_memory(affected_id) {
                             affected_node.confidence = new_conf;
-                            if let Ok(pid) = self.storage.store_memory(&affected_node) {
-                                self.page_map.write().insert(affected_id, pid);
+                            if let Some(&pid) = self.page_map.read().get(&affected_id)
+                                && let Err(e) = self.storage.update_memory(pid, &affected_node)
+                            {
+                                warn!("Failed to persist belief update for {affected_id}: {e}");
                             }
                         }
                     }
@@ -1016,8 +1021,9 @@ impl MenteDb {
                 debug!("Updating content of {}: {}", memory, reason);
                 if let Ok(mut node) = self.get_memory(memory) {
                     node.content = new_content;
-                    let new_page_id = self.storage.store_memory(&node)?;
-                    self.page_map.write().insert(memory, new_page_id);
+                    if let Some(&pid) = self.page_map.read().get(&memory) {
+                        self.storage.update_memory(pid, &node)?;
+                    }
                     self.index.remove_memory(memory, &node);
                     self.index.index_memory(&node);
                 }
@@ -1066,15 +1072,10 @@ impl MenteDb {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_micros() as u64;
-        let ids: Vec<(MemoryId, PageId)> = self
-            .page_map
-            .read()
-            .iter()
-            .map(|(mid, pid)| (*mid, *pid))
-            .collect();
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
 
         let mut updated = 0;
-        for (mid, pid) in &ids {
+        for pid in &page_ids {
             if let Ok(mut node) = self.storage.load_memory(*pid) {
                 let new_salience = self.decay.compute_decay(
                     node.salience,
@@ -1085,8 +1086,7 @@ impl MenteDb {
                 );
                 if (new_salience - node.salience).abs() > 0.001 {
                     node.salience = new_salience;
-                    let new_pid = self.storage.store_memory(&node)?;
-                    self.page_map.write().insert(*mid, new_pid);
+                    self.storage.update_memory(*pid, &node)?;
                     updated += 1;
                 }
             }
@@ -2215,7 +2215,7 @@ impl MenteDb {
                         .embed(summary)
                         .unwrap_or_else(|_| updated.embedding.clone());
                 }
-                self.storage.store_memory(&updated)?;
+                self.storage.update_memory(*pid, &updated)?;
                 existing_id = Some(updated.id);
                 break;
             }
@@ -2336,7 +2336,7 @@ impl MenteDb {
                         .embed(profile)
                         .unwrap_or_else(|_| updated.embedding.clone());
                 }
-                self.storage.store_memory(&updated)?;
+                self.storage.update_memory(*pid, &updated)?;
                 return Ok(updated.id);
             }
         }
