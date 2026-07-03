@@ -50,7 +50,7 @@ The server binary is `mentedb-server` and runs on axum with JWT auth, rate limit
 
 ## Architecture notes
 
-- Storage uses 16KB pages with CLOCK eviction buffer pool and WAL with LZ4 + CRC32
+- Storage uses 64KB pages with CLOCK eviction buffer pool and WAL with LZ4 + CRC32
 - HNSW index is built from scratch (not a binding), configurable M and ef parameters
 - Graph uses CSR/CSC hybrid with delta log and compact() to merge
 - MQL is a custom query language parsed by hand written recursive descent parser

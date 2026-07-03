@@ -2411,6 +2411,7 @@ dependencies = [
  "mentedb",
  "mentedb-cognitive",
  "mentedb-core",
+ "mentedb-embedding",
  "mentedb-extraction",
  "prost",
  "serde",
