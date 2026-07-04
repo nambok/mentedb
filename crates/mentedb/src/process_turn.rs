@@ -272,13 +272,8 @@ impl MenteDb {
         // §7: Proactive recall
         let proactive_recalls = self.proactive_recall(&detected_actions)?;
 
-        // §8: Auto-detect corrections
-        let correction_id = self.auto_detect_correction(
-            &input.user_message,
-            assistant_resp,
-            agent_id,
-            &input.project_context,
-        )?;
+        // §8: Auto-detect corrections (tags the episodic turn, never mints a node)
+        let correction_id = self.auto_detect_correction(&input.user_message, episodic_id)?;
 
         // §9: Sentiment analysis
         let sentiment = analyze_sentiment(&input.user_message);
@@ -670,37 +665,45 @@ impl MenteDb {
         Ok(recalls)
     }
 
+    /// Detect a correction signal and tag the stored episodic turn with it.
+    ///
+    /// Only the user message is scanned: correction indicators in assistant
+    /// output ("actually", "to clarify", ...) are ordinary prose, and scanning
+    /// them caused unrelated user messages to be recorded as corrections.
+    /// The signal is preserved as a tag on the episodic turn rather than a
+    /// fabricated semantic node, because a verbatim copy of the user message
+    /// is working material, not distilled knowledge; distilled correction
+    /// memories come from fact extraction.
     fn auto_detect_correction(
         &self,
         user_message: &str,
-        assistant_resp: &str,
-        agent_id: AgentId,
-        project_context: &Option<String>,
+        episodic_id: Option<MemoryId>,
     ) -> crate::MenteResult<Option<MemoryId>> {
-        let combined = format!("{} {}", user_message, assistant_resp).to_lowercase();
+        let lowered = user_message.to_lowercase();
         let is_correction = CORRECTION_INDICATORS
             .iter()
-            .any(|ind| combined.contains(ind));
+            .any(|ind| lowered.contains(ind));
         if !is_correction {
             return Ok(None);
         }
-
-        let correction_content = format!("Correction: {}", user_message);
-        let embedding = self.embed_or_empty(&correction_content)?;
-        let mut node = MemoryNode::new(
-            agent_id,
-            MemoryType::Semantic,
-            correction_content,
-            embedding,
-        );
-        node.tags.push("auto-correction".to_string());
-        node.tags.push("anti_pattern".to_string());
-        if let Some(ctx) = project_context {
-            node.tags.push(format!("scope:project:{}", ctx));
+        let Some(eid) = episodic_id else {
+            return Ok(None);
+        };
+        let pid = {
+            let pm = self.page_map.read();
+            match pm.get(&eid) {
+                Some(p) => *p,
+                None => return Ok(None),
+            }
+        };
+        let Ok(mut node) = self.storage.load_memory(pid) else {
+            return Ok(None);
+        };
+        if !node.tags.iter().any(|t| t == "auto-correction") {
+            node.tags.push("auto-correction".to_string());
+            self.storage.update_memory(pid, &node)?;
         }
-        let id = node.id;
-        self.store(node)?;
-        Ok(Some(id))
+        Ok(Some(eid))
     }
 
     fn detect_phantoms_and_check_stream(
