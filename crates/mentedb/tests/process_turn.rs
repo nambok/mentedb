@@ -94,6 +94,34 @@ fn test_process_turn_detects_corrections() {
 
     // Should detect correction indicators: "actually", "i was wrong"
     assert!(result.correction_id.is_some());
+    // The signal tags the episodic turn rather than minting a semantic node.
+    assert_eq!(result.correction_id, result.episodic_id);
+    let node = db.get_memory(result.correction_id.unwrap()).unwrap();
+    assert!(node.tags.iter().any(|t| t == "auto-correction"));
+    assert!(!node.content.starts_with("Correction:"));
+}
+
+#[test]
+fn test_assistant_prose_does_not_trigger_correction() {
+    let (db, _dir) = open_db();
+    let mut delta = DeltaTracker::new();
+
+    let input = ProcessTurnInput {
+        user_message: "everything deployed and ready in production?".to_string(),
+        assistant_response: Some(
+            "Actually, to clarify: the deploy completed. Update: all green.".to_string(),
+        ),
+        turn_id: 1,
+        project_context: None,
+        agent_id: None,
+        session_id: None,
+    };
+
+    let result = db.process_turn(&input, &mut delta).unwrap();
+
+    // Correction indicators in assistant output are ordinary prose and must
+    // not record the user message as a correction.
+    assert!(result.correction_id.is_none());
 }
 
 #[test]
