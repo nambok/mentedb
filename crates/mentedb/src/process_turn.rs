@@ -45,6 +45,9 @@ pub struct ProcessTurnInput {
     pub project_context: Option<String>,
     /// Agent UUID (defaults to nil if not provided).
     pub agent_id: Option<Uuid>,
+    /// Originating session, tagged onto stored turns so injection recall
+    /// can exclude memories already present in that session's context.
+    pub session_id: Option<String>,
 }
 
 /// A detected action from the conversation.
@@ -241,8 +244,12 @@ impl MenteDb {
         delta_tracker.update(&current_ids);
 
         // §3: Store episodic turn (write inference runs automatically inside store)
-        let (stored_ids, episodic_id) =
-            self.store_episodic(&conversation, agent_id, &input.project_context)?;
+        let (stored_ids, episodic_id) = self.store_episodic(
+            &conversation,
+            agent_id,
+            &input.project_context,
+            &input.session_id,
+        )?;
 
         // §4: Write inference on the episodic memory
         let inference_actions = if let Some(eid) = episodic_id {
@@ -449,6 +456,7 @@ impl MenteDb {
         conversation: &str,
         agent_id: AgentId,
         project_context: &Option<String>,
+        session_id: &Option<String>,
     ) -> crate::MenteResult<(Vec<MemoryId>, Option<MemoryId>)> {
         let embedding = self.embed_or_empty(conversation)?;
         let mut node = MemoryNode::new(
@@ -460,6 +468,9 @@ impl MenteDb {
         node.tags.push("turn".to_string());
         if let Some(ctx) = project_context {
             node.tags.push(format!("scope:project:{}", ctx));
+        }
+        if let Some(session) = session_id {
+            node.tags.push(format!("session:{}", session));
         }
         let id = node.id;
         self.store(node)?;

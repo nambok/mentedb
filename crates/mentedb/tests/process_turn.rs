@@ -35,6 +35,7 @@ fn test_process_turn_basic() {
         turn_id: 0,
         project_context: Some("test-project".to_string()),
         agent_id: None,
+        session_id: None,
     };
 
     let result = db.process_turn(&input, &mut delta).unwrap();
@@ -60,6 +61,7 @@ fn test_process_turn_detects_actions() {
         turn_id: 1,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
 
     let result = db.process_turn(&input, &mut delta).unwrap();
@@ -85,6 +87,7 @@ fn test_process_turn_detects_corrections() {
         turn_id: 1,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
 
     let result = db.process_turn(&input, &mut delta).unwrap();
@@ -104,6 +107,7 @@ fn test_process_turn_sentiment() {
         turn_id: 0,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
 
     let result = db.process_turn(&positive_input, &mut delta).unwrap();
@@ -119,6 +123,7 @@ fn test_process_turn_sentiment() {
         turn_id: 1,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
 
     let result = db.process_turn(&negative_input, &mut delta).unwrap();
@@ -141,6 +146,7 @@ fn test_process_turn_multi_turn_context() {
         turn_id: 0,
         project_context: Some("shopflow".to_string()),
         agent_id: None,
+        session_id: None,
     };
     let r0 = db.process_turn(&input0, &mut delta).unwrap();
     assert!(r0.episodic_id.is_some());
@@ -152,6 +158,7 @@ fn test_process_turn_multi_turn_context() {
         turn_id: 1,
         project_context: Some("shopflow".to_string()),
         agent_id: None,
+        session_id: None,
     };
     let r1 = db.process_turn(&input1, &mut delta).unwrap();
 
@@ -187,6 +194,7 @@ fn test_process_turn_pain_signals() {
         turn_id: 0,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
 
     let result = db.process_turn(&input, &mut delta).unwrap();
@@ -210,6 +218,7 @@ fn test_process_turn_delta_tracking() {
         turn_id: 0,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
     let r0 = db.process_turn(&input0, &mut delta).unwrap();
 
@@ -223,6 +232,7 @@ fn test_process_turn_delta_tracking() {
         turn_id: 1,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
     let _r1 = db.process_turn(&input1, &mut delta).unwrap();
     // Just verify it doesn't panic — delta computation runs
@@ -240,6 +250,7 @@ fn test_process_turn_maintenance_intervals() {
         turn_id: 0,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
     let _ = db.process_turn(&input, &mut delta).unwrap();
 
@@ -250,6 +261,7 @@ fn test_process_turn_maintenance_intervals() {
         turn_id: 50,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
     let _ = db.process_turn(&input50, &mut delta).unwrap();
 
@@ -260,6 +272,7 @@ fn test_process_turn_maintenance_intervals() {
         turn_id: 200,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
     let _ = db.process_turn(&input200, &mut delta).unwrap();
 }
@@ -285,6 +298,7 @@ fn test_enrichment_trigger_after_interval() {
             turn_id: i,
             project_context: None,
             agent_id: None,
+            session_id: None,
         };
         let result = db.process_turn(&input, &mut delta).unwrap();
         assert!(!result.enrichment_pending, "turn {} should not trigger", i);
@@ -297,6 +311,7 @@ fn test_enrichment_trigger_after_interval() {
         turn_id: 5,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
     let result = db.process_turn(&input5, &mut delta).unwrap();
     assert!(result.enrichment_pending);
@@ -316,6 +331,7 @@ fn test_enrichment_candidates_returns_episodics() {
             turn_id: i as u64,
             project_context: None,
             agent_id: None,
+            session_id: None,
         };
         db.process_turn(&input, &mut delta).unwrap();
     }
@@ -344,6 +360,7 @@ fn test_enrichment_store_results() {
         turn_id: 1,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
     let result = db.process_turn(&input, &mut delta).unwrap();
     let source_id = result.episodic_id.unwrap();
@@ -387,6 +404,7 @@ fn test_enrichment_mark_complete_resets_pending() {
             turn_id: i,
             project_context: None,
             agent_id: None,
+            session_id: None,
         };
         db.process_turn(&input, &mut delta).unwrap();
     }
@@ -405,6 +423,7 @@ fn test_enrichment_mark_complete_resets_pending() {
             turn_id: i,
             project_context: None,
             agent_id: None,
+            session_id: None,
         };
         let result = db.process_turn(&input, &mut delta).unwrap();
         assert!(!result.enrichment_pending);
@@ -417,6 +436,7 @@ fn test_enrichment_mark_complete_resets_pending() {
         turn_id: 6,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
     let result = db.process_turn(&input6, &mut delta).unwrap();
     assert!(result.enrichment_pending);
@@ -444,6 +464,7 @@ fn test_always_scope_in_retrieve_context() {
         turn_id: 1,
         project_context: None,
         agent_id: None,
+        session_id: None,
     };
     let result = db.process_turn(&input, &mut delta).unwrap();
 
