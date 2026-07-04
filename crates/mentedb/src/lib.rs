@@ -98,6 +98,9 @@ pub use mentedb_storage as storage;
 /// Unified process_turn orchestration.
 pub mod process_turn;
 
+/// Engine-native injection attention (selection policy for context injection).
+pub mod injection;
+
 /// Sleeptime enrichment pipeline (requires `enrichment` feature).
 #[cfg(feature = "enrichment")]
 pub mod enrichment;
@@ -244,6 +247,8 @@ pub struct CognitiveConfig {
     pub speculative_cache_size: usize,
     /// Maximum pain signals to retain.
     pub pain_max_warnings: usize,
+    /// Configuration for injection attention selection.
+    pub injection_config: injection::InjectionConfig,
 }
 
 impl Default for CognitiveConfig {
@@ -266,6 +271,7 @@ impl Default for CognitiveConfig {
             trajectory_max_turns: 100,
             speculative_cache_size: 10,
             pain_max_warnings: 5,
+            injection_config: injection::InjectionConfig::default(),
         }
     }
 }

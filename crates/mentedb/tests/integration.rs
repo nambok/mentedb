@@ -1427,3 +1427,158 @@ fn test_entity_resolver_persists_across_flush() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Injection attention
+// ---------------------------------------------------------------------------
+
+mod injection_attention {
+    use super::*;
+    use mentedb::injection::{
+        ATTR_INJECTION_SHOWN, ATTR_INJECTION_USED, InjectionQuery, SelectionReason,
+    };
+
+    fn semantic(embedding: Vec<f32>, content: &str, tags: Vec<String>) -> MemoryNode {
+        let mut node = MemoryNode::new(
+            AgentId::new(),
+            MemoryType::Semantic,
+            content.into(),
+            embedding,
+        );
+        node.tags = tags;
+        node
+    }
+
+    #[test]
+    fn injection_excludes_session_actions_and_ledger_and_pins_always() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+
+        let relevant = semantic(vec![1.0, 0.0, 0.0, 0.0], "prefers rust", vec![]);
+        let relevant_id = relevant.id;
+        let ledgered = semantic(vec![0.8, 0.6, 0.0, 0.0], "ledgered fact", vec![]);
+        let ledgered_id = ledgered.id;
+        let same_session = semantic(
+            vec![0.8, 0.0, 0.6, 0.0],
+            "from this session",
+            vec!["turn".into(), "session:sess-a".into()],
+        );
+        let action = semantic(
+            vec![0.8, 0.0, 0.0, 0.6],
+            "Edited file: x.rs",
+            vec!["action".into()],
+        );
+        let pinned = semantic(
+            vec![0.0, 1.0, 0.0, 0.0],
+            "never deploy fridays",
+            vec!["scope:always".into()],
+        );
+        let pinned_id = pinned.id;
+
+        for node in [relevant, ledgered, same_session, action, pinned] {
+            db.store(node).unwrap();
+        }
+
+        let query = InjectionQuery {
+            embedding: &[1.0, 0.0, 0.0, 0.0],
+            query_text: None,
+            session_id: Some("sess-a"),
+            exclude_ids: &[ledgered_id],
+            max_items: 6,
+            max_episodic: 2,
+        };
+        let out = db.recall_for_injection(&query).unwrap();
+
+        let ids: Vec<_> = out.iter().map(|c| c.node.id).collect();
+        assert!(ids.contains(&relevant_id), "relevant fact selected");
+        assert!(ids.contains(&pinned_id), "pinned memory always included");
+        assert!(!ids.contains(&ledgered_id), "ledger exclusion respected");
+        assert!(
+            !out.iter().any(|c| c.node.content == "from this session"),
+            "same-session memory excluded"
+        );
+        assert!(
+            !out.iter()
+                .any(|c| c.node.content.starts_with("Edited file")),
+            "action notes never inject"
+        );
+        assert_eq!(
+            out.iter().find(|c| c.node.id == pinned_id).unwrap().reason,
+            SelectionReason::Pinned
+        );
+    }
+
+    #[test]
+    fn outcome_recording_tracks_shown_and_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+
+        let mut used = semantic(vec![1.0, 0.0, 0.0, 0.0], "drawn on by reply", vec![]);
+        used.salience = 0.5;
+        let used_id = used.id;
+        let ignored = semantic(vec![0.0, 1.0, 0.0, 0.0], "ignored fact", vec![]);
+        let ignored_id = ignored.id;
+        let before_salience = used.salience;
+        db.store(used).unwrap();
+        db.store(ignored).unwrap();
+
+        // The reply embedding matches the first memory only.
+        let (updated, used_count) = db
+            .record_injection_outcome(&[used_id, ignored_id], Some(&[1.0, 0.0, 0.0, 0.0]))
+            .unwrap();
+        assert_eq!(updated, 2);
+        assert_eq!(used_count, 1);
+
+        let used_node = db.get_memory(used_id).unwrap();
+        let ignored_node = db.get_memory(ignored_id).unwrap();
+        let count = |n: &MemoryNode, k: &str| match n.attributes.get(k) {
+            Some(mentedb_core::memory::AttributeValue::Integer(v)) => *v,
+            _ => 0,
+        };
+        assert_eq!(count(&used_node, ATTR_INJECTION_SHOWN), 1);
+        assert_eq!(count(&used_node, ATTR_INJECTION_USED), 1);
+        assert_eq!(count(&ignored_node, ATTR_INJECTION_SHOWN), 1);
+        assert_eq!(count(&ignored_node, ATTR_INJECTION_USED), 0);
+        assert!(
+            used_node.salience > before_salience,
+            "used memory reinforced"
+        );
+    }
+
+    #[test]
+    fn chronically_ignored_memories_are_demoted() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+
+        let stale = semantic(vec![1.0, 0.0, 0.0, 0.0], "always shown never used", vec![]);
+        let stale_id = stale.id;
+        let fresh = semantic(vec![0.9, 0.3, 0.0, 0.0], "newcomer fact", vec![]);
+        let fresh_id = fresh.id;
+        db.store(stale).unwrap();
+        db.store(fresh).unwrap();
+
+        // Show the stale memory five times with no matching reply.
+        for _ in 0..5 {
+            db.record_injection_outcome(&[stale_id], None).unwrap();
+        }
+
+        let query = InjectionQuery {
+            embedding: &[1.0, 0.0, 0.0, 0.0],
+            query_text: None,
+            session_id: None,
+            exclude_ids: &[],
+            max_items: 1,
+            max_episodic: 0,
+        };
+        let out = db.recall_for_injection(&query).unwrap();
+        let relevant: Vec<_> = out
+            .iter()
+            .filter(|c| c.reason == SelectionReason::Relevant)
+            .collect();
+        assert_eq!(relevant.len(), 1);
+        assert_eq!(
+            relevant[0].node.id, fresh_id,
+            "demoted memory loses its top slot to the fresh one"
+        );
+    }
+}
