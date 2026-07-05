@@ -48,14 +48,19 @@ pub struct BufferPool {
 }
 
 impl BufferPool {
-    /// Create a buffer pool with `capacity` frame slots.
+    /// Create a buffer pool that may grow to `capacity` frame slots.
+    ///
+    /// Frames are allocated on demand rather than up front: each frame owns
+    /// a full page buffer, so eager allocation costs `capacity * 64KB` per
+    /// open database regardless of use. A process holding many open
+    /// databases (the platform gateway keeps an LRU of per user databases)
+    /// pays only for pages actually touched.
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "buffer pool capacity must be > 0");
-        let frames = (0..capacity).map(|_| Frame::new()).collect();
         Self {
             inner: Mutex::new(BufferPoolInner {
-                frames,
-                page_table: AHashMap::with_capacity(capacity),
+                frames: Vec::new(),
+                page_table: AHashMap::new(),
                 clock_hand: 0,
                 capacity,
             }),
@@ -221,16 +226,21 @@ impl BufferPool {
 
     /// CLOCK eviction: find an unpinned, unreferenced frame.
     fn find_victim(inner: &mut BufferPoolInner) -> MenteResult<FrameId> {
-        let cap = inner.capacity;
-
-        // Prefer an empty frame first.
-        for i in 0..cap {
+        // Reuse an invalidated frame first.
+        for i in 0..inner.frames.len() {
             if inner.frames[i].page_id.is_none() {
                 return Ok(i);
             }
         }
 
-        // CLOCK sweep — at most 2 full rotations.
+        // Grow on demand up to capacity.
+        if inner.frames.len() < inner.capacity {
+            inner.frames.push(Frame::new());
+            return Ok(inner.frames.len() - 1);
+        }
+
+        // Pool is at capacity: CLOCK sweep, at most 2 full rotations.
+        let cap = inner.capacity;
         let max_sweeps = cap * 2;
         for _ in 0..max_sweeps {
             let idx = inner.clock_hand;
