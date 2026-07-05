@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.4](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.10.3...mentedb-storage-v0.10.4) - 2026-07-05
+
+### Other
+
+- allocate buffer pool frames on demand instead of eagerly ([#99](https://github.com/nambok/mentedb/pull/99))
+
 ## [0.10.3](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.10.2...mentedb-storage-v0.10.3) - 2026-07-05
 
 ### Fixed
