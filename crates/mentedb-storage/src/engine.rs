@@ -1,5 +1,6 @@
 //! Storage Engine: facade that ties the page manager, WAL, and buffer pool together.
 
+use std::fs::File;
 use std::path::Path;
 
 use mentedb_core::MemoryNode;
@@ -32,12 +33,21 @@ const WAL_AUTO_CHECKPOINT_BYTES: u64 = 8 * 1024 * 1024;
 /// - **State is refreshed from disk** under the flock: page count is re-read
 ///   from the file header and LSN is re-read from the WAL tail, so no process
 ///   can act on stale in-memory state.
-/// - **No DB-level lock on open.** Multiple processes can open the same database
-///   simultaneously.
+/// - **One process per database.** Open acquires an exclusive lock on a LOCK
+///   file in the data directory and holds it for the engine's lifetime. The
+///   per operation flock protects individual write transactions, but layers
+///   above the storage engine cache state across operations (buffer pool,
+///   page map, index snapshots), and a second concurrent process flushing
+///   those caches rolls the database back to its own open time snapshot.
+///   A second open therefore fails fast with a "locked" error instead of
+///   silently corrupting state; callers retry until the owner exits.
 pub struct StorageEngine {
     page_manager: Mutex<PageManager>,
     buffer_pool: BufferPool,
     wal: Mutex<Wal>,
+    /// Held exclusively for the lifetime of this engine; released on close
+    /// or process exit. Guards against concurrent multi process opens.
+    process_lock: Mutex<Option<File>>,
 }
 
 impl StorageEngine {
@@ -58,6 +68,22 @@ impl StorageEngine {
     pub fn open(path: &Path) -> MenteResult<Self> {
         std::fs::create_dir_all(path)?;
 
+        // Exclusive process lock, held until close or process exit. A second
+        // process opening the same directory would interleave stale cached
+        // state with ours and roll the database back, so refuse it up front.
+        let lock_path = path.join("LOCK");
+        let lock_file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)?;
+        fs2::FileExt::try_lock_exclusive(&lock_file).map_err(|_| {
+            MenteError::Storage(format!(
+                "database directory {} is locked by another process",
+                path.display()
+            ))
+        })?;
+
         let page_manager = PageManager::open(path)?;
         let buffer_pool = BufferPool::new(DEFAULT_BUFFER_POOL_SIZE);
         let wal = Wal::open(path)?;
@@ -66,6 +92,7 @@ impl StorageEngine {
             page_manager: Mutex::new(page_manager),
             buffer_pool,
             wal: Mutex::new(wal),
+            process_lock: Mutex::new(Some(lock_file)),
         };
 
         let recovered = engine.recover()?;
@@ -183,8 +210,24 @@ impl StorageEngine {
         self.buffer_pool.flush_all(&mut pm)?;
         pm.sync()?;
         self.wal.lock().sync()?;
+        // Release the process lock so the directory can be reopened, by this
+        // process or another, without waiting for us to exit.
+        if let Some(lock_file) = self.process_lock.lock().take() {
+            let _ = fs2::FileExt::unlock(&lock_file);
+        }
         info!("storage engine closed");
         Ok(())
+    }
+
+    /// Release the process lock without flushing anything.
+    ///
+    /// Test support for simulating a process crash: a real crash releases
+    /// the OS file lock but persists nothing beyond what was already synced.
+    #[doc(hidden)]
+    pub fn release_process_lock(&self) {
+        if let Some(lock_file) = self.process_lock.lock().take() {
+            let _ = fs2::FileExt::unlock(&lock_file);
+        }
     }
 
     // ---- low-level page operations ----
@@ -888,37 +931,23 @@ mod tests {
     }
 
     #[test]
-    fn test_concurrent_open_no_lock_conflict() {
+    fn test_concurrent_open_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
 
-        // Two engines open the same directory simultaneously — should succeed
-        // now that we no longer hold an exclusive DB-level flock.
+        // The per operation flock serializes individual write transactions,
+        // but layers above the storage engine cache state across operations,
+        // so a second concurrent engine rolls the database back to its own
+        // open time snapshot. The process lock must refuse it.
         let engine1 = StorageEngine::open(dir.path()).unwrap();
+        let second = StorageEngine::open(dir.path());
+        assert!(second.is_err(), "second concurrent open must fail");
+        let msg = second.err().unwrap().to_string();
+        assert!(msg.contains("locked"), "error names the lock: {msg}");
+
+        // Close releases the lock; the directory can be opened again.
+        engine1.close().unwrap();
         let engine2 = StorageEngine::open(dir.path()).unwrap();
-
-        // Both can write (serialized by WAL file lock)
-        let node1 = MemoryNode::new(
-            AgentId::new(),
-            MemoryType::Episodic,
-            "from engine 1".to_string(),
-            vec![1.0],
-        );
-        let node2 = MemoryNode::new(
-            AgentId::new(),
-            MemoryType::Episodic,
-            "from engine 2".to_string(),
-            vec![2.0],
-        );
-
-        let pid1 = engine1.store_memory(&node1).unwrap();
-        let pid2 = engine2.store_memory(&node2).unwrap();
-
-        // Each engine can read what it wrote
-        let loaded1 = engine1.load_memory(pid1).unwrap();
-        assert_eq!(loaded1.content, "from engine 1");
-
-        let loaded2 = engine2.load_memory(pid2).unwrap();
-        assert_eq!(loaded2.content, "from engine 2");
+        engine2.close().unwrap();
     }
 
     #[test]

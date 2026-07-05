@@ -1225,6 +1225,15 @@ impl MenteDb {
         Ok(())
     }
 
+    /// Simulate a process crash for tests: releases the storage process lock
+    /// exactly as the operating system would when a process dies, then drops
+    /// the instance without flushing or closing anything.
+    #[doc(hidden)]
+    pub fn simulate_crash(self) {
+        self.storage.release_process_lock();
+        std::mem::forget(self);
+    }
+
     /// Rebuild all indexes by scanning every memory in storage.
     ///
     /// Use this after index corruption or when index files were overwritten.

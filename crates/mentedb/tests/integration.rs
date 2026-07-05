@@ -99,7 +99,7 @@ fn test_forget_survives_crash() {
         db.store(node).unwrap();
         db.forget(id).unwrap();
         // Simulate crash: no close, no flush.
-        std::mem::forget(db);
+        db.simulate_crash();
     }
     {
         let db = MenteDb::open(dir.path()).unwrap();
@@ -161,7 +161,7 @@ fn test_edges_survive_crash() {
         .unwrap();
         // Simulate crash: no close, no flush — the graph snapshot was never
         // written, so the edge only exists in the edge log.
-        std::mem::forget(db);
+        db.simulate_crash();
     }
     {
         let db = MenteDb::open(dir.path()).unwrap();
@@ -187,7 +187,7 @@ fn test_relate_works_after_crash() {
         db.store(m1).unwrap();
         db.store(m2).unwrap();
         // Crash before any flush: no graph snapshot exists on disk.
-        std::mem::forget(db);
+        db.simulate_crash();
     }
     {
         // Graph nodes must be rebuilt from storage so surviving memories can
@@ -231,7 +231,7 @@ fn test_forgotten_memory_edges_do_not_resurrect() {
         })
         .unwrap();
         db.forget(id2).unwrap();
-        std::mem::forget(db); // crash: RemoveNode only in the edge log
+        db.simulate_crash(); // crash: RemoveNode only in the edge log
     }
     {
         let db = MenteDb::open(dir.path()).unwrap();
