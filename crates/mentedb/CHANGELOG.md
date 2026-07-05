@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.3](https://github.com/nambok/mentedb/compare/mentedb-v0.10.2...mentedb-v0.10.3) - 2026-07-05
+
+### Fixed
+
+- enforce single process ownership with an exclusive lock held from open to close ([#97](https://github.com/nambok/mentedb/pull/97))
+
 ## [0.10.2](https://github.com/nambok/mentedb/compare/mentedb-v0.10.1...mentedb-v0.10.2) - 2026-07-04
 
 ### Fixed
