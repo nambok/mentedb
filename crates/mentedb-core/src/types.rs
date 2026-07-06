@@ -23,6 +23,11 @@ macro_rules! define_id {
             pub fn nil() -> Self {
                 Self(Uuid::nil())
             }
+
+            /// True for the nil (all-zeros) identifier.
+            pub fn is_nil(&self) -> bool {
+                self.0.is_nil()
+            }
         }
 
         impl Default for $name {

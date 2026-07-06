@@ -233,8 +233,12 @@ impl MenteDb {
         let query_embedding = self.embed_or_empty(&input.user_message)?;
 
         // §1b: Try speculative cache, fall back to hybrid search
-        let (context, current_ids, cache_hit) =
-            self.retrieve_context(&input.user_message, &query_embedding, delta_tracker)?;
+        let (context, current_ids, cache_hit) = self.retrieve_context(
+            &input.user_message,
+            &query_embedding,
+            input.agent_id.map(AgentId),
+            delta_tracker,
+        )?;
 
         // §2: Pain signals
         let pain_warnings = self.check_pain_signals(&input.user_message);
@@ -329,6 +333,7 @@ impl MenteDb {
         &self,
         user_message: &str,
         query_embedding: &[f32],
+        agent: Option<AgentId>,
         _delta_tracker: &DeltaTracker,
     ) -> crate::MenteResult<(Vec<ScoredMemory>, Vec<MemoryId>, bool)> {
         // Try speculative cache first
@@ -336,11 +341,11 @@ impl MenteDb {
             let matched: Vec<ScoredMemory> = entry
                 .memory_ids
                 .iter()
-                .filter_map(|id| {
-                    self.get_memory(*id).ok().map(|m| ScoredMemory {
-                        memory: m,
-                        score: 0.9,
-                    })
+                .filter_map(|id| self.get_memory(*id).ok())
+                .filter(|m| crate::agent_visible(m.agent_id, agent))
+                .map(|m| ScoredMemory {
+                    memory: m,
+                    score: 0.9,
                 })
                 .collect();
             if matched.len() >= entry.memory_ids.len() / 2 {
@@ -351,8 +356,16 @@ impl MenteDb {
 
         // Hybrid search fallback
         let now = now_us();
-        let results =
-            self.recall_hybrid_at(query_embedding, Some(user_message), 10, now, None, None)?;
+        let results = self.recall_hybrid_scoped_at_mode(
+            query_embedding,
+            Some(user_message),
+            10,
+            now,
+            None,
+            false,
+            None,
+            agent,
+        )?;
         let mut scored: Vec<ScoredMemory> = results
             .iter()
             .filter_map(|(mid, score)| {
@@ -372,6 +385,7 @@ impl MenteDb {
             if let Ok(mem) = self.storage.load_memory(*pid)
                 && mem.tags.iter().any(|t| t == always_scope_tag)
                 && !hybrid_ids.contains(&mem.id)
+                && crate::agent_visible(mem.agent_id, agent)
             {
                 scored.push(ScoredMemory {
                     memory: mem,
