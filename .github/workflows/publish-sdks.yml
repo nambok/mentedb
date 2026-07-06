@@ -39,12 +39,12 @@ jobs:
           # Containerized manylinux build: without it the linux wheel gets
           # tagged with the runner's glibc (2.39), shutting out older distros.
           manylinux: auto
-          # The manylinux image ships without OpenSSL headers, which
-          # openssl-sys needs (pulled in by the SDK's HTTP client).
+          # Vendored OpenSSL builds from source inside the container and
+          # needs perl with IPC::Cmd; system OpenSSL there is 1.0.2, too old.
           before-script-linux: |
-            if command -v dnf >/dev/null 2>&1; then dnf install -y openssl-devel perl-core
-            elif command -v yum >/dev/null 2>&1; then yum install -y openssl-devel perl-core
-            else apt-get update && apt-get install -y libssl-dev pkg-config
+            if command -v dnf >/dev/null 2>&1; then dnf install -y perl-core perl-IPC-Cmd
+            elif command -v yum >/dev/null 2>&1; then yum install -y perl-core perl-IPC-Cmd
+            else apt-get update && apt-get install -y perl make
             fi
       - uses: actions/upload-artifact@v4
         with:

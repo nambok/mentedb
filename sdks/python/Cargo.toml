@@ -13,6 +13,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.24", features = ["extension-module", "abi3-py39"] }
+# Vendored so the manylinux wheel build never depends on the container's
+# system OpenSSL (manylinux2014 ships 1.0.2, too old for openssl-sys).
+openssl-sys = { version = "0.9", features = ["vendored"] }
 mentedb = { path = "../../crates/mentedb", features = ["enrichment"] }
 mentedb-core = { path = "../../crates/mentedb-core" }
 mentedb-storage = { path = "../../crates/mentedb-storage" }
