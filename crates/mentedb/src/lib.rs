@@ -1290,6 +1290,17 @@ impl MenteDb {
         Ok(())
     }
 
+    /// Close with durability only: checkpoint the WAL and release the
+    /// process lock without rewriting snapshots. Reopen reconciles stale
+    /// snapshots, so this trades a slower next open for a shutdown fast
+    /// enough to release every user's lock inside a deploy drain window.
+    pub fn close_quick(&self) -> MenteResult<()> {
+        info!("Quick closing MenteDB");
+        self.storage.checkpoint()?;
+        self.storage.close()?;
+        Ok(())
+    }
+
     /// Simulate a process crash for tests: releases the storage process lock
     /// exactly as the operating system would when a process dies, then drops
     /// the instance without flushing or closing anything.

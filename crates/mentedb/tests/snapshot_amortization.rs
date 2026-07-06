@@ -110,3 +110,21 @@ fn snapshots_write_on_the_configured_interval() {
     let after = std::fs::metadata(&hnsw).unwrap().modified().unwrap();
     assert!(after > before, "the Nth flush must rewrite snapshots");
 }
+
+#[test]
+fn quick_close_survives_reopen_with_full_recall() {
+    let dir = tempfile::tempdir().unwrap();
+    let id;
+    {
+        let db = MenteDb::open_with_config(dir.path(), CognitiveConfig::default()).unwrap();
+        db.flush_full().unwrap();
+        id = store(&db, "written just before quick close", 5);
+        db.close_quick().unwrap();
+    }
+    let db = MenteDb::open_with_config(dir.path(), CognitiveConfig::default()).unwrap();
+    assert!(
+        recall_ids(&db, 5).contains(&id),
+        "quick close must lose nothing; open reconciles the stale snapshot"
+    );
+    assert!(db.get_memory(id).is_ok());
+}
