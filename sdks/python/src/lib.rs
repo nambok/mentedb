@@ -3238,7 +3238,7 @@ impl MenteDB {
 
     /// Retrieve a memory by its UUID string.
     /// Returns a dict with id, content, memory_type, tags, created_at.
-    fn get_memory(&self, memory_id: &str) -> PyResult<PyObject> {
+    fn get_memory(&self, memory_id: &str) -> PyResult<Py<PyAny>> {
         let db = self
             .db
             .as_ref()
@@ -3246,7 +3246,7 @@ impl MenteDB {
 
         let id = parse_memory_id(memory_id)?;
         let node = db.get_memory(id).map_err(to_pyerr)?;
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
             dict.set_item("id", node.id.to_string())?;
             dict.set_item("content", &node.content)?;
@@ -3268,7 +3268,7 @@ impl MenteDB {
         conversation: &str,
         provider: Option<&str>,
         agent_id: Option<&str>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let db = self
             .db
             .as_ref()
@@ -3413,7 +3413,7 @@ impl MenteDB {
             stored_ids.push(id.to_string());
         }
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
             dict.set_item("memories_stored", stored_ids.len())?;
             dict.set_item("rejected_low_quality", rejected_low_quality)?;
@@ -3433,13 +3433,13 @@ impl MenteDB {
         py: Python<'_>,
         conversation: String,
         provider: Option<String>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let config = build_extraction_config_from_env(provider.as_deref())?;
         let http_provider = HttpExtractionProvider::new(config.clone()).map_err(to_pyerr)?;
         let pipeline = ExtractionPipeline::new(http_provider, config.clone());
 
         // Release the GIL during the HTTP call so other threads can run
-        let extraction_result = py.allow_threads(|| {
+        let extraction_result = py.detach(|| {
             let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
             let result = rt
                 .block_on(pipeline.extract_full(&conversation))
@@ -3522,7 +3522,7 @@ impl MenteDB {
         &self,
         memories: Vec<Py<pyo3::types::PyDict>>,
         agent_id: Option<&str>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let db = self
             .db
             .as_ref()
@@ -3550,7 +3550,7 @@ impl MenteDB {
         }
         let mut parsed = Vec::with_capacity(memories.len());
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             for mem_ref in &memories {
                 let mem_dict = mem_ref.bind(py);
                 let content: String = mem_dict
@@ -3626,7 +3626,7 @@ impl MenteDB {
         })?;
 
         if parsed.is_empty() {
-            return Python::with_gil(|py| {
+            return Python::attach(|py| {
                 let dict = pyo3::types::PyDict::new(py);
                 dict.set_item("stored_ids", Vec::<String>::new())?;
                 Ok(dict.into())
@@ -4028,7 +4028,7 @@ impl MenteDB {
             }
         }
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
             dict.set_item("stored_ids", stored_ids)?;
             Ok(dict.into())
@@ -4594,7 +4594,7 @@ impl MenteDB {
         project_context: Option<String>,
         agent_id: Option<&str>,
         session_id: Option<String>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let db = self
             .db
             .as_ref()
@@ -4622,7 +4622,7 @@ impl MenteDB {
         let result = db.process_turn(&input, &mut delta).map_err(to_pyerr)?;
 
         let dict = pyo3::types::PyDict::new(py);
-        let context_list: Vec<PyObject> = result
+        let context_list: Vec<Py<PyAny>> = result
             .context
             .iter()
             .map(|sm| {
@@ -4643,7 +4643,7 @@ impl MenteDB {
                 .collect::<Vec<_>>(),
         )?;
         dict.set_item("episodic_id", result.episodic_id.map(|id| id.to_string()))?;
-        let pain_list: Vec<PyObject> = result
+        let pain_list: Vec<Py<PyAny>> = result
             .pain_warnings
             .iter()
             .map(|pw| {
@@ -4657,7 +4657,7 @@ impl MenteDB {
         dict.set_item("pain_warnings", pain_list)?;
         dict.set_item("cache_hit", result.cache_hit)?;
         dict.set_item("inference_actions", result.inference_actions)?;
-        let actions_list: Vec<PyObject> = result
+        let actions_list: Vec<Py<PyAny>> = result
             .detected_actions
             .iter()
             .map(|a| {
@@ -4668,7 +4668,7 @@ impl MenteDB {
             })
             .collect();
         dict.set_item("detected_actions", actions_list)?;
-        let recalls_list: Vec<PyObject> = result
+        let recalls_list: Vec<Py<PyAny>> = result
             .proactive_recalls
             .iter()
             .map(|pr| {
@@ -4758,13 +4758,13 @@ impl MenteDB {
     }
 
     /// Get episodic memories that need enrichment.
-    fn enrichment_candidates(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+    fn enrichment_candidates(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let db = self
             .db
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
         let candidates = db.enrichment_candidates();
-        let result: Vec<PyObject> = candidates
+        let result: Vec<Py<PyAny>> = candidates
             .iter()
             .map(|m| {
                 let d = pyo3::types::PyDict::new(py);
@@ -4792,7 +4792,7 @@ impl MenteDB {
     /// Link entities across sessions by name + embedding similarity.
     ///
     /// Returns a dict with `linked`, `ambiguous`, and `edges_created` counts.
-    fn link_entities(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn link_entities(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let db = self
             .db
             .as_ref()
@@ -4806,13 +4806,13 @@ impl MenteDB {
     }
 
     /// Get all entity memory nodes (memories tagged with `entity:{name}`).
-    fn entity_memories(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+    fn entity_memories(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let db = self
             .db
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
         let entities = db.entity_memories();
-        let result: Vec<PyObject> = entities
+        let result: Vec<Py<PyAny>> = entities
             .iter()
             .map(|m| {
                 let d = pyo3::types::PyDict::new(py);
@@ -4845,7 +4845,7 @@ impl MenteDB {
         provider: Option<&str>,
         current_turn: u64,
         skip_extraction: bool,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let db = self
             .db
             .as_ref()
@@ -4861,7 +4861,7 @@ impl MenteDB {
         let cognitive_llm = mentedb_cognitive::CognitiveLlmService::new(judge);
 
         let rt = tokio::runtime::Runtime::new().map_err(to_pyerr)?;
-        let enrichment_result = py.allow_threads(|| {
+        let enrichment_result = py.detach(|| {
             rt.block_on(mentedb::enrichment::run_enrichment(
                 db,
                 config,
@@ -4893,7 +4893,7 @@ impl MenteDB {
 // RecallResult / SearchResult
 // ---------------------------------------------------------------------------
 
-#[pyclass(get_all)]
+#[pyclass(get_all, skip_from_py_object)]
 #[derive(Clone)]
 struct RecallResult {
     text: String,
@@ -4911,7 +4911,7 @@ impl RecallResult {
     }
 }
 
-#[pyclass(get_all)]
+#[pyclass(get_all, skip_from_py_object)]
 #[derive(Clone)]
 struct SearchResult {
     id: String,
@@ -4984,7 +4984,7 @@ impl CognitionStream {
 // StreamAlert
 // ---------------------------------------------------------------------------
 
-#[pyclass(get_all)]
+#[pyclass(get_all, skip_from_py_object)]
 #[derive(Clone)]
 struct StreamAlertPy {
     alert_type: String,
