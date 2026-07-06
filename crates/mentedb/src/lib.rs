@@ -63,7 +63,7 @@ use mentedb_context::{AssemblyConfig, ContextAssembler, ContextWindow, ScoredMem
 use mentedb_core::edge::EdgeType;
 use mentedb_core::error::MenteResult;
 use mentedb_core::memory::MemoryType;
-use mentedb_core::types::{MemoryId, Timestamp};
+use mentedb_core::types::{AgentId, MemoryId, Timestamp};
 use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
 use mentedb_embedding::provider::EmbeddingProvider;
 use mentedb_graph::GraphManager;
@@ -326,6 +326,16 @@ pub struct MenteDb {
     last_enrichment_turn: RwLock<u64>,
     /// Whether enrichment is currently pending (set by maintenance trigger).
     enrichment_pending: RwLock<bool>,
+}
+
+/// Agent visibility rule for scoped retrieval: a node is visible to an agent
+/// when it is owned by that agent or owned by no agent (nil, shared
+/// knowledge). No scope means global visibility.
+pub(crate) fn agent_visible(owner: AgentId, scope: Option<AgentId>) -> bool {
+    match scope {
+        None => true,
+        Some(a) => owner == a || owner.is_nil(),
+    }
 }
 
 impl MenteDb {
@@ -650,6 +660,27 @@ impl MenteDb {
         tags_or: bool,
         time_range: Option<(Timestamp, Timestamp)>,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
+        self.recall_hybrid_scoped_at_mode(
+            embedding, query_text, k, at, tags, tags_or, time_range, None,
+        )
+    }
+
+    /// Hybrid recall visible to one agent: nodes owned by `agent` or owned
+    /// by no agent (nil, shared knowledge) pass; other agents' memories are
+    /// invisible. `agent: None` recalls globally, preserving single agent
+    /// behavior.
+    #[allow(clippy::too_many_arguments)]
+    pub fn recall_hybrid_scoped_at_mode(
+        &self,
+        embedding: &[f32],
+        query_text: Option<&str>,
+        k: usize,
+        at: Timestamp,
+        tags: Option<&[&str]>,
+        tags_or: bool,
+        time_range: Option<(Timestamp, Timestamp)>,
+        agent: Option<AgentId>,
+    ) -> MenteResult<Vec<(MemoryId, f32)>> {
         debug!(
             "Recall hybrid, k={}, at={}, bm25={}, tags_or={}",
             k,
@@ -682,7 +713,7 @@ impl MenteDb {
                 if let Some(&page_id) = pm.get(id)
                     && let Ok(node) = self.storage.load_memory(page_id)
                 {
-                    node.is_valid_at(at)
+                    node.is_valid_at(at) && agent_visible(node.agent_id, agent)
                 } else {
                     true
                 }

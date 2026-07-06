@@ -27,7 +27,7 @@ use std::collections::HashSet;
 
 use mentedb_core::error::MenteResult;
 use mentedb_core::memory::{AttributeValue, MemoryNode, MemoryType};
-use mentedb_core::types::MemoryId;
+use mentedb_core::types::{AgentId, MemoryId};
 
 use crate::MenteDb;
 
@@ -85,6 +85,9 @@ pub struct InjectionQuery<'a> {
     pub max_items: usize,
     /// Maximum verbatim episodic items within `max_items`.
     pub max_episodic: usize,
+    /// Restrict recall to this agent's memories plus shared (nil owned)
+    /// knowledge. None recalls globally.
+    pub agent_id: Option<AgentId>,
 }
 
 /// Why an item was selected, for introspection and client display.
@@ -179,13 +182,15 @@ impl MenteDb {
 
         // Candidate pool from hybrid recall.
         let hits = self
-            .recall_hybrid_at(
+            .recall_hybrid_scoped_at_mode(
                 query.embedding,
                 query.query_text,
                 cfg.candidate_pool,
                 now_us(),
                 None,
+                false,
                 None,
+                query.agent_id,
             )
             .unwrap_or_default();
 
@@ -277,6 +282,7 @@ impl MenteDb {
             if let Ok(node) = self.storage.load_memory(pid)
                 && has_tag(&node, "scope:always")
                 && !excluded.contains(&node.id)
+                && crate::agent_visible(node.agent_id, query.agent_id)
             {
                 result.push(InjectionCandidate {
                     node,
