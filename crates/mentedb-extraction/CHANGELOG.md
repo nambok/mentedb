@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.5](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.10.4...mentedb-extraction-v0.10.5) - 2026-07-06
+
+### Fixed
+
+- installable on debian and arm linux, publish mentedb-server ([#102](https://github.com/nambok/mentedb/pull/102))
+
 ## [0.10.1](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.10.0...mentedb-extraction-v0.10.1) - 2026-07-03
 
 ### Other
