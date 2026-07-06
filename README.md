@@ -35,6 +35,13 @@ mentedb-server --data-dir ./data
 pip install mentedb
 ```
 
+On Debian and Ubuntu systems pip refuses system wide installs (PEP 668). Use a virtual environment or pipx:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install mentedb
+# or: pipx install mentedb
+```
+
 ### TypeScript SDK
 
 ```bash

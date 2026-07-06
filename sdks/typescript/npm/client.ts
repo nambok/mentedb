@@ -11,6 +11,7 @@ import * as path from 'path';
 
 const PLATFORM_TRIPLES: Record<string, string> = {
   'linux-x64': 'linux-x64-gnu',
+    'linux-arm64': 'linux-arm64-gnu',
   'darwin-arm64': 'darwin-arm64',
   'darwin-x64': 'darwin-x64',
   'win32-x64': 'win32-x64-msvc',

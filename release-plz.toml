@@ -25,6 +25,8 @@ changelog_include = ["mentedb-core", "mentedb-cognitive", "mentedb-consolidation
 name = "mentedb-replication"
 release = false
 
+# The server publishes so `cargo install mentedb-server` works as the
+# README documents.
 [[package]]
 name = "mentedb-server"
-release = false
+
