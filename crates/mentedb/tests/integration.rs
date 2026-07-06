@@ -1486,6 +1486,7 @@ mod injection_attention {
             exclude_ids: &[ledgered_id],
             max_items: 6,
             max_episodic: 2,
+            agent_id: None,
         };
         let out = db.recall_for_injection(&query).unwrap();
 
@@ -1569,6 +1570,7 @@ mod injection_attention {
             exclude_ids: &[],
             max_items: 1,
             max_episodic: 0,
+            agent_id: None,
         };
         let out = db.recall_for_injection(&query).unwrap();
         let relevant: Vec<_> = out
