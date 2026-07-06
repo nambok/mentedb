@@ -205,3 +205,39 @@ fn injection_respects_agent_scope() {
         "another agent's pinned memories must not inject"
     );
 }
+
+#[test]
+fn ghost_memories_never_inject() {
+    let (db, _dir) = open_db();
+    let mut ghost = MemoryNode::new(
+        AgentId::nil(),
+        MemoryType::Semantic,
+        "Unconfirmed: maybe we should rewrite everything in zig".to_string(),
+        vec_for(4),
+    );
+    ghost.tags = vec!["ghost-memory".to_string(), "unconfirmed".to_string()];
+    db.store(ghost).unwrap();
+
+    let real = store_owned(&db, AgentId::nil(), "the api uses axum", 4);
+
+    let selected = db
+        .recall_for_injection(&InjectionQuery {
+            embedding: &vec_for(4),
+            query_text: Some("what about the architecture"),
+            session_id: None,
+            exclude_ids: &[],
+            max_items: 6,
+            max_episodic: 2,
+            agent_id: None,
+        })
+        .unwrap();
+    let contents: Vec<&str> = selected.iter().map(|c| c.node.content.as_str()).collect();
+    assert!(
+        !contents.iter().any(|c| c.starts_with("Unconfirmed:")),
+        "speculative ghosts must not inject as knowledge"
+    );
+    assert!(
+        selected.iter().any(|c| c.node.id == real),
+        "real memories still inject"
+    );
+}

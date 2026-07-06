@@ -202,8 +202,14 @@ impl MenteDb {
             let Ok(node) = self.get_memory(id) else {
                 continue;
             };
-            if has_tag(&node, "action") || has_tag(&node, "scope:always") {
+            if has_tag(&node, "action")
+                || has_tag(&node, "scope:always")
+                || has_tag(&node, "ghost-memory")
+            {
                 // Actions never inject; pinned items are handled separately.
+                // Ghost memories are speculative working material for the
+                // trajectory tracker, not confirmed knowledge; injecting
+                // "Unconfirmed: ..." as if it were a fact misleads.
                 continue;
             }
             if let Some(ref st) = session_tag
