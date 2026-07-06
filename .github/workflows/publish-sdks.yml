@@ -39,6 +39,13 @@ jobs:
           # Containerized manylinux build: without it the linux wheel gets
           # tagged with the runner's glibc (2.39), shutting out older distros.
           manylinux: auto
+          # The manylinux image ships without OpenSSL headers, which
+          # openssl-sys needs (pulled in by the SDK's HTTP client).
+          before-script-linux: |
+            if command -v dnf >/dev/null 2>&1; then dnf install -y openssl-devel perl-core
+            elif command -v yum >/dev/null 2>&1; then yum install -y openssl-devel perl-core
+            else apt-get update && apt-get install -y libssl-dev pkg-config
+            fi
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
@@ -149,7 +156,7 @@ jobs:
         run: |
           echo "Built native binaries:"
           ls -la *.node
-          EXPECTED=4
+          EXPECTED=5
           ACTUAL=$(ls *.node | wc -l | tr -d ' ')
           if [ "$ACTUAL" -ne "$EXPECTED" ]; then
             echo "❌ Expected $EXPECTED .node files, found $ACTUAL"
