@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.8](https://github.com/nambok/mentedb/compare/mentedb-v0.10.6...mentedb-v0.10.8) - 2026-07-06
+
+### Fixed
+
+- integration tests carry the new InjectionQuery agent_id field ([#110](https://github.com/nambok/mentedb/pull/110))
+
+### Other
+
+- release v0.10.6 ([#109](https://github.com/nambok/mentedb/pull/109))
+
 ## [0.10.7](https://github.com/nambok/mentedb/compare/mentedb-v0.10.6...mentedb-v0.10.7) - 2026-07-06
 
 ### Fixed
