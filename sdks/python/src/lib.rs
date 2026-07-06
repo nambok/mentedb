@@ -2305,7 +2305,9 @@ impl MenteDB {
                 } else {
                     // Fallback: flat evidence (no graph structure available)
                     // Build temporal context header if we have temporal info
-                    let temporal_context = if let Some(ref_us) = temporal_reference.filter(|_| is_temporal) {
+                    let temporal_context = if let Some(ref_us) =
+                        temporal_reference.filter(|_| is_temporal)
+                    {
                         let ref_secs = (ref_us / 1_000_000) as i64;
                         let ref_days = ref_secs / 86400;
                         let (ry, rm, rd) = {
@@ -2514,195 +2516,191 @@ impl MenteDB {
                                     && let Some(events) =
                                         date_json.get("events").and_then(|v| v.as_array())
                                 {
-                                        // Parse dates and compute differences
-                                        let mut parsed_dates: Vec<(String, i64)> = Vec::new(); // (description, days_since_epoch)
-                                        for event in events {
-                                            if let (Some(desc), Some(date_str)) = (
-                                                event.get("description").and_then(|v| v.as_str()),
-                                                event.get("date").and_then(|v| v.as_str()),
-                                            ) {
-                                                // Parse YYYY-MM-DD to days since epoch
-                                                let parts: Vec<&str> =
-                                                    date_str.split('-').collect();
-                                                if parts.len() == 3
-                                                    && let (Ok(y), Ok(m), Ok(d)) = (
-                                                        parts[0].parse::<i64>(),
-                                                        parts[1].parse::<i64>(),
-                                                        parts[2].parse::<i64>(),
-                                                    )
-                                                {
-                                                        // Days since epoch (approximate but accurate enough for differences)
-                                                        let days = (y - 1970) * 365
-                                                            + (y - 1969) / 4
-                                                            - (y - 1901) / 100
-                                                            + (y - 1601) / 400
-                                                            + (367 * m - 362) / 12
-                                                            + d
-                                                            - 1
-                                                            + if m > 2 {
-                                                                if y % 4 == 0
-                                                                    && (y % 100 != 0
-                                                                        || y % 400 == 0)
-                                                                {
-                                                                    -1
-                                                                } else {
-                                                                    -2
-                                                                }
-                                                            } else {
-                                                                0
-                                                            };
-                                                        parsed_dates.push((desc.to_string(), days));
-                                                    }
-                                                }
-                                        }
-                                        if parsed_dates.len() >= 2 {
-                                            // Compute difference between first two events
-                                            let diff_days = (parsed_dates[1].1 - parsed_dates[0].1)
-                                                .unsigned_abs();
-                                            let diff_weeks = diff_days / 7;
-                                            let diff_months = diff_days / 30; // approximate
-
-                                            let computed_answer = if query_lower
-                                                .contains("how many days")
+                                    // Parse dates and compute differences
+                                    let mut parsed_dates: Vec<(String, i64)> = Vec::new(); // (description, days_since_epoch)
+                                    for event in events {
+                                        if let (Some(desc), Some(date_str)) = (
+                                            event.get("description").and_then(|v| v.as_str()),
+                                            event.get("date").and_then(|v| v.as_str()),
+                                        ) {
+                                            // Parse YYYY-MM-DD to days since epoch
+                                            let parts: Vec<&str> = date_str.split('-').collect();
+                                            if parts.len() == 3
+                                                && let (Ok(y), Ok(m), Ok(d)) = (
+                                                    parts[0].parse::<i64>(),
+                                                    parts[1].parse::<i64>(),
+                                                    parts[2].parse::<i64>(),
+                                                )
                                             {
-                                                format!(
-                                                    "[VERIFIED COMPUTATION]\n\
+                                                // Days since epoch (approximate but accurate enough for differences)
+                                                let days = (y - 1970) * 365 + (y - 1969) / 4
+                                                    - (y - 1901) / 100
+                                                    + (y - 1601) / 400
+                                                    + (367 * m - 362) / 12
+                                                    + d
+                                                    - 1
+                                                    + if m > 2 {
+                                                        if y % 4 == 0
+                                                            && (y % 100 != 0 || y % 400 == 0)
+                                                        {
+                                                            -1
+                                                        } else {
+                                                            -2
+                                                        }
+                                                    } else {
+                                                        0
+                                                    };
+                                                parsed_dates.push((desc.to_string(), days));
+                                            }
+                                        }
+                                    }
+                                    if parsed_dates.len() >= 2 {
+                                        // Compute difference between first two events
+                                        let diff_days =
+                                            (parsed_dates[1].1 - parsed_dates[0].1).unsigned_abs();
+                                        let diff_weeks = diff_days / 7;
+                                        let diff_months = diff_days / 30; // approximate
+
+                                        let computed_answer = if query_lower
+                                            .contains("how many days")
+                                        {
+                                            format!(
+                                                "[VERIFIED COMPUTATION]\n\
                                                      Event 1: {}\n\
                                                      Event 2: {}\n\
                                                      Date arithmetic: {} days between the two events.\n\
                                                      ANSWER: {} days.",
-                                                    parsed_dates[0].0,
-                                                    parsed_dates[1].0,
-                                                    diff_days,
-                                                    diff_days
-                                                )
-                                            } else if query_lower.contains("how many weeks") {
-                                                format!(
-                                                    "[VERIFIED COMPUTATION]\n\
+                                                parsed_dates[0].0,
+                                                parsed_dates[1].0,
+                                                diff_days,
+                                                diff_days
+                                            )
+                                        } else if query_lower.contains("how many weeks") {
+                                            format!(
+                                                "[VERIFIED COMPUTATION]\n\
                                                      Event 1: {}\n\
                                                      Event 2: {}\n\
                                                      Date arithmetic: {} days = {} weeks between the two events.\n\
                                                      ANSWER: {} weeks.",
-                                                    parsed_dates[0].0,
-                                                    parsed_dates[1].0,
-                                                    diff_days,
-                                                    diff_weeks,
-                                                    diff_weeks
-                                                )
-                                            } else if query_lower.contains("how many months") || query_lower.contains("how long") {
-                                                format!(
-                                                    "[VERIFIED COMPUTATION]\n\
+                                                parsed_dates[0].0,
+                                                parsed_dates[1].0,
+                                                diff_days,
+                                                diff_weeks,
+                                                diff_weeks
+                                            )
+                                        } else if query_lower.contains("how many months")
+                                            || query_lower.contains("how long")
+                                        {
+                                            format!(
+                                                "[VERIFIED COMPUTATION]\n\
                                                      Event 1: {}\n\
                                                      Event 2: {}\n\
                                                      Date arithmetic: {} days = approximately {} months between the two events.\n\
                                                      ANSWER: {} months.",
-                                                    parsed_dates[0].0,
-                                                    parsed_dates[1].0,
-                                                    diff_days,
-                                                    diff_months,
-                                                    diff_months
-                                                )
-                                            } else {
-                                                format!(
-                                                    "[VERIFIED COMPUTATION]\n\
+                                                parsed_dates[0].0,
+                                                parsed_dates[1].0,
+                                                diff_days,
+                                                diff_months,
+                                                diff_months
+                                            )
+                                        } else {
+                                            format!(
+                                                "[VERIFIED COMPUTATION]\n\
                                                      Event 1: {}\n\
                                                      Event 2: {}\n\
                                                      Date arithmetic: {} days ({} weeks, ~{} months) between the two events.\n\
                                                      ANSWER: {} days.",
-                                                    parsed_dates[0].0,
-                                                    parsed_dates[1].0,
-                                                    diff_days,
-                                                    diff_weeks,
-                                                    diff_months,
-                                                    diff_days
-                                                )
-                                            };
-                                            if debug {
-                                                eprintln!(
-                                                    "[temporal-compute] Computed date difference: {} days between '{}' and '{}'",
-                                                    diff_days, parsed_dates[0].0, parsed_dates[1].0
-                                                );
-                                            }
-                                            final_synthesis = computed_answer;
-                                            temporal_math_succeeded = true;
-                                        } else if parsed_dates.len() == 1
-                                            && query_lower.contains("ago")
-                                        {
-                                            // "How many weeks ago did X happen?"
-                                            // Compute from reference date
-                                            let event_days = parsed_dates[0].1;
-                                            let local_day_us: u64 = 86_400_000_000;
-                                            let local_before_us = temporal_reference.unwrap_or(
-                                                std::time::SystemTime::now()
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .unwrap_or_default()
-                                                    .as_micros()
-                                                    as u64,
+                                                parsed_dates[0].0,
+                                                parsed_dates[1].0,
+                                                diff_days,
+                                                diff_weeks,
+                                                diff_months,
+                                                diff_days
+                                            )
+                                        };
+                                        if debug {
+                                            eprintln!(
+                                                "[temporal-compute] Computed date difference: {} days between '{}' and '{}'",
+                                                diff_days, parsed_dates[0].0, parsed_dates[1].0
                                             );
-                                            let ref_days = (local_before_us / local_day_us) as i64;
-                                            let diff_days = (ref_days - event_days).unsigned_abs();
-                                            let diff_weeks = diff_days / 7;
+                                        }
+                                        final_synthesis = computed_answer;
+                                        temporal_math_succeeded = true;
+                                    } else if parsed_dates.len() == 1 && query_lower.contains("ago")
+                                    {
+                                        // "How many weeks ago did X happen?"
+                                        // Compute from reference date
+                                        let event_days = parsed_dates[0].1;
+                                        let local_day_us: u64 = 86_400_000_000;
+                                        let local_before_us = temporal_reference.unwrap_or(
+                                            std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_micros()
+                                                as u64,
+                                        );
+                                        let ref_days = (local_before_us / local_day_us) as i64;
+                                        let diff_days = (ref_days - event_days).unsigned_abs();
+                                        let diff_weeks = diff_days / 7;
 
-                                            let diff_months = diff_days / 30;
-                                            let computed_answer = if query_lower
-                                                .contains("how many weeks")
-                                            {
-                                                format!(
-                                                    "[VERIFIED COMPUTATION]\n\
+                                        let diff_months = diff_days / 30;
+                                        let computed_answer = if query_lower
+                                            .contains("how many weeks")
+                                        {
+                                            format!(
+                                                "[VERIFIED COMPUTATION]\n\
                                                      Event: {}\n\
                                                      Date arithmetic: {} days = {} weeks ago from reference date.\n\
                                                      ANSWER: {} weeks ago.",
-                                                    parsed_dates[0].0,
-                                                    diff_days,
-                                                    diff_weeks,
-                                                    diff_weeks
-                                                )
-                                            } else if query_lower.contains("how many months") {
-                                                format!(
-                                                    "[VERIFIED COMPUTATION]\n\
+                                                parsed_dates[0].0,
+                                                diff_days,
+                                                diff_weeks,
+                                                diff_weeks
+                                            )
+                                        } else if query_lower.contains("how many months") {
+                                            format!(
+                                                "[VERIFIED COMPUTATION]\n\
                                                      Event: {}\n\
                                                      Date arithmetic: {} days = approximately {} months ago from reference date.\n\
                                                      ANSWER: {} months ago.",
-                                                    parsed_dates[0].0,
-                                                    diff_days,
-                                                    diff_months,
-                                                    diff_months
-                                                )
-                                            } else if query_lower.contains("how many days") {
-                                                format!(
-                                                    "[VERIFIED COMPUTATION]\n\
+                                                parsed_dates[0].0,
+                                                diff_days,
+                                                diff_months,
+                                                diff_months
+                                            )
+                                        } else if query_lower.contains("how many days") {
+                                            format!(
+                                                "[VERIFIED COMPUTATION]\n\
                                                      Event: {}\n\
                                                      Date arithmetic: {} days ago from reference date.\n\
                                                      ANSWER: {} days ago.",
-                                                    parsed_dates[0].0,
-                                                    diff_days,
-                                                    diff_days
-                                                )
-                                            } else {
-                                                format!(
-                                                    "[VERIFIED COMPUTATION]\n\
+                                                parsed_dates[0].0, diff_days, diff_days
+                                            )
+                                        } else {
+                                            format!(
+                                                "[VERIFIED COMPUTATION]\n\
                                                      Event: {}\n\
                                                      Date arithmetic: {} days (~{} months, ~{} weeks) ago from reference date.\n\
                                                      ANSWER: {} days ago.",
-                                                    parsed_dates[0].0,
-                                                    diff_days,
-                                                    diff_months,
-                                                    diff_weeks,
-                                                    diff_days
-                                                )
-                                            };
-                                            if debug {
-                                                eprintln!(
-                                                    "[temporal-compute] Event '{}' was {} days ago",
-                                                    parsed_dates[0].0, diff_days
-                                                );
-                                            }
-                                            final_synthesis = computed_answer;
-                                            temporal_math_succeeded = true;
+                                                parsed_dates[0].0,
+                                                diff_days,
+                                                diff_months,
+                                                diff_weeks,
+                                                diff_days
+                                            )
+                                        };
+                                        if debug {
+                                            eprintln!(
+                                                "[temporal-compute] Event '{}' was {} days ago",
+                                                parsed_dates[0].0, diff_days
+                                            );
                                         }
+                                        final_synthesis = computed_answer;
+                                        temporal_math_succeeded = true;
                                     }
                                 }
                             }
+                        }
 
                         // --- Temporal ordering engine ---
                         // For "what is the order of X from earliest to latest" questions,
@@ -2725,7 +2723,8 @@ impl MenteDB {
                             let ordering_system = "You extract events with dates from evidence for chronological ordering. Return only valid JSON.";
 
                             if let Ok(ordering_response) = rt.block_on(
-                                synth_provider.call_text_with_retry(&ordering_prompt, ordering_system),
+                                synth_provider
+                                    .call_text_with_retry(&ordering_prompt, ordering_system),
                             ) {
                                 let cleaned = ordering_response
                                     .trim()
@@ -2751,8 +2750,7 @@ impl MenteDB {
                                                     parts[2].parse::<i64>(),
                                                 )
                                             {
-                                                let days = (y - 1970) * 365
-                                                    + (y - 1969) / 4
+                                                let days = (y - 1970) * 365 + (y - 1969) / 4
                                                     - (y - 1901) / 100
                                                     + (y - 1601) / 400
                                                     + (367 * m - 362) / 12
@@ -2780,7 +2778,11 @@ impl MenteDB {
 
                                         let mut ordered_list = String::new();
                                         for (i, (desc, _)) in dated_events.iter().enumerate() {
-                                            ordered_list.push_str(&format!("{}. {}\n", i + 1, desc));
+                                            ordered_list.push_str(&format!(
+                                                "{}. {}\n",
+                                                i + 1,
+                                                desc
+                                            ));
                                         }
 
                                         let computed_answer = format!(
@@ -2789,7 +2791,11 @@ impl MenteDB {
                                              {}\n\
                                              ANSWER: The order from earliest to latest is: {}",
                                             ordered_list,
-                                            dated_events.iter().map(|(d, _)| d.as_str()).collect::<Vec<_>>().join(", then ")
+                                            dated_events
+                                                .iter()
+                                                .map(|(d, _)| d.as_str())
+                                                .collect::<Vec<_>>()
+                                                .join(", then ")
                                         );
 
                                         if debug {
@@ -2830,7 +2836,8 @@ impl MenteDB {
                                     || query_lower.contains("miles")
                                     || query_lower.contains("raised")))
                             || (query_lower.contains("how many")
-                                && (query_lower.contains("spend") || query_lower.contains("spent"))
+                                && (query_lower.contains("spend")
+                                    || query_lower.contains("spent"))
                                 && (query_lower.contains("hours")
                                     || query_lower.contains("days")
                                     || query_lower.contains("miles")));
@@ -3058,15 +3065,14 @@ impl MenteDB {
                                                     .join("\n");
 
                                                 if found_any {
-                                                    let is_money =
-                                                        query_lower.contains("money")
-                                                            || query_lower.contains("spend")
-                                                            || query_lower.contains("spent")
-                                                            || query_lower.contains("cost")
-                                                            || query_lower.contains("paid")
-                                                            || query_lower.contains("save")
-                                                            || query_lower.contains("earn")
-                                                            || query_lower.contains("raised");
+                                                    let is_money = query_lower.contains("money")
+                                                        || query_lower.contains("spend")
+                                                        || query_lower.contains("spent")
+                                                        || query_lower.contains("cost")
+                                                        || query_lower.contains("paid")
+                                                        || query_lower.contains("save")
+                                                        || query_lower.contains("earn")
+                                                        || query_lower.contains("raised");
                                                     let formatted_total = if is_money {
                                                         if total == total.floor() {
                                                             format!("${}", total as i64)
@@ -4577,7 +4583,8 @@ impl MenteDB {
     /// cache_hit, inference_actions, detected_actions, proactive_recalls,
     /// correction_id, sentiment, phantom_count, contradiction_count,
     /// predicted_topics, facts_extracted, edges_created.
-    #[pyo3(signature = (user_message, assistant_response=None, turn_id=0, project_context=None, agent_id=None))]
+    #[pyo3(signature = (user_message, assistant_response=None, turn_id=0, project_context=None, agent_id=None, session_id=None))]
+    #[allow(clippy::too_many_arguments)]
     fn process_turn(
         &self,
         py: Python<'_>,
@@ -4586,6 +4593,7 @@ impl MenteDB {
         turn_id: u64,
         project_context: Option<String>,
         agent_id: Option<&str>,
+        session_id: Option<String>,
     ) -> PyResult<PyObject> {
         let db = self
             .db
@@ -4603,6 +4611,7 @@ impl MenteDB {
             turn_id,
             project_context,
             agent_id: aid,
+            session_id,
         };
 
         let mut delta = self

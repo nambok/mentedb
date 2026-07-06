@@ -1,9 +1,9 @@
 use std::path::Path;
 use std::sync::Mutex;
 
+use mentedb::CognitiveConfig;
 use mentedb::MenteDb;
 use mentedb::process_turn::ProcessTurnInput;
-use mentedb::CognitiveConfig;
 use mentedb_cognitive::stream::CognitionStream as RustCognitionStream;
 use mentedb_cognitive::trajectory::{
     DecisionState, TrajectoryNode, TrajectoryTracker as RustTrajectoryTracker,
@@ -345,6 +345,7 @@ impl MenteDB {
         turn_id: u32,
         project_context: Option<String>,
         agent_id: Option<String>,
+        session_id: Option<String>,
     ) -> Result<JsProcessTurnResult> {
         let aid = match agent_id {
             Some(ref s) => Some(parse_uuid(s)?),
@@ -357,6 +358,7 @@ impl MenteDB {
             turn_id: turn_id as u64,
             project_context,
             agent_id: aid,
+            session_id,
         };
 
         let mut delta = self
@@ -364,7 +366,10 @@ impl MenteDB {
             .lock()
             .map_err(|e| Error::from_reason(format!("lock poisoned: {e}")))?;
 
-        let result = self.inner.process_turn(&input, &mut delta).map_err(mente_err)?;
+        let result = self
+            .inner
+            .process_turn(&input, &mut delta)
+            .map_err(mente_err)?;
 
         Ok(JsProcessTurnResult {
             context: result
@@ -416,7 +421,11 @@ impl MenteDB {
             edges_created: result.edges_created,
             enrichment_pending: result.enrichment_pending,
             delta_added: result.delta_added.iter().map(|id| id.to_string()).collect(),
-            delta_removed: result.delta_removed.iter().map(|id| id.to_string()).collect(),
+            delta_removed: result
+                .delta_removed
+                .iter()
+                .map(|id| id.to_string())
+                .collect(),
         })
     }
 
