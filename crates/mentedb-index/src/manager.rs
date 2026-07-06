@@ -118,6 +118,23 @@ impl IndexManager {
         self.salience.insert(node.id, node.salience);
     }
 
+    /// True when the memory's vector is indexed and live.
+    pub fn contains_vector(&self, id: MemoryId) -> bool {
+        self.hnsw.contains(id)
+    }
+
+    /// All live vector indexed memory ids.
+    pub fn vector_ids(&self) -> Vec<MemoryId> {
+        self.hnsw.ids()
+    }
+
+    /// Tombstone a vector whose backing page no longer exists; used by open
+    /// time reconciliation when a snapshot is newer than the last forget.
+    pub fn remove_vector_only(&self, id: MemoryId) {
+        let _ = self.hnsw.remove(id);
+        self.bm25.remove(id);
+    }
+
     /// Remove a memory from all indexes.
     pub fn remove_memory(&self, id: MemoryId, node: &MemoryNode) {
         let _ = self.hnsw.remove(id);

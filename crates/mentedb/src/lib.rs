@@ -249,6 +249,11 @@ pub struct CognitiveConfig {
     pub pain_max_warnings: usize,
     /// Configuration for injection attention selection.
     pub injection_config: injection::InjectionConfig,
+    /// How many hot flushes may pass before index and graph snapshots are
+    /// rewritten. Durability comes from the WAL checkpoint on every flush;
+    /// snapshots only accelerate reopen, and open reconciles stale ones, so
+    /// rewriting them per flush just multiplies fsync cost.
+    pub flush_snapshot_interval: u32,
 }
 
 impl Default for CognitiveConfig {
@@ -272,6 +277,7 @@ impl Default for CognitiveConfig {
             speculative_cache_size: 10,
             pain_max_warnings: 5,
             injection_config: injection::InjectionConfig::default(),
+            flush_snapshot_interval: 8,
         }
     }
 }
@@ -290,6 +296,8 @@ pub struct MenteDb {
     graph: GraphManager,
     /// Maps memory IDs to their storage page IDs for retrieval.
     page_map: RwLock<HashMap<MemoryId, PageId>>,
+    /// Hot flushes since the last snapshot write; see flush_snapshot_interval.
+    flushes_since_snapshot: std::sync::atomic::AtomicU32,
     /// Expected embedding dimension (0 = no validation).
     embedding_dim: usize,
     /// Database directory path for persistence.
@@ -382,6 +390,31 @@ impl MenteDb {
             }
         }
 
+        // Snapshots are written every few flushes, not every flush, so they
+        // can trail storage. Heal both directions: index memories the
+        // snapshot missed, and tombstone vectors whose pages are gone
+        // (forgotten after the last snapshot).
+        let mut reindexed = 0usize;
+        for (memory_id, page_id) in &page_map {
+            if !index.contains_vector(*memory_id)
+                && let Ok(node) = storage.load_memory(*page_id)
+                && !node.embedding.is_empty()
+            {
+                index.index_memory(&node);
+                reindexed += 1;
+            }
+        }
+        let mut retired = 0usize;
+        for id in index.vector_ids() {
+            if !page_map.contains_key(&id) {
+                index.remove_vector_only(id);
+                retired += 1;
+            }
+        }
+        if reindexed > 0 || retired > 0 {
+            info!(reindexed, retired, "reconciled index with storage");
+        }
+
         let write_inference =
             WriteInferenceEngine::with_config(cognitive_config.inference_config.clone());
         let decay = DecayEngine::new(cognitive_config.decay_config.clone());
@@ -422,6 +455,7 @@ impl MenteDb {
             index,
             graph,
             page_map: RwLock::new(page_map),
+            flushes_since_snapshot: std::sync::atomic::AtomicU32::new(0),
             embedding_dim: 0,
             path: path.to_path_buf(),
             embedder: None,
@@ -1251,7 +1285,7 @@ impl MenteDb {
     /// Flushes all data and closes the database.
     pub fn close(&self) -> MenteResult<()> {
         info!("Closing MenteDB");
-        self.flush()?;
+        self.flush_full()?;
         self.storage.close()?;
         Ok(())
     }
@@ -1291,9 +1325,35 @@ impl MenteDb {
     /// Unlike `close()`, the database remains usable after flushing.
     pub fn flush(&self) -> MenteResult<()> {
         debug!("Flushing MenteDB to disk");
+        // Durability is the WAL checkpoint, paid on every flush. Index,
+        // graph, and cognitive snapshots only accelerate reopen (open
+        // reconciles stale ones against storage), so they are amortized
+        // across flush_snapshot_interval hot flushes instead of multiplying
+        // fsync cost on every write batch.
+        self.storage.checkpoint()?;
+
+        let n = self
+            .flushes_since_snapshot
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        if n >= self.cognitive_config.flush_snapshot_interval {
+            self.write_snapshots()?;
+        }
+        Ok(())
+    }
+
+    /// Flush everything including index, graph, and cognitive snapshots.
+    /// Used by close and by maintenance, where reopen speed matters more
+    /// than write latency.
+    pub fn flush_full(&self) -> MenteResult<()> {
+        debug!("Full flush of MenteDB to disk");
+        self.storage.checkpoint()?;
+        self.write_snapshots()
+    }
+
+    fn write_snapshots(&self) -> MenteResult<()> {
         self.index.save(&self.path.join("indexes"))?;
         self.graph.save(&self.path.join("graph"))?;
-        self.storage.checkpoint()?;
 
         // Persist cognitive subsystem state.
         let cognitive_dir = self.path.join("cognitive");
@@ -1312,6 +1372,8 @@ impl MenteDb {
                 .read()
                 .save(&cognitive_dir.join("entities.json"));
         }
+        self.flushes_since_snapshot
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
