@@ -30,6 +30,8 @@ const result = await db.processTurn(
   "I prefer using TypeScript for backend services",
   "Noted! TypeScript is great for type-safe backends.",
   0 // turn_id
+  // optional: projectContext, agentId, sessionId (tags stored turns so
+  // injection recall can exclude the requesting session)
 );
 
 console.log(result.context);     // relevant memories

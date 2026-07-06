@@ -35,6 +35,8 @@ with MenteDB("./agent-memory") as db:
     # result.context — relevant memories for your prompt
     # result.facts_extracted — what was learned this turn
     # result.contradiction_count — conflicting beliefs detected
+    # Optional kwargs: project_context, agent_id, session_id (tags stored
+    # turns so injection recall can exclude the requesting session)
 
     # Sleeptime enrichment runs automatically after process_turn:
     # - Extracts semantic facts from conversations
