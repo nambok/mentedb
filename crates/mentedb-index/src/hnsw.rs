@@ -661,6 +661,26 @@ impl HnswIndex {
     }
 
     /// Mark a node as deleted (tombstone). Does not reclaim memory.
+    /// True when the id is indexed and not tombstoned.
+    pub fn contains(&self, id: MemoryId) -> bool {
+        let inner = self.inner.read();
+        match inner.id_to_idx.get(&id) {
+            Some(idx) => !inner.deleted.contains(idx),
+            None => false,
+        }
+    }
+
+    /// All live (non tombstoned) memory ids in the index.
+    pub fn ids(&self) -> Vec<MemoryId> {
+        let inner = self.inner.read();
+        inner
+            .id_to_idx
+            .iter()
+            .filter(|(_, idx)| !inner.deleted.contains(*idx))
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
     pub fn remove(&self, id: MemoryId) -> MenteResult<()> {
         let mut inner = self.inner.write();
         let idx = inner
