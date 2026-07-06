@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3](https://github.com/nambok/mentedb/compare/mentedb-v0.11.1...mentedb-v0.11.3) - 2026-07-06
+
+### Added
+
+- close_quick for fast lock release on shutdown ([#119](https://github.com/nambok/mentedb/pull/119))
+
+### Other
+
+- release v0.11.2 ([#118](https://github.com/nambok/mentedb/pull/118))
+
 ## [0.11.2](https://github.com/nambok/mentedb/compare/mentedb-v0.11.1...mentedb-v0.11.2) - 2026-07-06
 
 ### Added
