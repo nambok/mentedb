@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/nambok/mentedb/compare/mentedb-v0.10.8...mentedb-v0.11.0) - 2026-07-06
+
+### Other
+
+- amortize snapshot writes across flushes, reconcile stale snapshots at open ([#113](https://github.com/nambok/mentedb/pull/113))
+
 ## [0.10.8](https://github.com/nambok/mentedb/compare/mentedb-v0.10.6...mentedb-v0.10.8) - 2026-07-06
 
 ### Fixed
