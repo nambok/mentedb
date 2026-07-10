@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.5](https://github.com/nambok/mentedb/compare/mentedb-v0.11.3...mentedb-v0.11.5) - 2026-07-10
+
+### Fixed
+
+- decay actually affects recall ranking (recompute decayed salience in hybrid recall hot path) ([#121](https://github.com/nambok/mentedb/pull/121))
+
+### Other
+
+- release v0.11.4 ([#122](https://github.com/nambok/mentedb/pull/122))
+
 ## [0.11.4](https://github.com/nambok/mentedb/compare/mentedb-v0.11.3...mentedb-v0.11.4) - 2026-07-10
 
 ### Fixed
