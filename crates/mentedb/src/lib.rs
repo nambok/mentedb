@@ -733,28 +733,57 @@ impl MenteDb {
         );
         let graph = self.graph.graph();
         let pm = self.page_map.read();
-        let filtered: Vec<(MemoryId, f32)> = results
+        let mut scored: Vec<(MemoryId, f32)> = results
             .into_iter()
-            .filter(|(id, _)| {
-                let incoming = graph.incoming(*id);
+            .filter_map(|(id, raw_score)| {
+                // Exclude memories that an active Supersedes/Contradicts edge
+                // has invalidated.
+                let incoming = graph.incoming(id);
                 let has_active_supersede = incoming.iter().any(|(_, e)| {
                     (e.edge_type == EdgeType::Supersedes || e.edge_type == EdgeType::Contradicts)
                         && e.is_valid_at(at)
                 });
-                !has_active_supersede
-            })
-            .filter(|(id, _)| {
-                if let Some(&page_id) = pm.get(id)
-                    && let Ok(node) = self.storage.load_memory(page_id)
-                {
-                    node.is_valid_at(at) && agent_visible(node.agent_id, agent)
-                } else {
-                    true
+                if has_active_supersede {
+                    return None;
                 }
+                // Without a page entry we cannot check validity or decay; keep
+                // the raw score rather than silently dropping the hit.
+                let Some(&page_id) = pm.get(&id) else {
+                    return Some((id, raw_score));
+                };
+                let Ok(node) = self.storage.load_memory(page_id) else {
+                    return Some((id, raw_score));
+                };
+                // Drop memories outside their validity window or not visible to
+                // this agent.
+                if !node.is_valid_at(at) || !agent_visible(node.agent_id, agent) {
+                    return None;
+                }
+                // Decay at recall time: the index salience cache is frozen at
+                // insert, so recomputing decayed salience here is what actually
+                // lets decay affect ranking on this hot path. Blend 70%
+                // similarity with 30% freshly decayed salience, matching the
+                // MQL path, so old, unaccessed memories rank lower.
+                let score = if self.cognitive_config.decay_on_recall {
+                    let decayed = self.decay.compute_decay(
+                        node.salience,
+                        node.created_at,
+                        node.accessed_at,
+                        node.access_count,
+                        at,
+                    );
+                    raw_score * 0.7 + decayed * 0.3
+                } else {
+                    raw_score
+                };
+                Some((id, score))
             })
-            .take(k)
             .collect();
-        Ok(filtered)
+        // Re-rank by the decay-adjusted score before cutting to k, so the decay
+        // blend actually reorders results rather than just relabeling them.
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(k);
+        Ok(scored)
     }
 
     /// Multi-query search with Reciprocal Rank Fusion (RRF).
