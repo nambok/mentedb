@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.10](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.11.9...mentedb-embedding-v0.11.10) - 2026-07-11
+
+### Fixed
+
+- revert hf-hub to 0.4 (1.0 rewrite breaks local-embeddings) + CI check for the feature ([#186](https://github.com/nambok/mentedb/pull/186))
+
 ## [0.11.9](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.11.8...mentedb-embedding-v0.11.9) - 2026-07-11
 
 ### Other
