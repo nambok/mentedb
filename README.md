@@ -651,31 +651,23 @@ LLM_PROVIDER=anthropic LLM_API_KEY=sk-ant-... \
 
 ### LongMemEval Benchmark
 
-[LongMemEval](https://arxiv.org/abs/2410.10813) is the standard benchmark for long-term conversational memory systems. It tests 500 questions across 7 categories using real multi-session conversation histories.
+[LongMemEval](https://arxiv.org/abs/2410.10813) (ICLR 2025) is the standard benchmark for long-term conversational memory: 500 questions across six reasoning types, over long multi-session histories (~115K tokens per question).
 
-**MenteDB v0.10.0** — 500 questions, judged by gpt-4o-2024-08-06 (official):
+**MenteDB — LongMemEval-S, all 500 questions, graded by the official judge (gpt-4o-2024-08-06, verbatim prompts):**
 
-| Category | Score | Questions |
-|----------|-------|-----------|
-| Knowledge update | **97.2%** | 72 |
-| Single-session (user) | **96.9%** | 64 |
-| Single-session (preference) | **96.7%** | 30 |
-| Temporal reasoning | **96.1%** | 127 |
-| Single-session (assistant) | **100.0%** | 56 |
-| Multi-session | **90.1%** | 121 |
-| **Task-averaged** | **95.7%** | |
-| **Overall** | **95.2%** | 500 |
+| Category | Accuracy |
+|----------|----------|
+| Single-session (assistant) | 100.0% (56/56) |
+| Single-session (user) | 97.1% (68/70) |
+| Single-session (preference) | 93.3% (28/30) |
+| Temporal reasoning | 92.5% (123/133) |
+| Knowledge update | 91.0% (71/78) |
+| Multi-session reasoning | 85.7% (114/133) |
+| **Overall (500 questions)** | **92.0% (460/500)** |
 
-**Setup:** GPT-4o-mini extraction, text-embedding-3-small embeddings, GPT-4o reader. Multi-layer retrieval with answer session injection and type-aware reader prompts.
+Multi-session reasoning is the weakest category: synthesizing facts scattered across many sessions is the hardest problem, and where the engine has the most room to grow. We report the full distribution rather than a single headline.
 
-```bash
-# Run it yourself
-cd benchmarks/longmemeval
-python -m benchmarks.longmemeval.run_enriched --db-dir /tmp/longmemeval --dataset s --skip-enrichment
-
-# Evaluate
-OPENAI_API_KEY=... python -m benchmarks.longmemeval.evaluate results/hypotheses_baseline-shared_q0-500.jsonl --dataset s
-```
+**How we measured:** each conversation is ingested chronologically with timestamps; MenteDB extracts memories (gpt-4o-mini) into vectors, BM25, and graph. For each question it runs hybrid retrieval (BM25 + vector, RRF-merged, time-filtered to memories dated before the question) and answers with gpt-4o. Embeddings are text-embedding-3-small. Grading uses the official LongMemEval judge, unmodified. The raw per-question hypotheses and judge labels are committed under `benchmarks/longmemeval/results/` for audit.
 
 ### 10K Scale Test (OpenAI text-embedding-3-small)
 
