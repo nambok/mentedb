@@ -1,5 +1,7 @@
 # Builder stage
-FROM rust:1.88-slim AS builder
+# Rust 1.94: several deps (konst, redb) now require >= 1.89; keep headroom so a
+# dependency MSRV bump does not break the image build (which CI does not run).
+FROM rust:1.94-slim AS builder
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
 
