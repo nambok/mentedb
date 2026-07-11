@@ -116,8 +116,7 @@ mod tests {
 
     #[test]
     fn sweep_runs_on_a_populated_db_without_error() {
-        let path =
-            std::env::temp_dir().join(format!("mentedb_maint_test_{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("mentedb_maint_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         let db = MenteDb::open_with_embedder(&path, Box::new(HashEmbeddingProvider::new(256)))
             .expect("open db");
