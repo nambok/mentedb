@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.8](https://github.com/nambok/mentedb/compare/mentedb-server-v0.11.7...mentedb-server-v0.11.8) - 2026-07-11
+
+### Other
+
+- *(deps)* bump tower-http from 0.6.8 to 0.7.0 ([#171](https://github.com/nambok/mentedb/pull/171))
+- live deps.rs dependency-status badge; group Dependabot updates into 1-2 PRs ([#169](https://github.com/nambok/mentedb/pull/169))
+- add Dependabot badge to README ([#149](https://github.com/nambok/mentedb/pull/149))
+
 ## [0.11.7](https://github.com/nambok/mentedb/compare/mentedb-server-v0.11.6...mentedb-server-v0.11.7) - 2026-07-11
 
 ### Other
