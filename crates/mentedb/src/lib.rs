@@ -101,6 +101,10 @@ pub mod process_turn;
 /// Engine-native injection attention (selection policy for context injection).
 pub mod injection;
 
+/// LLM-driven memory consolidation (semantic dedup via a pluggable LlmJudge).
+pub mod llm_consolidation;
+pub use llm_consolidation::ConsolidationParams;
+
 /// Sleeptime enrichment pipeline (requires `enrichment` feature).
 #[cfg(feature = "enrichment")]
 pub mod enrichment;
