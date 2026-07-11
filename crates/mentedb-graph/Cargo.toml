@@ -19,7 +19,7 @@ ahash = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-bincode = "1"
+bincode = "3"
 
 [dev-dependencies]
 uuid = { workspace = true }
