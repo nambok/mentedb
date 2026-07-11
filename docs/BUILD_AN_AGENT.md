@@ -57,23 +57,20 @@ pip install requests
 ```
 
 ```python
-import os, json, requests
+import os, requests
 
-API = "https://api.mentedb.com/mcp/v1/tools/call"
+API = "https://api.mentedb.com/v1/process_turn"
 HEADERS = {"Authorization": f"Bearer {os.environ['MENTEDB_API_KEY']}"}
 
 def process_turn(user_message, assistant_response, turn_id):
     resp = requests.post(API, headers=HEADERS, json={
-        "name": "process_turn",
-        "arguments": {
-            "user_message": user_message,
-            "assistant_response": assistant_response,
-            "turn_id": turn_id,
-        },
+        "user_message": user_message,
+        "assistant_response": assistant_response,
+        "turn_id": turn_id,
     })
     resp.raise_for_status()
-    # MCP tool calls return content[0].text as a JSON string
-    return json.loads(resp.json()["content"][0]["text"])
+    # the response is the turn data directly
+    return resp.json()
 
 # Turn 0: tell it something.
 process_turn("I switched from Postgres to SQLite for side projects", "Noted.", 0)
@@ -106,7 +103,7 @@ export MENTEDB_API_KEY=mdb_your_key_here
 ```
 
 ```javascript
-const API = "https://api.mentedb.com/mcp/v1/tools/call";
+const API = "https://api.mentedb.com/v1/process_turn";
 
 async function processTurn(userMessage, assistantResponse, turnId) {
   const resp = await fetch(API, {
@@ -115,15 +112,10 @@ async function processTurn(userMessage, assistantResponse, turnId) {
       Authorization: `Bearer ${process.env.MENTEDB_API_KEY}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      name: "process_turn",
-      arguments: { user_message: userMessage, assistant_response: assistantResponse, turn_id: turnId },
-    }),
+    body: JSON.stringify({ user_message: userMessage, assistant_response: assistantResponse, turn_id: turnId }),
   });
   if (!resp.ok) throw new Error(`mentedb ${resp.status}`);
-  const body = await resp.json();
-  // MCP tool calls return content[0].text as a JSON string
-  return JSON.parse(body.content[0].text);
+  return await resp.json();
 }
 
 // Turn 0: tell it something. Turn 1: it remembers.
@@ -264,23 +256,21 @@ for memory in &result.context {
 ## Cloud + any language
 
 The cloud API is plain REST. Any language that can POST JSON works. Call
-`https://api.mentedb.com/mcp/v1/tools/call` with your `mdb_` key:
+`https://api.mentedb.com/v1/process_turn` with your `mdb_` key:
 
 ```bash
-curl -X POST https://api.mentedb.com/mcp/v1/tools/call \
+curl -X POST https://api.mentedb.com/v1/process_turn \
   -H "Authorization: Bearer $MENTEDB_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"name":"process_turn","arguments":{
-        "user_message":"I switched from Postgres to SQLite",
+  -d '{"user_message":"I switched from Postgres to SQLite",
         "assistant_response":"Noted.",
-        "turn_id":0}}'
+        "turn_id":0}'
 ```
 
-The response is the standard MCP tool result. The turn data is a JSON string in
-`content[0].text`:
+The response is the turn data directly as JSON:
 
 ```json
-{ "content": [ { "type": "text", "text": "{\"context\":[...],\"contradictions\":0}" } ], "is_error": false }
+{ "context": [...], "contradictions": 0 }
 ```
 
 ## Self-hosted + any language

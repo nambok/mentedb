@@ -34,10 +34,10 @@ code.
 **Or call the API directly:**
 
 ```bash
-curl -X POST https://api.mentedb.com/mcp/v1/tools/call \
+curl -X POST https://api.mentedb.com/v1/process_turn \
   -H "Authorization: Bearer $MENTEDB_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"name":"process_turn","arguments":{"user_message":"...","assistant_response":"...","turn_id":0}}'
+  -d '{"user_message":"...","assistant_response":"...","turn_id":0}'
 ```
 
 **From Python** (any HTTP client, no SDK needed):
@@ -46,13 +46,13 @@ curl -X POST https://api.mentedb.com/mcp/v1/tools/call \
 import os, requests
 
 resp = requests.post(
-    "https://api.mentedb.com/mcp/v1/tools/call",
+    "https://api.mentedb.com/v1/process_turn",
     headers={"Authorization": f"Bearer {os.environ['MENTEDB_API_KEY']}"},
-    json={"name": "process_turn", "arguments": {
+    json={
         "user_message": "I switched from Postgres to SQLite",
         "assistant_response": "Noted.",
         "turn_id": 0,
-    }},
+    },
 )
 print(resp.json())
 ```
