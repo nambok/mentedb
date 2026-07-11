@@ -57,7 +57,7 @@ impl InterferenceDetector {
     pub fn generate_disambiguation(&self, a: &MemoryNode, b: &MemoryNode) -> String {
         format!(
             "Note: Memory A: \"{}\" (created {}), Memory B: \"{}\" (created {}). Do not confuse.",
-            &a.content, a.created_at, &b.content, b.created_at
+            a.content, a.created_at, b.content, b.created_at
         )
     }
 
