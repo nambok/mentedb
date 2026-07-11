@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.11](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.11.10...mentedb-extraction-v0.11.11) - 2026-07-11
+
+### Added
+
+- server maintenance runner + speculative cache entries accessor ([#190](https://github.com/nambok/mentedb/pull/190))
+
 ## [0.11.9](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.11.8...mentedb-extraction-v0.11.9) - 2026-07-11
 
 ### Other
