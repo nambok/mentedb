@@ -123,9 +123,9 @@ where it is wired up for you). Without an LLM you still get storage and recall.
 
 ```bash
 export MENTEDB_API_KEY=mdb_your_key       # from app.mentedb.com
-curl -X POST https://api.mentedb.com/mcp/v1/tools/call \
+curl -X POST https://api.mentedb.com/v1/process_turn \
   -H "Authorization: Bearer $MENTEDB_API_KEY" -H "Content-Type: application/json" \
-  -d '{"name":"process_turn","arguments":{"user_message":"...","assistant_response":"...","turn_id":0}}'
+  -d '{"user_message":"...","assistant_response":"...","turn_id":0}'
 ```
 
 **Connect an existing AI tool (no code):**
