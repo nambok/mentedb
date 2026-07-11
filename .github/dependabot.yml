@@ -17,6 +17,11 @@ updates:
       # must be a deliberate, wire-format-tested migration, never an auto-PR.
       - dependency-name: "bincode"
         update-types: ["version-update:semver-major"]
+      # hf-hub 1.0 is a full API rewrite (Api/Repo/Cache became HFClient) that
+      # breaks the local-embeddings model download. CI does not build that
+      # feature, so the break slips through, keep majors as a deliberate migration.
+      - dependency-name: "hf-hub"
+        update-types: ["version-update:semver-major"]
     groups:
       cargo-minor-patch:
         update-types:

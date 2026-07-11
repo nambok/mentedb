@@ -19,6 +19,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get install -y protobuf-compiler
       - run: cargo check --workspace
+      # The local-embeddings feature (candle, hf-hub) is off by default, so a
+      # plain workspace check misses breaks in it, which then only surface in
+      # the Docker/wheel build. Check it explicitly.
+      - run: cargo check -p mentedb-embedding --features local
 
   test:
     name: Test
