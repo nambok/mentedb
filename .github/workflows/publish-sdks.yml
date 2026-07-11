@@ -46,7 +46,7 @@ jobs:
             elif command -v yum >/dev/null 2>&1; then yum install -y perl-core perl-IPC-Cmd
             else apt-get update && apt-get install -y perl make
             fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.os }}
           path: sdks/python/target/wheels/
@@ -121,7 +121,7 @@ jobs:
         working-directory: sdks/typescript
         run: napi build --release --platform --target ${{ matrix.target }}
       - name: Upload native artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npm-${{ matrix.target }}
           path: sdks/typescript/${{ matrix.artifact }}
