@@ -17,6 +17,10 @@ MenteDB is a purpose built database engine for AI agent memory. Not a wrapper ar
 | **[Cloud](docs/CLOUD.md)** | Managed. Get an API key, set `MENTEDB_API_KEY`, connect. The overnight maintenance runs for you. |
 | **[Self-host](docs/SELF_HOSTING.md)** | Run the engine yourself with `cargo install mentedb-server` or Docker. Nightly maintenance is built in. |
 
+Building your own agent? **[Build an agent](docs/BUILD_AN_AGENT.md)** has a
+runnable example for every combination of cloud or self-hosted and Python, Node,
+or Rust.
+
 **Cloud in 30 seconds** ([full guide](docs/CLOUD.md)):
 
 ```bash
@@ -76,45 +80,67 @@ pip install mentedb-langchain  # LangChain memory provider
 pip install mentedb-crewai     # CrewAI memory provider
 ```
 
-## Quick Start
+## Quick start: an agent that remembers
 
-**`process_turn` — one call does everything:**
+Memory is one call. `process_turn` embeds the user message, recalls what is
+relevant from everything stored so far, saves the turn, and returns the memories
+to put in your next prompt. Full walkthrough for every stack (cloud vs
+self-hosted, Python / Node / Rust) is in **[Build an agent](docs/BUILD_AN_AGENT.md)**.
+
+**Self-hosted, Python:**
 
 ```python
 from mentedb import MenteDB
 
 db = MenteDB("./my-agent-memory")
-db.configure_llm(provider="anthropic", api_key="sk-...")
 
-result = db.process_turn(
+# Turn 0: tell it something.
+db.process_turn(
     user_message="I switched from PostgreSQL to SQLite for side projects",
-    assistant_response="Got it, I'll suggest SQLite going forward.",
+    assistant_response="Got it, SQLite going forward.",
     turn_id=0,
 )
 
-# result.context       → relevant memories for your prompt
-# result.facts_extracted → what was learned this turn
-# result.contradiction_count → conflicting beliefs detected
-# result.pain_warnings → things that went wrong before
+# Turn 1: it remembers.
+result = db.process_turn(user_message="what database am I using?", turn_id=1)
+for memory in result.context:            # -> prepend these to your prompt
+    print(memory.content)
+
+# result.facts_extracted     -> what was learned this turn (needs an LLM)
+# result.contradiction_count -> conflicting beliefs detected
 ```
 
-One function call runs the full 14-step cognitive pipeline: embedding, speculative cache, hybrid search, pain signals, episodic storage, fact extraction, contradiction detection, sentiment analysis, and more.
+One call runs the full 14-step cognitive pipeline: embedding, speculative cache,
+hybrid search, pain signals, episodic storage, fact extraction, contradiction
+detection, sentiment analysis, and more. Fact extraction needs an LLM: set
+`MENTEDB_LLM_PROVIDER` and `MENTEDB_LLM_API_KEY` (or use [cloud](docs/CLOUD.md),
+where it is wired up for you). Without an LLM you still get storage and recall.
 
 > **Enrichment runs automatically in the background** — semantic facts, entity graphs,
 > community summaries, and a user profile are built over time after each `process_turn`.
 
-**Via MCP (zero code):**
+**Cloud, any language (no SDK, REST):**
+
+```bash
+export MENTEDB_API_KEY=mdb_your_key       # from app.mentedb.com
+curl -X POST https://api.mentedb.com/mcp/v1/tools/call \
+  -H "Authorization: Bearer $MENTEDB_API_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"process_turn","arguments":{"user_message":"...","assistant_response":"...","turn_id":0}}'
+```
+
+**Connect an existing AI tool (no code):**
 
 ```bash
 npx mentedb-mcp@latest setup claude-code  # or copilot, claude, cursor
 ```
 
-Your AI assistant calls `process_turn` automatically every turn.
+Your assistant then calls `process_turn` automatically every turn.
 
 **Embed in Rust:**
 
 ```rust
-use mentedb::{MenteDb, process_turn::{ProcessTurnInput, DeltaTracker}};
+use mentedb::{MenteDb, process_turn::ProcessTurnInput};
+use mentedb_context::DeltaTracker;
 
 let db = MenteDb::open("./my-agent-memory")?;
 let mut delta = DeltaTracker::default();
@@ -124,6 +150,7 @@ let result = db.process_turn(&ProcessTurnInput {
     turn_id: 0,
     project_context: None,
     agent_id: None,
+    session_id: None,
 }, &mut delta)?;
 ```
 
@@ -283,12 +310,8 @@ result = db.process_turn(
 import { MenteDB } from 'mentedb';
 
 const db = new MenteDB('./agent-memory');
-const result = await db.processTurn({
-  userMessage: 'I switched to Neovim',
-  assistantResponse: 'Noted!',
-  turnId: 0,
-});
-// result.context has relevant memories for your prompt
+const result = db.processTurn('I switched to Neovim', 'Noted!', 0);
+// result.context has relevant memories for your prompt (result.factsExtracted, etc.)
 ```
 
 **LangChain:** `pip install mentedb-langchain`

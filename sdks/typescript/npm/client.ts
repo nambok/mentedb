@@ -4,6 +4,8 @@ import {
   type StoreOptions,
   type RecallResult,
   type SearchResult,
+  type ProcessTurnResult,
+  type IngestResult,
 } from './types';
 
 import * as os from 'os';
@@ -53,6 +55,47 @@ export class MenteDB {
 
   constructor(dataDir: string = './mentedb-data') {
     this.native = new nativeBinding.MenteDb(dataDir);
+  }
+
+  /**
+   * Process one conversation turn through the full cognitive pipeline.
+   *
+   * This is the primary API. A single call embeds the message, runs hybrid
+   * recall (vector + keyword + graph), stores the turn, extracts facts,
+   * detects contradictions, and returns attention-ordered context plus what
+   * was learned. The field you use most is `context`: inject those memories
+   * into your next prompt.
+   *
+   * Fact extraction and contradiction detection require an LLM. Set
+   * `MENTEDB_LLM_PROVIDER` and `MENTEDB_LLM_API_KEY` in the environment;
+   * without them you still get storage and recall.
+   */
+  processTurn(
+    userMessage: string,
+    assistantResponse?: string,
+    turnId: number = 0,
+    projectContext?: string,
+    agentId?: string,
+    sessionId?: string,
+  ): ProcessTurnResult {
+    return this.native.processTurn(
+      userMessage,
+      assistantResponse ?? null,
+      turnId,
+      projectContext ?? null,
+      agentId ?? null,
+      sessionId ?? null,
+    );
+  }
+
+  /**
+   * Extract memories from a raw conversation transcript and store them.
+   *
+   * Requires an LLM. Set `MENTEDB_LLM_PROVIDER` and `MENTEDB_LLM_API_KEY`,
+   * or pass `provider` ("openai", "anthropic", or "ollama") explicitly.
+   */
+  ingest(conversation: string, provider?: string, agentId?: string): IngestResult {
+    return this.native.ingest(conversation, provider ?? null, agentId ?? null);
   }
 
   /** Store a memory and return its UUID. */
