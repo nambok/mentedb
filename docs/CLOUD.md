@@ -40,7 +40,22 @@ curl -X POST https://api.mentedb.com/mcp/v1/tools/call \
   -d '{"name":"process_turn","arguments":{"user_message":"...","assistant_response":"...","turn_id":0}}'
 ```
 
-Python and TypeScript SDKs are available too, see the [docs site](https://mentedb.com/docs).
+**From Python** (any HTTP client, no SDK needed):
+
+```python
+import os, requests
+
+resp = requests.post(
+    "https://api.mentedb.com/mcp/v1/tools/call",
+    headers={"Authorization": f"Bearer {os.environ['MENTEDB_API_KEY']}"},
+    json={"name": "process_turn", "arguments": {
+        "user_message": "I switched from Postgres to SQLite",
+        "assistant_response": "Noted.",
+        "turn_id": 0,
+    }},
+)
+print(resp.json())
+```
 
 ## What runs for you
 

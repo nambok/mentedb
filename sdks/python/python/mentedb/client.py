@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Optional
 
 from mentedb._mentedb_python import MenteDB as _MenteDB
@@ -36,6 +37,33 @@ class MenteDB:
             embedding_api_key=embedding_api_key,
             embedding_model=embedding_model,
         )
+
+    def process_turn(
+        self,
+        user_message: str,
+        assistant_response: str | None = None,
+        turn_id: int = 0,
+        project_context: str | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+    ):
+        """Process a conversation turn through the full cognitive pipeline.
+
+        The primary API. One call embeds the message, runs hybrid recall, stores
+        the turn, extracts facts, detects contradictions, and returns
+        attention-ordered context plus what was learned. Returns an object with
+        ``context`` (memories for your prompt), ``facts_extracted``,
+        ``contradiction_count``, and more.
+        """
+        result = self._db.process_turn(
+            user_message,
+            assistant_response,
+            turn_id,
+            project_context,
+            agent_id,
+            session_id,
+        )
+        return SimpleNamespace(**result) if isinstance(result, dict) else result
 
     def store(
         self,
