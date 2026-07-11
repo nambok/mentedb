@@ -29,6 +29,9 @@ docker run -p 6677:6677 -v mentedb-data:/data ghcr.io/nambok/mentedb:latest
 ```
 
 The server listens on `6677` (REST) and `6678` (gRPC). Data lives in `--data-dir`.
+The image runs the overnight maintenance sweep automatically (every 24h by
+default, see [Step 5](#step-5-overnight-maintenance)), so a plain `docker run`
+already keeps memory healthy with nothing extra to schedule.
 
 ## Step 2: Configure an LLM (recommended)
 
