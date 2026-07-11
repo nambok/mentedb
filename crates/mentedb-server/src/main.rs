@@ -5,6 +5,7 @@ mod error;
 mod extraction_queue;
 mod grpc;
 mod handlers;
+mod maintenance;
 mod rate_limit;
 mod routes;
 mod state;
@@ -48,6 +49,7 @@ struct ServerConfig {
     extraction_quality_threshold: Option<f32>,
     extraction_dedup_threshold: Option<f32>,
     embedding_provider: Option<String>,
+    maintenance_interval_hours: u64,
 }
 fn parse_args() -> ServerConfig {
     let args: Vec<String> = env::args().collect();
@@ -65,8 +67,13 @@ fn parse_args() -> ServerConfig {
     let mut extraction_quality_threshold: Option<f32> = None;
     let mut extraction_dedup_threshold: Option<f32> = None;
     let mut embedding_provider: Option<String> = None;
+    let mut maintenance_interval_hours: u64 = 24;
 
     let mut i = 1;
+    // Skip a leading subcommand (e.g. `maintenance`) so flags still parse.
+    if args.len() > 1 && !args[1].starts_with("--") {
+        i = 2;
+    }
     while i < args.len() {
         match args[i].as_str() {
             "--data-dir" => {
@@ -173,6 +180,18 @@ fn parse_args() -> ServerConfig {
                     std::process::exit(1);
                 }
             }
+            "--maintenance-interval-hours" => {
+                if i + 1 < args.len() {
+                    maintenance_interval_hours = args[i + 1].parse().unwrap_or_else(|_| {
+                        eprintln!("Error: --maintenance-interval-hours must be a number");
+                        std::process::exit(1);
+                    });
+                    i += 2;
+                } else {
+                    eprintln!("Error: --maintenance-interval-hours requires a value");
+                    std::process::exit(1);
+                }
+            }
             _ => {
                 eprintln!("Unknown argument: {}", args[i]);
                 std::process::exit(1);
@@ -227,6 +246,11 @@ fn parse_args() -> ServerConfig {
     {
         embedding_provider = Some(v);
     }
+    if let Ok(v) = env::var("MENTEDB_MAINTENANCE_INTERVAL_HOURS")
+        && let Ok(n) = v.parse::<u64>()
+    {
+        maintenance_interval_hours = n;
+    }
     ServerConfig {
         data_dir,
         port,
@@ -242,6 +266,7 @@ fn parse_args() -> ServerConfig {
         extraction_quality_threshold,
         extraction_dedup_threshold,
         embedding_provider,
+        maintenance_interval_hours,
     }
 }
 
@@ -325,9 +350,27 @@ async fn main() -> Result<()> {
 
     let config = parse_args();
 
+    // One-shot maintenance sweep: `mentedb-server maintenance --data-dir ./data`
+    // (for external cron). Runs consolidation, decay, archival, and cache
+    // eviction once, then exits.
+    if std::env::args().nth(1).as_deref() == Some("maintenance") {
+        std::fs::create_dir_all(&config.data_dir)?;
+        let db = match build_embedder(config.embedding_provider.as_deref()) {
+            Some(embedder) => MenteDb::open_with_embedder(&config.data_dir, embedder)?,
+            None => MenteDb::open(&config.data_dir)?,
+        };
+        let r = maintenance::run_sweep(&db);
+        println!(
+            "maintenance sweep complete: {} consolidated, {} decayed, {} forgotten",
+            r.consolidated, r.decayed, r.forgotten
+        );
+        return Ok(());
+    }
+
     // Build extraction config first (before moving fields out of config)
     let extraction_config = build_extraction_config(&config);
     let auto_extract = config.auto_extract;
+    let maintenance_interval_hours = config.maintenance_interval_hours;
 
     let (data_dir, port, grpc_port, jwt_secret) = (
         config.data_dir,
@@ -353,6 +396,10 @@ async fn main() -> Result<()> {
         None => MenteDb::open(&data_dir)?,
     };
     let db = Arc::new(db);
+
+    // Background maintenance sweep (self-hosted overnight jobs). Default every
+    // 24h; 0 disables it (run the `maintenance` subcommand from cron instead).
+    maintenance::spawn_scheduler(db.clone(), maintenance_interval_hours);
 
     let auth_mode = if jwt_secret.is_some() {
         "enabled"
