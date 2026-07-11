@@ -8,6 +8,11 @@ const SNAPSHOT_VERSION: u32 = 2;
 
 const WORD_MATCH_CONFIDENCE: f32 = 0.7;
 
+/// Confidence for a rule-based match when the input was a word subset of more
+/// than one canonical. Lower than a clean single match so the LLM tier can
+/// override the deterministic pick instead of trusting a guess.
+const AMBIGUOUS_MATCH_CONFIDENCE: f32 = 0.5;
+
 /// Resolves entity references to canonical names using a three-tier strategy:
 ///
 /// 1. **Learned cache** — instant lookup from alias table (no LLM call)
@@ -25,6 +30,10 @@ pub struct EntityResolver {
     /// Pairs of entity names confirmed to be DIFFERENT (negative cache).
     /// Stored as sorted (a, b) tuples to avoid (A,B) vs (B,A) duplication.
     negative_pairs: HashSet<(String, String)>,
+    /// Live set of canonical names (the distinct values of `aliases`) with a
+    /// reference count, so rule-based matching iterates canonicals directly
+    /// instead of rebuilding a sorted, deduped Vec on every resolve.
+    canonicals: HashMap<String, usize>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -62,6 +71,32 @@ impl EntityResolver {
             aliases: HashMap::new(),
             confidence: HashMap::new(),
             negative_pairs: HashSet::new(),
+            canonicals: HashMap::new(),
+        }
+    }
+
+    /// Insert or overwrite an alias mapping, keeping `canonicals` (the live set
+    /// of canonical names) in sync so rule-based matching never rebuilds it.
+    fn link(&mut self, alias_norm: String, canonical_norm: String) {
+        match self.aliases.insert(alias_norm, canonical_norm.clone()) {
+            Some(prev) if prev == canonical_norm => {} // unchanged, no ref delta
+            Some(prev) => {
+                self.decr_canonical(&prev);
+                *self.canonicals.entry(canonical_norm).or_insert(0) += 1;
+            }
+            None => {
+                *self.canonicals.entry(canonical_norm).or_insert(0) += 1;
+            }
+        }
+    }
+
+    /// Drop one reference to a canonical, removing it once nothing maps to it.
+    fn decr_canonical(&mut self, canonical: &str) {
+        if let Some(count) = self.canonicals.get_mut(canonical) {
+            *count -= 1;
+            if *count == 0 {
+                self.canonicals.remove(canonical);
+            }
         }
     }
 
@@ -161,15 +196,14 @@ impl EntityResolver {
         let canonical = normalize_entity(&group.canonical);
 
         // Map canonical to itself
-        self.aliases.insert(canonical.clone(), canonical.clone());
+        self.link(canonical.clone(), canonical.clone());
         self.confidence.insert(canonical.clone(), group.confidence);
 
         // Map each alias to the canonical
         for alias in &group.aliases {
             let normalized_alias = normalize_entity(alias);
             if normalized_alias != canonical {
-                self.aliases
-                    .insert(normalized_alias.clone(), canonical.clone());
+                self.link(normalized_alias.clone(), canonical.clone());
                 self.confidence.insert(normalized_alias, group.confidence);
             }
         }
@@ -179,7 +213,7 @@ impl EntityResolver {
     pub fn add_alias(&mut self, alias: &str, canonical: &str, confidence: f32) {
         let alias_norm = normalize_entity(alias);
         let canonical_norm = normalize_entity(canonical);
-        self.aliases.insert(alias_norm.clone(), canonical_norm);
+        self.link(alias_norm.clone(), canonical_norm);
         self.confidence.insert(alias_norm, confidence);
     }
 
@@ -191,9 +225,8 @@ impl EntityResolver {
 
     /// Returns all known canonical entity names.
     pub fn known_entities(&self) -> Vec<String> {
-        let mut entities: Vec<String> = self.aliases.values().cloned().collect();
+        let mut entities: Vec<String> = self.canonicals.keys().cloned().collect();
         entities.sort();
-        entities.dedup();
         entities
     }
 
@@ -213,24 +246,42 @@ impl EntityResolver {
             return None;
         }
 
-        let canonicals = self.known_entities();
-        for canonical in &canonicals {
+        // Collect every canonical whose words are a subset of the input, or
+        // vice versa, iterating the maintained canonical set directly.
+        // "alice" ⊂ {"alice", "smith"} → match; "java" ⊄ {"javascript"} → no.
+        let mut matches: Vec<&String> = Vec::new();
+        for canonical in self.canonicals.keys() {
             if canonical == normalized {
                 continue;
             }
-
             let canon_words: HashSet<&str> = canonical
                 .split(|c: char| c.is_whitespace() || c == '-' || c == '_')
                 .filter(|w| !w.is_empty())
                 .collect();
-
-            // "alice" ⊂ {"alice", "smith"} → match
-            // "java" ⊄ {"javascript"} → no match (correct!)
             if input_words.is_subset(&canon_words) || canon_words.is_subset(&input_words) {
-                return Some((canonical.clone(), WORD_MATCH_CONFIDENCE));
+                matches.push(canonical);
             }
         }
-        None
+
+        match matches.len() {
+            0 => None,
+            1 => Some((matches[0].clone(), WORD_MATCH_CONFIDENCE)),
+            _ => {
+                // Ambiguous: more than one canonical matches (e.g. "alice"
+                // matching both "alice jones" and "alice smith"). Pick
+                // deterministically, most referenced, then shortest, then
+                // alphabetical, and lower the confidence so the LLM tier can
+                // override the guess instead of us silently picking one.
+                matches.sort_by(|a, b| {
+                    let ra = self.canonicals.get(*a).copied().unwrap_or(0);
+                    let rb = self.canonicals.get(*b).copied().unwrap_or(0);
+                    rb.cmp(&ra)
+                        .then_with(|| a.len().cmp(&b.len()))
+                        .then_with(|| a.as_str().cmp(b.as_str()))
+                });
+                Some((matches[0].clone(), AMBIGUOUS_MATCH_CONFIDENCE))
+            }
+        }
     }
 
     /// Check if two entity names are known to be different (negative cache).
@@ -299,7 +350,11 @@ impl EntityResolver {
         }
 
         for (alias, canonical) in snapshot.aliases {
-            self.aliases.entry(alias).or_insert(canonical);
+            // Merge semantics: keep an existing mapping, only add new aliases
+            // (and count their canonical) so the live set stays accurate.
+            if !self.aliases.contains_key(&alias) {
+                self.link(alias, canonical);
+            }
         }
         for (alias, conf) in snapshot.confidence {
             self.confidence.entry(alias).or_insert(conf);
@@ -490,6 +545,59 @@ mod tests {
         let entities = resolver.known_entities();
         assert!(entities.contains(&"alice smith".to_string()));
         assert!(entities.contains(&"postgresql".to_string()));
+    }
+
+    #[test]
+    fn test_canonical_set_tracks_overwrite() {
+        // #45: the live canonical set must stay accurate when an alias is
+        // re-pointed, the orphaned old canonical drops out.
+        let mut resolver = EntityResolver::new();
+        resolver.add_alias("nick", "alice smith", 0.9);
+        assert!(
+            resolver
+                .known_entities()
+                .contains(&"alice smith".to_string())
+        );
+
+        resolver.add_alias("nick", "bob jones", 0.9);
+        let known = resolver.known_entities();
+        assert!(known.contains(&"bob jones".to_string()));
+        assert!(
+            !known.contains(&"alice smith".to_string()),
+            "orphaned canonical should be dropped once nothing maps to it"
+        );
+
+        // A canonical with two aliases survives losing one of them.
+        resolver.add_alias("ally", "carol lee", 0.9);
+        resolver.add_alias("caz", "carol lee", 0.9);
+        resolver.add_alias("ally", "someone else", 0.9);
+        assert!(resolver.known_entities().contains(&"carol lee".to_string()));
+    }
+
+    #[test]
+    fn test_ambiguous_match_returns_lower_confidence() {
+        // #46: "alice" is a word subset of two canonicals, resolve
+        // deterministically at a lower confidence rather than guessing silently.
+        let mut resolver = EntityResolver::new();
+        resolver.add_alias("alice smith", "alice smith", 1.0);
+        resolver.add_alias("alice jones", "alice jones", 1.0);
+
+        let result = resolver.resolve("Alice");
+        assert_eq!(result.source, ResolutionSource::RuleBased);
+        assert_eq!(result.confidence, AMBIGUOUS_MATCH_CONFIDENCE);
+        // Equal ref count and length, so alphabetical decides, and it is stable.
+        assert_eq!(result.canonical, "alice jones");
+        assert_eq!(resolver.resolve("alice").canonical, "alice jones");
+    }
+
+    #[test]
+    fn test_single_match_keeps_full_confidence() {
+        // A lone match must still resolve at the full word-match confidence.
+        let mut resolver = EntityResolver::new();
+        resolver.add_alias("alice smith", "alice smith", 1.0);
+        let result = resolver.resolve("Alice");
+        assert_eq!(result.confidence, WORD_MATCH_CONFIDENCE);
+        assert_eq!(result.canonical, "alice smith");
     }
 
     #[test]
