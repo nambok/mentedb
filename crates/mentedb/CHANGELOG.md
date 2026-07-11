@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.7](https://github.com/nambok/mentedb/compare/mentedb-v0.11.5...mentedb-v0.11.7) - 2026-07-11
+
+### Added
+
+- engine-native LLM memory consolidation (MenteDb::consolidate_memories) ([#128](https://github.com/nambok/mentedb/pull/128))
+
+### Other
+
+- release v0.11.6 ([#129](https://github.com/nambok/mentedb/pull/129))
+
 ## [0.11.6](https://github.com/nambok/mentedb/compare/mentedb-v0.11.5...mentedb-v0.11.6) - 2026-07-11
 
 ### Added
