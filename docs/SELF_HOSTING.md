@@ -85,6 +85,9 @@ result = db.process_turn(user_message="...", assistant_response="...", turn_id=0
 # result.context -> memories for your prompt; result.facts_extracted -> what was learned
 ```
 
+For the full turn-by-turn agent loop in Python, Node, and Rust, see
+[Build an agent](./BUILD_AN_AGENT.md).
+
 ## Step 5: Overnight maintenance
 
 This is what keeps memory from turning into a junk drawer. The sweep runs, in

@@ -57,6 +57,10 @@ resp = requests.post(
 print(resp.json())
 ```
 
+**Building your own agent?** The snippets above are the primitive. See
+[Build an agent](./BUILD_AN_AGENT.md) for the full turn-by-turn loop in Python
+and Node, cloud and self-hosted.
+
 ## What runs for you
 
 Every night the platform runs the same maintenance a self-hoster would have to
