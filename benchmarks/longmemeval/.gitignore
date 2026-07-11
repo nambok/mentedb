@@ -4,4 +4,11 @@ data/
 # Benchmark results and eval logs
 results/*
 !results/longmemeval_s_results.jsonl
+# Committed as auditable proof for the published LongMemEval score (must be
+# un-ignored, or release-plz errors on files that are both committed and ignored)
+!results/hypotheses_baseline-shared_q0-500.jsonl
+!results/hypotheses_baseline-shared_q0-500.jsonl.eval-results-gpt-4o-2024-08-06
+!results/hypotheses_baseline-shared_q0-500_report.md
 extraction_cache.json
+reextraction_cache.jsonl
+.quarantine_tuning_artifacts/
