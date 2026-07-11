@@ -10,6 +10,27 @@ MenteDB is a purpose built database engine for AI agent memory. Not a wrapper ar
 
 > *mente* (Spanish): mind, intellect
 
+## Two ways to run it
+
+|  |  |
+|---|---|
+| **[Cloud](docs/CLOUD.md)** | Managed. Get an API key, set `MENTEDB_API_KEY`, connect. The overnight maintenance runs for you. |
+| **[Self-host](docs/SELF_HOSTING.md)** | Run the engine yourself with `cargo install mentedb-server` or Docker. Nightly maintenance is built in. |
+
+**Cloud in 30 seconds** ([full guide](docs/CLOUD.md)):
+
+```bash
+export MENTEDB_API_KEY=mdb_your_key        # from app.mentedb.com -> API Keys
+npx mentedb-mcp@latest setup claude-code   # or cursor, copilot, claude
+```
+
+**Self-host in 30 seconds** ([full guide](docs/SELF_HOSTING.md)):
+
+```bash
+cargo install mentedb-server
+mentedb-server --data-dir ./data           # REST on :6677, nightly maintenance built in
+```
+
 ## Installation
 
 ### Docker (fastest)
