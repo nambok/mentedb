@@ -318,7 +318,7 @@ const result = db.processTurn('I switched to Neovim', 'Noted!', 0);
 ```python
 from mentedb_langchain import MenteDBChatHistory
 
-history = MenteDBChatHistory(data_dir="./memory", agent_id="my-agent")
+history = MenteDBChatHistory(session_id="chat-1", data_dir="./memory")
 history.add_user_message("I prefer dark mode")
 history.add_ai_message("Noted!")
 ```
