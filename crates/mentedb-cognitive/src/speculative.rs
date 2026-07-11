@@ -175,6 +175,12 @@ impl SpeculativeCache {
         }
     }
 
+    /// The current cache entries (predicted topic, pre-assembled context,
+    /// source memories, hit count, age), for introspection and display.
+    pub fn entries(&self) -> &[CacheEntry] {
+        &self.entries
+    }
+
     fn evict_lru(&mut self) {
         if self.entries.is_empty() {
             return;

@@ -1734,6 +1734,13 @@ impl MenteDb {
         self.speculative.read().stats()
     }
 
+    /// Get the current speculative cache entries (predicted topic, pre-assembled
+    /// context, source memory ids, hit count, and age), for introspection and
+    /// dashboards. This is the live pre-assembly cache, not aggregate stats.
+    pub fn speculative_cache_entries(&self) -> Vec<CacheEntry> {
+        self.speculative.read().entries().to_vec()
+    }
+
     // -----------------------------------------------------------------------
     // Cognitive Engine: Interference Detection
     // -----------------------------------------------------------------------
