@@ -11,6 +11,12 @@ updates:
       interval: daily
     allow:
       - dependency-type: all
+    ignore:
+      # bincode 3.0.0 is a non-compiling placeholder (compile_error! -> xkcd 2347).
+      # bincode major bumps also change the on-disk serialization format, so they
+      # must be a deliberate, wire-format-tested migration, never an auto-PR.
+      - dependency-name: "bincode"
+        update-types: ["version-update:semver-major"]
     groups:
       cargo-minor-patch:
         update-types:
