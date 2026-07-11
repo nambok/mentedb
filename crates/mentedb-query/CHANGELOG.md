@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.12](https://github.com/nambok/mentedb/compare/mentedb-query-v0.11.11...mentedb-query-v0.11.12) - 2026-07-11
+
+### Added
+
+- *(sdk)* expose processTurn/ingest in Node SDK; rewrite onboarding docs around building an agent ([#195](https://github.com/nambok/mentedb/pull/195))
+
 ## [0.11.8](https://github.com/nambok/mentedb/compare/mentedb-query-v0.11.7...mentedb-query-v0.11.8) - 2026-07-11
 
 ### Other
