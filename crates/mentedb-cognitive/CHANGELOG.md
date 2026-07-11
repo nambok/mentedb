@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.8](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.11.7...mentedb-cognitive-v0.11.8) - 2026-07-11
+
+### Other
+
+- live deps.rs dependency-status badge; group Dependabot updates into 1-2 PRs ([#169](https://github.com/nambok/mentedb/pull/169))
+- add Dependabot badge to README ([#149](https://github.com/nambok/mentedb/pull/149))
+
 ## [0.11.5](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.11.4...mentedb-cognitive-v0.11.5) - 2026-07-11
 
 ### Fixed
