@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.9](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.11.8...mentedb-cognitive-v0.11.9) - 2026-07-11
+
+### Other
+
+- maintain EntityResolver canonical set + disambiguate rule matches (closes #45, #46) ([#182](https://github.com/nambok/mentedb/pull/182))
+
 ## [0.11.8](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.11.7...mentedb-cognitive-v0.11.8) - 2026-07-11
 
 ### Other

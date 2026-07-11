@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.9](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.11.8...mentedb-embedding-v0.11.9) - 2026-07-11
+
+### Other
+
+- *(deps)* bump candle-transformers from 0.10.2 to 0.11.0 ([#178](https://github.com/nambok/mentedb/pull/178))
+
 ## [0.11.8](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.11.7...mentedb-embedding-v0.11.8) - 2026-07-11
 
 ### Other
