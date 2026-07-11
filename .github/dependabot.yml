@@ -1,7 +1,8 @@
 # Dependabot keeps the engine's Rust dependencies and CI actions current.
-# Cargo bumps (including 0.x minor jumps) are PR'd daily and GitHub Actions
-# bumps weekly; CI gates each one, and release-plz cuts the crates.io release
-# when a dependency change lands on main.
+# Updates are GROUPED so a day's bumps arrive as one or two PRs, not dozens:
+# all minor/patch cargo bumps in one PR (majors stay separate so a breaking one
+# does not block the safe ones), and all GitHub Actions in one PR. CI gates each
+# PR, and release-plz cuts the crates.io release when a bump lands on main.
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -10,6 +11,11 @@ updates:
       interval: daily
     allow:
       - dependency-type: all
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
     labels:
       - dependencies
     open-pull-requests-limit: 5
@@ -17,6 +23,10 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
     labels:
       - dependencies
     open-pull-requests-limit: 5
