@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.13](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.11.12...mentedb-extraction-v0.11.13) - 2026-07-12
+
+### Added
+
+- canonicalize trajectory topics off the hot path so the speculative cache stops keying on raw message text ([#201](https://github.com/nambok/mentedb/pull/201))
+
+### Other
+
+- use the clean /v1/process_turn cloud endpoint in all examples ([#200](https://github.com/nambok/mentedb/pull/200))
+- fix MenteDBChatHistory example, session_id is a required argument ([#196](https://github.com/nambok/mentedb/pull/196))
+
 ## [0.11.12](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.11.11...mentedb-extraction-v0.11.12) - 2026-07-11
 
 ### Added
