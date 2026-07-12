@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.13](https://github.com/nambok/mentedb/compare/mentedb-index-v0.11.12...mentedb-index-v0.11.13) - 2026-07-12
+
+### Other
+
+- use the clean /v1/process_turn cloud endpoint in all examples ([#200](https://github.com/nambok/mentedb/pull/200))
+
 ## [0.11.12](https://github.com/nambok/mentedb/compare/mentedb-index-v0.11.11...mentedb-index-v0.11.12) - 2026-07-11
 
 ### Added
