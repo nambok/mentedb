@@ -360,9 +360,14 @@ async fn main() -> Result<()> {
             None => MenteDb::open(&config.data_dir)?,
         };
         let r = maintenance::run_sweep(&db);
+        // When an LLM is configured, also give recent trajectory topics a
+        // stable semantic label so the speculative cache and topic prediction
+        // stop keying on raw message text.
+        let extraction_config = build_extraction_config(&config);
+        let canonicalized = maintenance::canonicalize_topics(&db, &extraction_config).await;
         println!(
-            "maintenance sweep complete: {} consolidated, {} decayed, {} forgotten",
-            r.consolidated, r.decayed, r.forgotten
+            "maintenance sweep complete: {} consolidated, {} decayed, {} forgotten, {} topics canonicalized",
+            r.consolidated, r.decayed, r.forgotten, canonicalized
         );
         return Ok(());
     }
@@ -399,7 +404,11 @@ async fn main() -> Result<()> {
 
     // Background maintenance sweep (self-hosted overnight jobs). Default every
     // 24h; 0 disables it (run the `maintenance` subcommand from cron instead).
-    maintenance::spawn_scheduler(db.clone(), maintenance_interval_hours);
+    maintenance::spawn_scheduler(
+        db.clone(),
+        maintenance_interval_hours,
+        extraction_config.clone(),
+    );
 
     let auth_mode = if jwt_secret.is_some() {
         "enabled"

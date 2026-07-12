@@ -13,10 +13,14 @@ use std::time::Duration;
 
 use mentedb::MenteDb;
 use mentedb::consolidation::archival::ArchivalDecision;
+use mentedb_extraction::{ExtractionConfig, ExtractionLlmJudge, HttpExtractionProvider};
 use tracing::{info, warn};
 
 /// Minimum cluster size for consolidation.
 const MIN_CLUSTER_SIZE: usize = 2;
+/// Recent trajectory topics to canonicalize per sweep. The learned topic cache
+/// makes already-labeled topics free, so this only spends LLM calls on new ones.
+const CANONICALIZE_LIMIT: usize = 32;
 /// Cosine similarity threshold for grouping memories to consolidate.
 const SIMILARITY_THRESHOLD: f32 = 0.85;
 /// Speculative cache entries older than this (24h) are evicted.
@@ -82,9 +86,39 @@ pub fn run_sweep(db: &MenteDb) -> MaintenanceReport {
     report
 }
 
+/// Give recent trajectory topics a stable semantic label via the configured
+/// LLM, so topic prediction and the speculative cache stop keying on raw
+/// message text. No-op when no LLM is configured. Async because the LLM call
+/// is; call it outside the sweep's blocking pool.
+pub async fn canonicalize_topics(db: &MenteDb, config: &Option<ExtractionConfig>) -> usize {
+    let Some(cfg) = config.clone() else {
+        return 0;
+    };
+    let provider = match HttpExtractionProvider::new(cfg) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("maintenance: topic canonicalization skipped, provider build failed: {e}");
+            return 0;
+        }
+    };
+    let judge = ExtractionLlmJudge::new(provider);
+    let n = db
+        .canonicalize_trajectory_topics(judge, CANONICALIZE_LIMIT)
+        .await;
+    if n > 0 {
+        info!(count = n, "maintenance: trajectory topics canonicalized");
+    }
+    n
+}
+
 /// Spawn a background task that runs a sweep every `interval_hours`. A value of
 /// 0 disables the scheduler (run the `maintenance` subcommand from cron instead).
-pub fn spawn_scheduler(db: Arc<MenteDb>, interval_hours: u64) {
+/// When an LLM is configured, each cycle also canonicalizes recent topics.
+pub fn spawn_scheduler(
+    db: Arc<MenteDb>,
+    interval_hours: u64,
+    extraction_config: Option<ExtractionConfig>,
+) {
     if interval_hours == 0 {
         info!("maintenance scheduler disabled (--maintenance-interval-hours 0)");
         return;
@@ -94,8 +128,8 @@ pub fn spawn_scheduler(db: Arc<MenteDb>, interval_hours: u64) {
         let interval = Duration::from_secs(interval_hours * 3600);
         loop {
             tokio::time::sleep(interval).await;
-            let db = Arc::clone(&db);
-            match tokio::task::spawn_blocking(move || run_sweep(&db)).await {
+            let db_sweep = Arc::clone(&db);
+            match tokio::task::spawn_blocking(move || run_sweep(&db_sweep)).await {
                 Ok(r) => info!(
                     consolidated = r.consolidated,
                     decayed = r.decayed,
@@ -104,6 +138,7 @@ pub fn spawn_scheduler(db: Arc<MenteDb>, interval_hours: u64) {
                 ),
                 Err(e) => warn!("maintenance sweep task panicked: {e}"),
             }
+            canonicalize_topics(&db, &extraction_config).await;
         }
     });
 }

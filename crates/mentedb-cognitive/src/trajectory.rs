@@ -252,7 +252,14 @@ impl TrajectoryTracker {
         }
     }
 
-    pub fn record_turn(&mut self, turn: TrajectoryNode) {
+    pub fn record_turn(&mut self, mut turn: TrajectoryNode) {
+        // Collapse to the learned canonical label when one exists (populated off
+        // the hot path by canonicalize_trajectory_topics), so recurring
+        // phrasings converge to one node instead of one-per-message. Unknown
+        // topics keep their original text (casing preserved for resume context).
+        if let Some(canonical) = self.transitions.get_canonical(&turn.topic_summary).cloned() {
+            turn.topic_summary = canonical;
+        }
         if let Some(prev) = self.trajectory.last() {
             self.transitions
                 .record(&prev.topic_summary, &turn.topic_summary);
@@ -262,6 +269,44 @@ impl TrajectoryTracker {
             self.trajectory.remove(0);
         }
         self.trajectory.push(turn);
+    }
+
+    /// Recent distinct topic labels that have no learned canonical mapping yet,
+    /// most recent first. The async canonicalization pass uses this to decide
+    /// which topics still need an LLM label, so the sync recording path stays
+    /// fast and no LLM call ever happens per turn.
+    pub fn pending_canonicalization(&self, limit: usize) -> Vec<String> {
+        let canonical: std::collections::HashSet<String> =
+            self.transitions.known_topics().into_iter().collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for node in self.trajectory.iter().rev() {
+            let t = &node.topic_summary;
+            // Skip topics already resolved: a canonical value itself, or a raw
+            // key that already maps to one.
+            if canonical.contains(t) || self.transitions.get_canonical(t).is_some() {
+                continue;
+            }
+            if seen.insert(t.clone()) {
+                out.push(t.clone());
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    /// The set of learned canonical topic labels, for seeding LLM prompts so it
+    /// reuses existing labels instead of inventing near-duplicates.
+    pub fn known_topics(&self) -> Vec<String> {
+        self.transitions.known_topics()
+    }
+
+    /// Store a learned raw -> canonical mapping. Called by the async
+    /// canonicalization pass after it gets labels from the LLM.
+    pub fn learn_canonical(&mut self, raw: &str, canonical: &str) {
+        self.transitions.learn_canonical(raw, canonical);
     }
 
     /// Record a turn with LLM-powered topic canonicalization.
@@ -908,5 +953,48 @@ mod tests {
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].0, "database");
         assert_eq!(preds[0].1, 1);
+    }
+
+    #[test]
+    fn record_turn_resolves_learned_canonical_and_clears_pending() {
+        let mut tracker = TrajectoryTracker::default();
+
+        // A brand-new phrasing records as normalized text and is pending an
+        // LLM label.
+        tracker.record_turn(make_turn(
+            1,
+            "I switched from Postgres to SQLite",
+            DecisionState::Investigating,
+            vec![],
+        ));
+        assert!(
+            tracker
+                .pending_canonicalization(10)
+                .iter()
+                .any(|t| t.contains("SQLite")),
+            "raw topic should be pending canonicalization"
+        );
+
+        // Once the async pass learns a canonical label, the same phrasing
+        // collapses to it on the next turn, and it is no longer pending.
+        tracker.learn_canonical("I switched from Postgres to SQLite", "database choice");
+        tracker.record_turn(make_turn(
+            2,
+            "I switched from Postgres to SQLite",
+            DecisionState::Investigating,
+            vec![],
+        ));
+        assert_eq!(
+            tracker.get_trajectory().last().unwrap().topic_summary,
+            "database choice",
+            "recurring phrasing should resolve to the learned canonical label"
+        );
+        assert!(
+            !tracker
+                .pending_canonicalization(10)
+                .iter()
+                .any(|t| t.contains("SQLite")),
+            "canonicalized topic should no longer be pending"
+        );
     }
 }
