@@ -1587,6 +1587,50 @@ impl MenteDb {
         self.trajectory.write().record_turn(turn);
     }
 
+    /// Canonicalize recent trajectory topics via the LLM, populating the learned
+    /// topic cache so future turns collapse phrasings to one canonical label.
+    /// That label then flows into topic prediction, resume context, and the
+    /// speculative pre-assembly cache, which is why raw message text stops
+    /// showing up as a "topic".
+    ///
+    /// Runs OFF the per-turn hot path: call it from an async post-turn step or
+    /// the maintenance sweep. No lock is held across the LLM calls. The engine
+    /// stays LLM-optional: pass any judge, or do not call this and topics simply
+    /// stay at their normalized-raw form. Returns the number of new canonical
+    /// labels learned this pass.
+    pub async fn canonicalize_trajectory_topics<J: mentedb_cognitive::llm::LlmJudge>(
+        &self,
+        judge: J,
+        limit: usize,
+    ) -> usize {
+        // 1. Collect recent uncached topics + the known label set (read lock).
+        let (pending, mut known) = {
+            let traj = self.trajectory.read();
+            (traj.pending_canonicalization(limit), traj.known_topics())
+        };
+        if pending.is_empty() {
+            return 0;
+        }
+        // 2. Ask the LLM for a canonical label per topic (no lock held).
+        let svc = mentedb_cognitive::llm::CognitiveLlmService::new(judge);
+        let mut learned = Vec::new();
+        for raw in pending {
+            if let Ok(label) = svc.canonicalize_topic(&raw, &known).await {
+                known.push(label.topic.clone());
+                learned.push((raw, label.topic));
+            }
+        }
+        // 3. Store the learned mappings (write lock).
+        let n = learned.len();
+        if n > 0 {
+            let mut traj = self.trajectory.write();
+            for (raw, canonical) in learned {
+                traj.learn_canonical(&raw, &canonical);
+            }
+        }
+        n
+    }
+
     /// Get a resume context string summarizing the conversation so far.
     ///
     /// Returns None if no trajectory has been recorded.
