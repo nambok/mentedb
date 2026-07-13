@@ -1586,3 +1586,28 @@ mod injection_attention {
         );
     }
 }
+
+#[test]
+fn test_store_user_profile_bumps_updated_timestamp() {
+    // Regenerating the profile must move its timestamp forward. profile_updated_at
+    // reads the node's created_at, so if a rebuild kept the old created_at the UI
+    // showed "updated N days ago" forever.
+    let dir = tempfile::tempdir().unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
+    db.store_user_profile("first version").unwrap();
+    let t1 = db.user_profile().unwrap().created_at;
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    db.store_user_profile("second version").unwrap();
+    let node = db.user_profile().unwrap();
+    assert_eq!(
+        node.content, "second version",
+        "content must update on rebuild"
+    );
+    assert!(
+        node.created_at > t1,
+        "created_at must bump on rebuild (was frozen at first creation): {} !> {}",
+        node.created_at,
+        t1
+    );
+    db.close().unwrap();
+}
