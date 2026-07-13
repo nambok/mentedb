@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.14](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.11.13...mentedb-extraction-v0.11.14) - 2026-07-13
+
+### Added
+
+- *(cognitive)* LLM-judged contradiction/supersession detection, replacing the ~0%-precision cosine heuristic ([#203](https://github.com/nambok/mentedb/pull/203))
+
 ## [0.11.13](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.11.12...mentedb-extraction-v0.11.13) - 2026-07-12
 
 ### Added
