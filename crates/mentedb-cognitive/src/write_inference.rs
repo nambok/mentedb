@@ -24,6 +24,14 @@ pub enum InferredAction {
         superseded_by: MemoryId,
         valid_until: u64,
     },
+    /// A byte-identical re-save: invalidate the duplicate and link it to the
+    /// surviving copy with a `Derived` edge (deduplication lineage), NOT a
+    /// `Supersedes` edge. A Supersedes edge here reads as a memory superseding an
+    /// exact copy of itself, which only shows up as noise in the conflict view.
+    DeduplicateExact {
+        duplicate: MemoryId,
+        keeper: MemoryId,
+    },
     /// Update the content of an existing memory with merged information.
     UpdateContent {
         memory: MemoryId,
@@ -143,10 +151,9 @@ impl WriteInferenceEngine {
                 && sim > self.config.obsolete_threshold
                 && new_memory.created_at > existing.created_at
             {
-                actions.push(InferredAction::InvalidateMemory {
-                    memory: existing.id,
-                    superseded_by: new_memory.id,
-                    valid_until: new_memory.created_at,
+                actions.push(InferredAction::DeduplicateExact {
+                    duplicate: existing.id,
+                    keeper: new_memory.id,
                 });
             } else if sim > self.config.related_min && sim <= self.config.related_max {
                 actions.push(InferredAction::CreateEdge {
@@ -384,8 +391,9 @@ mod tests {
     }
 
     #[test]
-    fn test_byte_identical_duplicate_is_superseded() {
-        // The one supersession the heuristic can make safely: identical text.
+    fn test_byte_identical_duplicate_is_deduplicated() {
+        // Identical text is deduplicated (invalidate + Derived lineage), not a
+        // supersession, so it never surfaces as a conflict.
         let agent = AgentId::new();
         let mut existing = make_memory(
             "Ran command: ls -la",
@@ -407,8 +415,8 @@ mod tests {
         assert!(
             actions
                 .iter()
-                .any(|a| matches!(a, InferredAction::InvalidateMemory { .. })),
-            "Expected identical duplicate to be superseded, got: {:?}",
+                .any(|a| matches!(a, InferredAction::DeduplicateExact { .. })),
+            "Expected identical duplicate to be deduplicated, got: {:?}",
             actions
         );
     }

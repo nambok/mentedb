@@ -602,6 +602,29 @@ impl MenteDb {
                 crate::InferredAction::PropagateBeliefChange { .. } => {
                     applied += 1;
                 }
+                crate::InferredAction::DeduplicateExact { duplicate, keeper } => {
+                    // Byte-identical re-save: invalidate the duplicate and link it
+                    // to the survivor with a Derived edge (dedup lineage), not a
+                    // Supersedes edge that would read as a conflict.
+                    if let Ok(mut mem) = self.get_memory(*duplicate) {
+                        mem.valid_until = Some(now);
+                        let _ = self.store(mem);
+                    }
+                    let edge = MemoryEdge {
+                        source: *keeper,
+                        target: *duplicate,
+                        edge_type: EdgeType::Derived,
+                        weight: 1.0,
+                        created_at: now,
+                        valid_from: None,
+                        valid_until: None,
+                        label: None,
+                    };
+                    if let Err(e) = self.relate(edge) {
+                        tracing::warn!("failed to create dedup edge: {e}");
+                    }
+                    applied += 1;
+                }
             }
         }
         Ok(applied)

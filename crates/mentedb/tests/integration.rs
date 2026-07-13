@@ -467,11 +467,11 @@ fn test_write_inference_defers_conflict_to_llm() {
 }
 
 #[test]
-fn test_byte_identical_store_supersedes_old_copy() {
-    // The one supersession the heuristic makes without an LLM: byte-identical
-    // text is an unambiguous duplicate, so the older copy is invalidated and a
-    // Supersedes edge records it. (Reworded near-duplicates are left to the LLM
-    // consolidation/conflict paths, which read the text.)
+fn test_byte_identical_store_deduplicates_old_copy() {
+    // Byte-identical text is an unambiguous duplicate: the older copy is
+    // invalidated and linked to the survivor by a Derived edge (dedup lineage),
+    // NOT a Supersedes edge, so it never surfaces as a conflict. (Reworded
+    // near-duplicates are left to the LLM consolidation/conflict paths.)
     let dir = tempfile::tempdir().unwrap();
     let db = MenteDb::open(dir.path()).unwrap();
     let agent = AgentId::new();
@@ -502,16 +502,20 @@ fn test_byte_identical_store_supersedes_old_copy() {
     );
 
     let g = db.graph().read_graph();
-    let supersedes: Vec<_> = g
+    let edges: Vec<_> = g
         .outgoing(m2_id)
         .into_iter()
-        .filter(|(t, e)| *t == m1_id && e.edge_type == EdgeType::Supersedes)
+        .filter(|(t, _)| *t == m1_id)
         .collect();
-    assert_eq!(
-        supersedes.len(),
-        1,
-        "supersede must create exactly one edge, got {}",
-        supersedes.len()
+    assert!(
+        edges.iter().any(|(_, e)| e.edge_type == EdgeType::Derived),
+        "dedup must link the duplicate with a Derived edge, got {edges:?}"
+    );
+    assert!(
+        edges
+            .iter()
+            .all(|(_, e)| e.edge_type != EdgeType::Supersedes),
+        "dedup must NOT create a Supersedes edge (it would read as a conflict), got {edges:?}"
     );
     drop(g);
 

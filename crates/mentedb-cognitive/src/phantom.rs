@@ -111,6 +111,32 @@ impl Default for PhantomConfig {
     }
 }
 
+/// A heuristic candidate is only worth surfacing as a knowledge gap if it reads
+/// like a genuine named reference, not a sentence fragment, a data value, or a
+/// possessive the tokenizer split off. These are cheap structural checks, used
+/// because this path has no LLM entity extraction to lean on.
+fn is_entity_like(term: &str) -> bool {
+    let t = term.trim().trim_end_matches(['.', ',', ';', ':', '!', '?']);
+    let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+    // Needs real letters, and short enough to be a name rather than prose.
+    if letters < 2 || t.chars().count() > 40 {
+        return false;
+    }
+    // key=value fragments and data readouts are not concepts.
+    if t.contains('=') {
+        return false;
+    }
+    // Mid-string sentence punctuation means this is prose, not a reference.
+    if t.contains(". ") || t.contains(", ") || t.contains("; ") || t.contains(": ") {
+        return false;
+    }
+    // A lone lowercase word ("exactly") is not a named entity.
+    if t.split_whitespace().count() == 1 && t.chars().next().is_some_and(|c| c.is_lowercase()) {
+        return false;
+    }
+    true
+}
+
 pub struct PhantomTracker {
     phantoms: Vec<PhantomMemory>,
     config: PhantomConfig,
@@ -254,16 +280,17 @@ impl PhantomTracker {
     ) -> Vec<String> {
         let mut detected = Vec::new();
 
-        // Detect quoted terms
+        // Detect double-quoted terms. Apostrophes are deliberately excluded:
+        // treating them as quotes grabbed possessives and contractions
+        // ("Matt's", "we're") as phantom references, which was pure noise.
         let mut in_quote = false;
         let mut quote_start = 0;
         for (i, ch) in content.char_indices() {
-            if ch == '\'' || ch == '"' || ch == '\u{2018}' || ch == '\u{2019}' {
+            if ch == '"' || ch == '\u{201C}' || ch == '\u{201D}' {
                 if in_quote {
                     let term = &content[quote_start..i];
                     let trimmed = term.trim();
-                    if !trimmed.is_empty()
-                        && trimmed.len() >= 2
+                    if is_entity_like(trimmed)
                         && !known_lower.contains(&trimmed.to_lowercase())
                         && seen.insert(trimmed.to_lowercase())
                     {
@@ -306,7 +333,8 @@ impl PhantomTracker {
                     continue;
                 }
 
-                if !known_lower.contains(&entity.to_lowercase())
+                if is_entity_like(&entity)
+                    && !known_lower.contains(&entity.to_lowercase())
                     && seen.insert(entity.to_lowercase())
                 {
                     detected.push(entity);
@@ -322,6 +350,7 @@ impl PhantomTracker {
                                 .all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_'));
 
                     if is_technical
+                        && is_entity_like(w)
                         && !known_lower.contains(&w.to_lowercase())
                         && seen.insert(w.to_lowercase())
                     {
@@ -404,6 +433,30 @@ mod tests {
             refs.iter().any(|r| r.contains("Terraform")),
             "Expected Terraform, got: {:?}",
             refs
+        );
+    }
+
+    #[test]
+    fn heuristic_rejects_data_values_keeps_entities() {
+        // The tightened heuristic keeps genuine named entities but drops
+        // key=value data readouts that are not concepts worth teaching.
+        let mut tracker = PhantomTracker::default();
+        let phantoms = tracker.detect_gaps(
+            "The Payment Gateway service reported on_hand=0 for that item.",
+            &[],
+            1,
+        );
+        let refs: Vec<String> = phantoms
+            .iter()
+            .map(|p| p.source_reference.clone())
+            .collect();
+        assert!(
+            refs.iter().any(|r| r.contains("Payment Gateway")),
+            "should keep 'Payment Gateway', got: {refs:?}"
+        );
+        assert!(
+            !refs.iter().any(|r| r.contains('=')),
+            "should drop key=value data fragments like on_hand=0, got: {refs:?}"
         );
     }
 
