@@ -237,6 +237,17 @@ impl GraphManager {
         self.graph.write().compact();
     }
 
+    /// Remove every edge whose type is in `types`, preserving other types.
+    /// Returns the number removed.
+    ///
+    /// There is no per-removal log record, so this is not crash-durable on its
+    /// own: the caller must `save()` afterward to persist a fresh snapshot and
+    /// truncate the edge log (otherwise replaying the log would re-add the
+    /// removed edges). Intended for one-time bulk cleanup.
+    pub fn remove_edges_of_types(&self, types: &[mentedb_core::edge::EdgeType]) -> usize {
+        self.graph.write().remove_edges_of_types(types)
+    }
+
     /// Strengthen an edge weight (Hebbian learning: neurons that fire together wire together).
     pub fn strengthen_edge(&self, source: MemoryId, target: MemoryId, delta: f32) {
         self.graph.write().strengthen_edge(source, target, delta);

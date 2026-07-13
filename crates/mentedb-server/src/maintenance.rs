@@ -21,6 +21,9 @@ const MIN_CLUSTER_SIZE: usize = 2;
 /// Recent trajectory topics to canonicalize per sweep. The learned topic cache
 /// makes already-labeled topics free, so this only spends LLM calls on new ones.
 const CANONICALIZE_LIMIT: usize = 32;
+/// Cap on LLM conflict checks per sweep. Pairs that already carry a conflict edge
+/// are skipped, so this only spends calls on unjudged high-similarity pairs.
+const CONFLICT_CHECK_LIMIT: usize = 32;
 /// Cosine similarity threshold for grouping memories to consolidate.
 const SIMILARITY_THRESHOLD: f32 = 0.85;
 /// Speculative cache entries older than this (24h) are evicted.
@@ -111,6 +114,42 @@ pub async fn canonicalize_topics(db: &MenteDb, config: &Option<ExtractionConfig>
     n
 }
 
+/// Detect genuine contradictions and supersessions among stored memories via the
+/// configured LLM, recording them as the typed edges the Conflicts view shows.
+/// Unlike the old cosine-similarity heuristic (removed for ~0% precision), the
+/// judge reads both texts. No-op when no LLM is configured. Async because the
+/// LLM calls are; call it outside the sweep's blocking pool.
+pub async fn detect_conflicts(db: &MenteDb, config: &Option<ExtractionConfig>) -> usize {
+    let Some(cfg) = config.clone() else {
+        return 0;
+    };
+    let provider = match HttpExtractionProvider::new(cfg) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("maintenance: conflict detection skipped, provider build failed: {e}");
+            return 0;
+        }
+    };
+    let judge = ExtractionLlmJudge::new(provider);
+    let candidates = db.memory_ids();
+    let params = mentedb::llm_consolidation::ConflictDetectionParams::default();
+    match db
+        .detect_conflicts_with_llm(&candidates, judge, &params, CONFLICT_CHECK_LIMIT)
+        .await
+    {
+        Ok(n) => {
+            if n > 0 {
+                info!(count = n, "maintenance: conflicts detected");
+            }
+            n
+        }
+        Err(e) => {
+            warn!("maintenance: conflict detection failed: {e}");
+            0
+        }
+    }
+}
+
 /// Spawn a background task that runs a sweep every `interval_hours`. A value of
 /// 0 disables the scheduler (run the `maintenance` subcommand from cron instead).
 /// When an LLM is configured, each cycle also canonicalizes recent topics.
@@ -139,6 +178,7 @@ pub fn spawn_scheduler(
                 Err(e) => warn!("maintenance sweep task panicked: {e}"),
             }
             canonicalize_topics(&db, &extraction_config).await;
+            detect_conflicts(&db, &extraction_config).await;
         }
     });
 }

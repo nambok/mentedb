@@ -12,7 +12,10 @@
 //! `Derived` edge, mirroring [`MenteDb::consolidate_cluster`].
 
 use crate::MenteDb;
-use mentedb_cognitive::llm::{ClusterMember, CognitiveLlmService, ConsolidationDecision, LlmJudge};
+use mentedb_cognitive::llm::{
+    ClusterMember, CognitiveLlmService, ConsolidationDecision, ContradictionVerdict, LlmJudge,
+    MemorySummary,
+};
 use mentedb_core::edge::EdgeType;
 use mentedb_core::error::MenteResult;
 use mentedb_core::memory::MemoryType;
@@ -38,6 +41,31 @@ impl Default for ConsolidationParams {
             similarity_floor: 0.80,
             top_k: 6,
             coverage_min: 0.6,
+        }
+    }
+}
+
+/// Tunables for LLM conflict detection (contradictions and supersessions).
+#[derive(Debug, Clone)]
+pub struct ConflictDetectionParams {
+    /// Minimum cosine similarity for two memories to be worth an LLM check.
+    /// Below this they are unlikely to concern the same subject, so judging
+    /// them would only burn tokens.
+    pub check_floor: f32,
+    /// At or above this similarity the pair is a near-identical duplicate and is
+    /// left to `consolidate_memories` (merge/dedup) rather than flagged as a
+    /// conflict. Genuine contradictions live in the band between the two.
+    pub near_identical: f32,
+    /// Nearest neighbors fetched per candidate memory.
+    pub top_k: usize,
+}
+
+impl Default for ConflictDetectionParams {
+    fn default() -> Self {
+        Self {
+            check_floor: 0.72,
+            near_identical: 0.995,
+            top_k: 6,
         }
     }
 }
@@ -312,6 +340,211 @@ impl MenteDb {
             label: None,
         });
     }
+
+    /// Detect genuine contradictions and supersessions between semantically
+    /// similar memories using an LLM judge, recording them as typed edges.
+    ///
+    /// This is the correct path for conflict detection. Cosine similarity cannot
+    /// tell a reworded duplicate from a real contradiction (both land in the
+    /// high-similarity band), so the write-time heuristic no longer guesses; it
+    /// produced ~0% precision. Here, for each candidate the engine gathers
+    /// same-agent, same-scope neighbors in the "similar but not identical" band
+    /// and asks the judge to read both texts:
+    ///   - `Contradicts` becomes a `Contradicts` edge (both kept, flagged).
+    ///   - `Supersedes` invalidates the loser and records a `Supersedes` edge.
+    ///   - `Compatible` (or any judge/parse error) does nothing.
+    ///
+    /// Near-identical duplicates are skipped and left to `consolidate_memories`.
+    ///
+    /// Bounds work to `max_checks` LLM calls, fails soft per pair, and never
+    /// re-judges a pair that already carries a conflict edge. Returns the number
+    /// of conflict edges recorded.
+    pub async fn detect_conflicts_with_llm<J: LlmJudge>(
+        &self,
+        candidate_ids: &[MemoryId],
+        judge: J,
+        params: &ConflictDetectionParams,
+        max_checks: usize,
+    ) -> MenteResult<usize> {
+        if max_checks == 0 {
+            return Ok(0);
+        }
+
+        // Phase 1: gather unordered candidate pairs. Read-only; no lock is held
+        // across the later awaits because get_memory/recall_similar/graph each
+        // take and release their own lock.
+        let mut pairs: Vec<(MemoryNode, MemoryNode)> = Vec::new();
+        let mut seen: std::collections::HashSet<(MemoryId, MemoryId)> =
+            std::collections::HashSet::new();
+        'outer: for &cid in candidate_ids {
+            let Ok(node) = self.get_memory(cid) else {
+                continue;
+            };
+            if node.is_invalidated() || node.embedding.is_empty() {
+                continue;
+            }
+            let scope = scope_key(&node.tags).map(|s| s.to_string());
+            let hits = self
+                .recall_similar(&node.embedding, params.top_k)
+                .unwrap_or_default();
+            for (nid, sim) in hits {
+                if nid == cid || sim < params.check_floor || sim >= params.near_identical {
+                    continue;
+                }
+                let key = if cid < nid { (cid, nid) } else { (nid, cid) };
+                if !seen.insert(key) {
+                    continue;
+                }
+                let Ok(other) = self.get_memory(nid) else {
+                    continue;
+                };
+                // Same agent + same scope + not already a duplicate string, and
+                // not already judged (a conflict edge exists).
+                if other.is_invalidated()
+                    || other.agent_id != node.agent_id
+                    || other.content == node.content
+                    || scope_key(&other.tags).map(|s| s.to_string()) != scope
+                    || self.has_conflict_edge(cid, nid)
+                {
+                    continue;
+                }
+                pairs.push((node.clone(), other));
+                if pairs.len() >= max_checks {
+                    break 'outer;
+                }
+            }
+        }
+        if pairs.is_empty() {
+            return Ok(0);
+        }
+
+        // Phase 2: ask the judge to read each pair (no locks held).
+        let svc = CognitiveLlmService::new(judge);
+        enum Act {
+            Contradict {
+                a: MemoryId,
+                b: MemoryId,
+                reason: String,
+            },
+            Supersede {
+                winner: MemoryId,
+                loser: MemoryId,
+            },
+        }
+        let mut acts: Vec<Act> = Vec::new();
+        for (a, b) in &pairs {
+            match svc
+                .detect_contradiction(&conflict_summary(a), &conflict_summary(b))
+                .await
+            {
+                Ok(ContradictionVerdict::Contradicts { reason }) => acts.push(Act::Contradict {
+                    a: a.id,
+                    b: b.id,
+                    reason,
+                }),
+                Ok(ContradictionVerdict::Supersedes { winner, .. }) => {
+                    let (w, l) = if winner == a.id.to_string() {
+                        (a.id, b.id)
+                    } else {
+                        (b.id, a.id)
+                    };
+                    acts.push(Act::Supersede {
+                        winner: w,
+                        loser: l,
+                    });
+                }
+                _ => {} // Compatible, or judge/parse error: nothing.
+            }
+        }
+
+        // Phase 3: apply edges and invalidations.
+        let now = now_micros();
+        let mut recorded = 0usize;
+        for act in acts {
+            let ok = match act {
+                Act::Contradict { a, b, reason } => self
+                    .relate(MemoryEdge {
+                        source: a,
+                        target: b,
+                        edge_type: EdgeType::Contradicts,
+                        weight: 1.0,
+                        created_at: now,
+                        valid_from: None,
+                        valid_until: None,
+                        label: Some(reason),
+                    })
+                    .is_ok(),
+                Act::Supersede { winner, loser } => {
+                    let _ = self.invalidate_memory(loser, now);
+                    self.relate(MemoryEdge {
+                        source: winner,
+                        target: loser,
+                        edge_type: EdgeType::Supersedes,
+                        weight: 1.0,
+                        created_at: now,
+                        valid_from: None,
+                        valid_until: None,
+                        label: None,
+                    })
+                    .is_ok()
+                }
+            };
+            if ok {
+                recorded += 1;
+            }
+        }
+        Ok(recorded)
+    }
+
+    /// One-time cleanup: remove the conflict edges the old write-time heuristic
+    /// created from bare cosine similarity (which flagged reworded duplicates as
+    /// contradictions at ~0% precision). Removes every `Contradicts` and
+    /// `Supersedes` edge, compacts, and persists a fresh graph snapshot so the
+    /// edge log cannot re-add them on reopen.
+    ///
+    /// Does NOT alter memory validity: near-duplicate copies the heuristic hid
+    /// stay hidden, and `detect_conflicts_with_llm` re-adds only genuine
+    /// conflicts going forward. Returns `(contradicts_removed, supersedes_removed)`.
+    pub fn purge_inferred_conflicts(&self) -> MenteResult<(usize, usize)> {
+        let contradicts = self.graph().remove_edges_of_types(&[EdgeType::Contradicts]);
+        let supersedes = self.graph().remove_edges_of_types(&[EdgeType::Supersedes]);
+        self.graph().compact();
+        self.flush_full()?;
+        Ok((contradicts, supersedes))
+    }
+
+    /// True if a Contradicts or Supersedes edge already links `a` and `b` in
+    /// either direction, so the conflict sweep never re-judges the same pair.
+    fn has_conflict_edge(&self, a: MemoryId, b: MemoryId) -> bool {
+        let gm = self.graph();
+        let csr = gm.graph();
+        let is_conflict = |et: EdgeType| matches!(et, EdgeType::Contradicts | EdgeType::Supersedes);
+        if csr.contains_node(a) {
+            for (t, e) in csr.outgoing(a) {
+                if t == b && is_conflict(e.edge_type) {
+                    return true;
+                }
+            }
+        }
+        if csr.contains_node(b) {
+            for (t, e) in csr.outgoing(b) {
+                if t == a && is_conflict(e.edge_type) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+fn conflict_summary(n: &MemoryNode) -> MemorySummary {
+    MemorySummary {
+        id: n.id,
+        content: n.content.clone(),
+        memory_type: n.memory_type,
+        confidence: n.confidence,
+        created_at: n.created_at,
+    }
 }
 
 #[cfg(test)]
@@ -547,6 +780,100 @@ mod tests {
             .unwrap();
         assert_eq!(count, 0);
         assert!(!db.get_memory(n).unwrap().is_invalidated());
+        drop(db);
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[tokio::test]
+    async fn detect_conflicts_flags_contradiction_via_judge() {
+        let (db, path) = open_db("conflict");
+        let agent = AgentId(uuid::Uuid::new_v4());
+        let a = store(
+            &db,
+            agent,
+            "User prefers tabs for indentation",
+            &["scope:global"],
+        );
+        let b = store(
+            &db,
+            agent,
+            "User prefers spaces for indentation",
+            &["scope:global"],
+        );
+
+        // Loose bands so the hash-embedding neighbor qualifies as a candidate
+        // (hash similarity is not semantic). The judge says they contradict.
+        let params = ConflictDetectionParams {
+            check_floor: 0.0,
+            near_identical: 1.0,
+            top_k: 6,
+        };
+        let judge = MockLlmJudge::new(r#"{"verdict":"contradicts","reason":"tabs vs spaces"}"#);
+        let recorded = db
+            .detect_conflicts_with_llm(&[b], judge, &params, 8)
+            .await
+            .unwrap();
+        assert_eq!(recorded, 1, "one contradiction edge expected");
+
+        let has_edge = {
+            let g = db.graph().read_graph();
+            g.outgoing(b)
+                .iter()
+                .any(|(t, e)| *t == a && e.edge_type == EdgeType::Contradicts)
+        };
+        assert!(has_edge, "expected a Contradicts edge b -> a");
+
+        // Idempotent: the pair already carries a conflict edge, so a second sweep
+        // records nothing.
+        let judge2 = MockLlmJudge::new(r#"{"verdict":"contradicts","reason":"x"}"#);
+        let again = db
+            .detect_conflicts_with_llm(&[b], judge2, &params, 8)
+            .await
+            .unwrap();
+        assert_eq!(again, 0, "existing conflict edge must not be re-judged");
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn purge_removes_conflict_edges_keeps_related() {
+        let (db, path) = open_db("purge");
+        let agent = AgentId(uuid::Uuid::new_v4());
+        let a = store(&db, agent, "fact A", &["scope:global"]);
+        let b = store(&db, agent, "fact B", &["scope:global"]);
+
+        let now = now_micros();
+        let edge = |et: EdgeType| MemoryEdge {
+            source: a,
+            target: b,
+            edge_type: et,
+            weight: 1.0,
+            created_at: now,
+            valid_from: None,
+            valid_until: None,
+            label: None,
+        };
+        db.relate(edge(EdgeType::Contradicts)).unwrap();
+        db.relate(edge(EdgeType::Related)).unwrap();
+        db.relate(edge(EdgeType::Supersedes)).unwrap();
+
+        let (c, s) = db.purge_inferred_conflicts().unwrap();
+        assert_eq!((c, s), (1, 1), "one contradicts + one supersedes removed");
+
+        let g = db.graph().read_graph();
+        let out = g.outgoing(a);
+        assert!(
+            out.iter().all(|(_, e)| e.edge_type != EdgeType::Contradicts
+                && e.edge_type != EdgeType::Supersedes),
+            "conflict edges must be gone"
+        );
+        assert!(
+            out.iter()
+                .any(|(t, e)| *t == b && e.edge_type == EdgeType::Related),
+            "the Related sibling must survive the purge"
+        );
+        drop(g);
         drop(db);
         let _ = std::fs::remove_dir_all(&path);
     }

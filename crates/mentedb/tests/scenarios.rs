@@ -186,25 +186,25 @@ fn test_coding_assistant_workflow() {
         db.store(m_switch.clone()).unwrap();
         memories.push(m_switch.clone());
 
-        // WriteInferenceEngine: detect relationship with existing memories.
-        // The Webpack memory uses an embedding very similar to the Vite memory (seed 3),
-        // so the engine should detect high similarity with different content.
+        // WriteInferenceEngine on a high-similarity, different-content pair
+        // (Webpack vs the Vite memory, seed 3). Under the corrected design the
+        // heuristic never fabricates a contradiction or obsolete-marking from
+        // bare embedding similarity (that produced ~0% precision); such pairs are
+        // deferred to the LLM conflict sweep (detect_conflicts_with_llm). It may
+        // still record a Related edge for moderate similarity. The meaningful
+        // guarantee to assert is that no conflict is fabricated here.
         let engine = WriteInferenceEngine::new();
         let actions = engine.infer_on_write(&m_switch, &memories, &[]);
-        // The new memory about Webpack should trigger at least one action against
-        // the Vite memory (they share high embedding similarity via seed proximity
-        // or textual overlap).
-        let has_flag = actions.iter().any(|a| {
+        let fabricated_conflict = actions.iter().any(|a| {
             matches!(
                 a,
                 mentedb_cognitive::InferredAction::FlagContradiction { .. }
                     | mentedb_cognitive::InferredAction::MarkObsolete { .. }
-                    | mentedb_cognitive::InferredAction::CreateEdge { .. }
             )
         });
         assert!(
-            has_flag,
-            "WriteInferenceEngine should detect relationship with existing memories: got {actions:?}"
+            !fabricated_conflict,
+            "heuristic must not fabricate a conflict from bare similarity: got {actions:?}"
         );
 
         // TrajectoryTracker

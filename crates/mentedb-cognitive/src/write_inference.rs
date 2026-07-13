@@ -126,35 +126,23 @@ impl WriteInferenceEngine {
 
             let sim = cosine_similarity(&new_memory.embedding, &existing.embedding);
 
-            // The bands are mutually exclusive: each pair gets at most one
-            // action. A contradiction is flagged for review, NOT silently
-            // invalidated; an exact duplicate (same content) is superseded.
-            if sim > self.config.contradiction_threshold {
-                if existing.agent_id == new_memory.agent_id
-                    && existing.content != new_memory.content
-                {
-                    actions.push(InferredAction::FlagContradiction {
-                        existing: existing.id,
-                        new: new_memory.id,
-                        reason: format!(
-                            "High embedding similarity ({:.3}) with different content from same agent",
-                            sim
-                        ),
-                    });
-                } else if new_memory.created_at > existing.created_at {
-                    // Same content (or cross-agent duplicate): supersede the old copy.
-                    actions.push(InferredAction::InvalidateMemory {
-                        memory: existing.id,
-                        superseded_by: new_memory.id,
-                        valid_until: new_memory.created_at,
-                    });
-                }
-            } else if sim > self.config.obsolete_threshold
+            // Cosine similarity alone cannot tell a reworded duplicate from a
+            // genuine contradiction: paraphrases ("uses Postgres" / "uses
+            // PostgreSQL") and opposites ("prefers tabs" / "prefers spaces")
+            // both land in the high-similarity band. So the cheap write-time
+            // heuristic makes only the two judgments similarity CAN support:
+            //   1. byte-identical content -> a true duplicate, supersede it
+            //   2. moderate similarity    -> a Related edge
+            // Every semantic decision (merge, paraphrase dedup, real
+            // contradiction, which-fact-wins supersession) is deferred to the
+            // LLM paths (`consolidate_memories`, `detect_conflicts_with_llm`),
+            // which read the actual text. Flagging contradictions from bare
+            // similarity here produced ~0% precision (every reworded re-save
+            // looked like a contradiction), so it was removed.
+            if existing.content == new_memory.content
+                && sim > self.config.obsolete_threshold
                 && new_memory.created_at > existing.created_at
             {
-                // InvalidateMemory both sets valid_until and creates the
-                // Supersedes edge; emitting MarkObsolete as well would
-                // duplicate the edge and invalidate twice.
                 actions.push(InferredAction::InvalidateMemory {
                     memory: existing.id,
                     superseded_by: new_memory.id,
@@ -368,7 +356,13 @@ mod tests {
     }
 
     #[test]
-    fn test_flag_contradiction() {
+    fn test_heuristic_does_not_flag_contradiction_from_similarity() {
+        // Two facts with high embedding similarity but different content look
+        // identical to cosine similarity whether they are paraphrases or
+        // opposites. The cheap heuristic must NOT guess "contradiction" here
+        // (that produced ~0% precision in production); real contradiction
+        // detection is the LLM path's job. High-sim different-content yields no
+        // action from the heuristic.
         let agent = AgentId::new();
         let mut existing =
             make_memory("uses PostgreSQL", vec![1.0, 0.0, 0.0], MemoryType::Semantic);
@@ -381,10 +375,40 @@ mod tests {
         let engine = WriteInferenceEngine::new();
         let actions = engine.infer_on_write(&new_mem, &[existing], &[]);
         assert!(
-            actions
+            !actions
                 .iter()
                 .any(|a| matches!(a, InferredAction::FlagContradiction { .. })),
-            "Expected FlagContradiction, got: {:?}",
+            "Heuristic must not flag contradictions from bare similarity, got: {:?}",
+            actions
+        );
+    }
+
+    #[test]
+    fn test_byte_identical_duplicate_is_superseded() {
+        // The one supersession the heuristic can make safely: identical text.
+        let agent = AgentId::new();
+        let mut existing = make_memory(
+            "Ran command: ls -la",
+            vec![1.0, 0.0, 0.0],
+            MemoryType::Episodic,
+        );
+        existing.agent_id = agent;
+
+        let mut new_mem = make_memory(
+            "Ran command: ls -la",
+            vec![1.0, 0.0, 0.0],
+            MemoryType::Episodic,
+        );
+        new_mem.agent_id = agent;
+        new_mem.created_at = 2000;
+
+        let engine = WriteInferenceEngine::new();
+        let actions = engine.infer_on_write(&new_mem, &[existing], &[]);
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, InferredAction::InvalidateMemory { .. })),
+            "Expected identical duplicate to be superseded, got: {:?}",
             actions
         );
     }

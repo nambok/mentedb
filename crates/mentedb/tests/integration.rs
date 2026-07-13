@@ -424,9 +424,12 @@ fn test_write_inference_creates_related_edge() {
 }
 
 #[test]
-fn test_write_inference_detects_contradiction() {
-    // Two memories with very high similarity (>0.95) but different content
-    // should trigger a contradiction edge.
+fn test_write_inference_defers_conflict_to_llm() {
+    // High similarity + different content is ambiguous to cosine similarity: a
+    // paraphrase and an opposite look identical. The write-time heuristic must
+    // NOT guess a conflict here (that produced ~0% precision); contradiction and
+    // supersession detection is the LLM path's job (detect_conflicts_with_llm,
+    // covered in the llm_consolidation tests). So no conflict edge appears.
     let dir = tempfile::tempdir().unwrap();
     let db = MenteDb::open(dir.path()).unwrap();
     let agent = AgentId::new();
@@ -440,7 +443,6 @@ fn test_write_inference_detects_contradiction() {
     let m1_id = m1.id;
     db.store(m1).unwrap();
 
-    // Near-identical embedding (sim ≈ 0.999) but different content → contradiction.
     let m2 = MemoryNode::new(
         agent,
         MemoryType::Semantic,
@@ -451,27 +453,25 @@ fn test_write_inference_detects_contradiction() {
     db.store(m2).unwrap();
 
     let graph = db.graph().graph();
-    let outgoing = graph.outgoing(m2_id);
-    let incoming = graph.incoming(m1_id);
-
-    // Should have Contradicts edge and/or Supersedes edge
-    let has_contradiction = outgoing
+    let has_conflict = graph
+        .outgoing(m2_id)
         .iter()
-        .any(|(_, e)| e.edge_type == EdgeType::Contradicts || e.edge_type == EdgeType::Supersedes)
-        || incoming.iter().any(|(_, e)| {
-            e.edge_type == EdgeType::Contradicts || e.edge_type == EdgeType::Supersedes
-        });
+        .chain(graph.incoming(m1_id).iter())
+        .any(|(_, e)| e.edge_type == EdgeType::Contradicts || e.edge_type == EdgeType::Supersedes);
     assert!(
-        has_contradiction,
-        "Near-identical embeddings with different content should trigger contradiction/supersede"
+        !has_conflict,
+        "heuristic must not create conflict edges from bare similarity"
     );
 
     db.close().unwrap();
 }
 
 #[test]
-fn test_write_inference_invalidates_superseded_memory() {
-    // When sim > 0.85 and new memory is newer, the old one should be invalidated.
+fn test_byte_identical_store_supersedes_old_copy() {
+    // The one supersession the heuristic makes without an LLM: byte-identical
+    // text is an unambiguous duplicate, so the older copy is invalidated and a
+    // Supersedes edge records it. (Reworded near-duplicates are left to the LLM
+    // consolidation/conflict paths, which read the text.)
     let dir = tempfile::tempdir().unwrap();
     let db = MenteDb::open(dir.path()).unwrap();
     let agent = AgentId::new();
@@ -485,25 +485,22 @@ fn test_write_inference_invalidates_superseded_memory() {
     let m1_id = m1.id;
     db.store(m1).unwrap();
 
-    // Similarity in the supersede band (0.85 < sim <= 0.95) marks m1 obsolete.
-    // Above 0.95 the engine flags a contradiction instead of invalidating.
+    // Identical content and embedding: a true duplicate.
     let m2 = MemoryNode::new(
         agent,
         MemoryType::Semantic,
-        "Project version is 3.0".to_string(),
-        vec![0.90, 0.43589, 0.0, 0.0],
+        "Project version is 2.0".to_string(),
+        vec![1.0, 0.0, 0.0, 0.0],
     );
     let m2_id = m2.id;
     db.store(m2).unwrap();
 
-    // m1 should now have valid_until set (invalidated).
     let m1_after = db.get_memory(m1_id).unwrap();
     assert!(
         m1_after.valid_until.is_some(),
-        "Superseded memory should have valid_until set, got None"
+        "identical duplicate should invalidate the older copy, got None"
     );
 
-    // Exactly one Supersedes edge, not parallel duplicates.
     let g = db.graph().read_graph();
     let supersedes: Vec<_> = g
         .outgoing(m2_id)
@@ -522,9 +519,11 @@ fn test_write_inference_invalidates_superseded_memory() {
 }
 
 #[test]
-fn test_contradiction_does_not_invalidate() {
-    // Above 0.95 similarity with different content: flag the contradiction,
-    // keep both memories valid for review.
+fn test_high_similarity_different_content_left_for_llm() {
+    // "User loves PostgreSQL" vs "User hates PostgreSQL": a real contradiction,
+    // but one the heuristic cannot distinguish from a paraphrase by embedding
+    // alone. It must not silently invalidate the old memory nor guess a conflict
+    // edge; the LLM path resolves this later. So both stay valid and unlinked.
     let dir = tempfile::tempdir().unwrap();
     let db = MenteDb::open(dir.path()).unwrap();
     let agent = AgentId::new();
@@ -550,13 +549,16 @@ fn test_contradiction_does_not_invalidate() {
     let m1_after = db.get_memory(m1_id).unwrap();
     assert!(
         m1_after.valid_until.is_none(),
-        "a flagged contradiction must not silently invalidate the old memory"
+        "the heuristic must not silently invalidate the old memory"
     );
 
     let g = db.graph().read_graph();
-    let edges = g.outgoing(m2_id);
-    assert_eq!(edges.len(), 1, "exactly one edge expected, got {edges:?}");
-    assert_eq!(edges[0].1.edge_type, EdgeType::Contradicts);
+    assert!(
+        g.outgoing(m2_id).iter().all(|(_, e)| {
+            e.edge_type != EdgeType::Contradicts && e.edge_type != EdgeType::Supersedes
+        }),
+        "the heuristic must not create a conflict edge from bare similarity"
+    );
     drop(g);
 
     db.close().unwrap();
@@ -577,27 +579,23 @@ fn test_store_batch_runs_write_inference() {
     let m1_id = m1.id;
     db.store(m1).unwrap();
 
-    // Batch-stored memory in the supersede band must invalidate + link like store().
+    // Batch-stored memory at moderate similarity (Related band) must be linked
+    // the same as store() would, proving inference runs on the batch path.
     let m2 = MemoryNode::new(
         agent,
         MemoryType::Semantic,
-        "User works at Globex now".to_string(),
-        vec![0.90, 0.43589, 0.0, 0.0],
+        "User enjoys the Acme office".to_string(),
+        vec![0.75, 0.66143782, 0.0, 0.0],
     );
     let m2_id = m2.id;
     db.store_batch(vec![m2]).unwrap();
 
-    let m1_after = db.get_memory(m1_id).unwrap();
-    assert!(
-        m1_after.valid_until.is_some(),
-        "store_batch must run write inference (supersede old memory)"
-    );
     let g = db.graph().read_graph();
     assert!(
         g.outgoing(m2_id)
             .iter()
-            .any(|(t, e)| *t == m1_id && e.edge_type == EdgeType::Supersedes),
-        "store_batch must create the Supersedes edge"
+            .any(|(t, e)| *t == m1_id && e.edge_type == EdgeType::Related),
+        "store_batch must run write inference (Related edge for moderate similarity)"
     );
     drop(g);
 

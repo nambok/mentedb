@@ -246,6 +246,71 @@ impl CsrGraph {
             .retain(|e| !(e.source_idx == src_idx && e.target_idx == tgt_idx));
     }
 
+    /// Remove every edge whose type is in `types`, preserving all other edges,
+    /// including edges of a different type between the same pair. Returns the
+    /// number of edges removed.
+    ///
+    /// The removal model suppresses a compressed edge at pair granularity, so
+    /// when a suppressed pair also carries a non-matching edge, that sibling is
+    /// re-added to the delta log to keep it. Callers should `compact()` after to
+    /// materialize the result into both CSR and CSC. This is a one-time cleanup
+    /// primitive (used to purge conflict edges the old write-time heuristic
+    /// created at ~0% precision), not a hot path.
+    pub fn remove_edges_of_types(&mut self, types: &[EdgeType]) -> usize {
+        let matches = |et: EdgeType| types.contains(&et);
+        let mut removed = 0usize;
+
+        // Delta edges: drop matching ones directly.
+        let before = self.delta_edges.len();
+        self.delta_edges.retain(|e| !matches(e.data.edge_type));
+        removed += before - self.delta_edges.len();
+
+        // Compressed edges: suppress matching ones. Suppression is pair level,
+        // so restore any non-matching sibling of a suppressed pair via delta.
+        let mut restore: Vec<DeltaEdge> = Vec::new();
+        let n = self.idx_to_id.len() as u32;
+        for src_idx in 0..n {
+            let row: Vec<(u32, StoredEdge)> = {
+                let neighbors = self.csr.neighbors(src_idx);
+                let edges = self.csr.edge_data_for(src_idx);
+                let mut v = Vec::new();
+                for (i, &t) in neighbors.iter().enumerate() {
+                    if !self.is_removed(src_idx, t) {
+                        v.push((t, edges[i].clone()));
+                    }
+                }
+                v
+            };
+            let matched_pairs: std::collections::HashSet<u32> = row
+                .iter()
+                .filter(|(_, e)| matches(e.edge_type))
+                .map(|(t, _)| *t)
+                .collect();
+            if matched_pairs.is_empty() {
+                continue;
+            }
+            for &tgt_idx in &matched_pairs {
+                self.removed_edges.push((src_idx, tgt_idx));
+            }
+            for (tgt_idx, e) in row {
+                if !matched_pairs.contains(&tgt_idx) {
+                    continue;
+                }
+                if matches(e.edge_type) {
+                    removed += 1;
+                } else {
+                    restore.push(DeltaEdge {
+                        source_idx: src_idx,
+                        target_idx: tgt_idx,
+                        data: e,
+                    });
+                }
+            }
+        }
+        self.delta_edges.extend(restore);
+        removed
+    }
+
     /// Get all outgoing edges from a node (CSR + delta, minus removed).
     pub fn outgoing(&self, id: MemoryId) -> Vec<(MemoryId, StoredEdge)> {
         let Some(&idx) = self.id_to_idx.get(&id) else {
@@ -536,6 +601,45 @@ mod tests {
 
         g.remove_edge(a, b);
         assert_eq!(g.outgoing(a).len(), 0);
+    }
+
+    #[test]
+    fn test_remove_edges_of_types_preserves_siblings() {
+        let mut g = CsrGraph::new();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        let c = MemoryId::new();
+
+        // a->b carries BOTH a Supersedes and a Related edge (the collateral
+        // case: pair-level suppression must not drop the Related sibling).
+        g.add_edge(&make_edge(a, b, EdgeType::Supersedes));
+        g.add_edge(&make_edge(a, b, EdgeType::Related));
+        // a->c is a lone Contradicts edge.
+        g.add_edge(&make_edge(a, c, EdgeType::Contradicts));
+        // b->c is unrelated and must survive.
+        g.add_edge(&make_edge(b, c, EdgeType::Caused));
+
+        // Compact first so the targets live in compressed storage, exercising
+        // the suppress-pair + restore-sibling path rather than delta retain.
+        g.compact();
+
+        let removed = g.remove_edges_of_types(&[EdgeType::Contradicts, EdgeType::Supersedes]);
+        g.compact();
+        assert_eq!(removed, 2, "one Supersedes + one Contradicts");
+
+        // a->b: Supersedes gone, Related preserved.
+        let ab: Vec<_> = g.outgoing(a).into_iter().filter(|(t, _)| *t == b).collect();
+        assert_eq!(ab.len(), 1);
+        assert_eq!(ab[0].1.edge_type, EdgeType::Related);
+
+        // a->c contradiction gone entirely.
+        assert!(g.outgoing(a).into_iter().all(|(t, _)| t != c));
+
+        // Unrelated edge intact; incoming reflects the cleanup (only b->c left).
+        assert_eq!(g.outgoing(b).len(), 1);
+        let inc_c = g.incoming(c);
+        assert_eq!(inc_c.len(), 1);
+        assert_eq!(inc_c[0].0, b);
     }
 
     #[test]
