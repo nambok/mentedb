@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1](https://github.com/nambok/mentedb/compare/mentedb-v0.12.0...mentedb-v0.12.1) - 2026-07-13
+
+### Fixed
+
+- bump user profile created_at on rebuild so profile_updated_at reflects the last regeneration, not first creation ([#210](https://github.com/nambok/mentedb/pull/210))
+
 ## [0.12.0](https://github.com/nambok/mentedb/compare/mentedb-v0.11.14...mentedb-v0.12.0) - 2026-07-13
 
 ### Fixed
