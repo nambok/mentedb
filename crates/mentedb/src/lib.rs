@@ -1052,6 +1052,28 @@ impl MenteDb {
                 };
                 self.graph.add_relationship(&edge)?;
             }
+            InferredAction::DeduplicateExact { duplicate, keeper } => {
+                debug!("Deduplicating exact copy {duplicate} into {keeper}");
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u64;
+                self.invalidate_memory(duplicate, now)?;
+                // Derived edge (dedup lineage), NOT Supersedes: an exact copy is
+                // deduplicated, not a meaningful supersession, so it must not
+                // surface in the contradiction/supersession view.
+                let edge = MemoryEdge {
+                    source: keeper,
+                    target: duplicate,
+                    edge_type: EdgeType::Derived,
+                    weight: 1.0,
+                    created_at: now,
+                    valid_from: None,
+                    valid_until: None,
+                    label: None,
+                };
+                self.graph.add_relationship(&edge)?;
+            }
             InferredAction::MarkObsolete {
                 memory,
                 superseded_by,
