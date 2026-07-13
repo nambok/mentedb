@@ -2567,9 +2567,16 @@ impl MenteDb {
             if let Ok(mem) = self.storage.load_memory(*pid)
                 && mem.tags.iter().any(|t| t == "user_profile")
             {
-                // Update in place
+                // Update in place, bumping created_at so it reflects when the
+                // profile was last rebuilt. `profile_updated_at` reads created_at;
+                // without this the "updated" time stayed frozen at first creation
+                // (a regenerated profile still showed "updated N days ago").
                 let mut updated = mem.clone();
                 updated.content = profile.to_string();
+                updated.created_at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_micros() as u64;
                 if let Some(ref embedder) = self.embedder {
                     updated.embedding = embedder
                         .embed(profile)
