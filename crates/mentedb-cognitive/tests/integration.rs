@@ -35,7 +35,13 @@ fn test_stream_cognition_contradiction() {
 }
 
 #[test]
-fn test_write_inference_contradiction() {
+fn test_write_inference_defers_contradiction_to_llm() {
+    // "uses PostgreSQL" and "uses MySQL" look identical to cosine similarity
+    // whether they are opposites or paraphrases. The cheap write-time heuristic
+    // must NOT guess "contradiction" from bare similarity (that produced ~0%
+    // precision in production); real contradiction detection is the LLM path's
+    // job (`detect_conflicts_with_llm`). High-similarity, different-content
+    // memories yield no FlagContradiction from the heuristic.
     let agent = AgentId::new();
 
     let mut existing = make_memory(
@@ -58,10 +64,10 @@ fn test_write_inference_contradiction() {
     let actions = engine.infer_on_write(&new_mem, &[existing], &[]);
 
     assert!(
-        actions
+        !actions
             .iter()
             .any(|a| matches!(a, InferredAction::FlagContradiction { .. })),
-        "Expected FlagContradiction action. Got: {:?}",
+        "Heuristic must not flag contradictions from bare similarity. Got: {:?}",
         actions
     );
 }
