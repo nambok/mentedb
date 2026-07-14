@@ -36,9 +36,9 @@ This page is about measured cost and efficiency on identical inputs, nothing mor
 
 ### The honest caveats
 
-- **N is small** (5 questions, one run, ~$11 of Bedrock at the $17 cap). The
-  cost/speed gap is structural and stable per turn; the accuracy read is
-  directional. Scale it up if you want tighter accuracy numbers.
+- **N is small** (5 questions, one run). The cost/speed gap is structural and
+  stable per turn; the accuracy read is directional. Scale it up if you want
+  tighter accuracy numbers.
 - **mem0.add() also extracts** facts from raw text; MenteDB's production
   `process_turn` extracts too. The isolated cost difference is the
   **reconciliation** approach (mem0 re-reads similar memories via LLM on every
