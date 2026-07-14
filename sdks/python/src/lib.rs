@@ -16,6 +16,7 @@ use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
 use mentedb_core::types::{AgentId, Embedding, MemoryId, Timestamp};
 use mentedb_core::{MemoryEdge, MemoryNode};
+use mentedb_embedding::bedrock_provider::{BedrockEmbeddingConfig, BedrockEmbeddingProvider};
 use mentedb_embedding::candle_provider::CandleEmbeddingProvider;
 use mentedb_embedding::hash_provider::HashEmbeddingProvider;
 use mentedb_embedding::http_provider::HttpEmbeddingConfig;
@@ -154,6 +155,23 @@ impl MenteDB {
                 let config = HttpEmbeddingConfig::voyage(key, model);
                 Some(Box::new(HttpEmbeddingProvider::new(config)))
             }
+            Some("bedrock") => {
+                // Native AWS Bedrock (Amazon Titan) embeddings. Region comes from
+                // AWS_REGION (default us-east-1); credentials from the standard AWS
+                // environment variables (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY /
+                // AWS_SESSION_TOKEN). embedding_model selects the Titan version.
+                let region = std::env::var("AWS_REGION")
+                    .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+                    .unwrap_or_else(|_| "us-east-1".to_string());
+                let config = match embedding_model {
+                    Some(m) if m.contains("v1") => BedrockEmbeddingConfig::titan_v1(region),
+                    _ => BedrockEmbeddingConfig::titan_v2(region),
+                }
+                .map_err(|e| PyRuntimeError::new_err(format!("bedrock config: {e}")))?;
+                let provider = BedrockEmbeddingProvider::new(config)
+                    .map_err(|e| PyRuntimeError::new_err(format!("bedrock init: {e}")))?;
+                Some(Box::new(provider))
+            }
             Some("candle") | Some("local") => {
                 let cache_dir = std::path::PathBuf::from(format!("{data_dir}/.candle-cache"));
                 match CandleEmbeddingProvider::with_cache_dir(cache_dir) {
@@ -166,7 +184,7 @@ impl MenteDB {
             Some("hash") | None => Some(Box::new(HashEmbeddingProvider::new(384))),
             Some(other) => {
                 return Err(PyRuntimeError::new_err(format!(
-                    "unknown embedding provider: {other}. Use 'openai', 'candle', 'cohere', 'voyage', or 'hash'"
+                    "unknown embedding provider: {other}. Use 'openai', 'candle', 'bedrock', 'cohere', 'voyage', or 'hash'"
                 )));
             }
         };
