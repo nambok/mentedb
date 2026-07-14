@@ -205,6 +205,7 @@ The result: a clean, curated memory that actually helps the AI perform better.
 - **Type Safe IDs** MemoryId, AgentId, SpaceId newtypes prevent accidental mixing
 - **Binary Embeddings** Base64 encoded storage, 65% smaller than JSON arrays
 - **Local Candle Embeddings** Zero config semantic search using all-MiniLM-L6-v2 (384 dims), no API key required (Docker image includes it; source builds need `--features local-embeddings`)
+- **AWS Bedrock Embeddings** Native Amazon Titan embeddings via a lightweight SigV4 signer (no async AWS SDK); enable `mentedb-embedding`'s `bedrock` feature, credentials from the standard AWS environment variables. Also available from the Python SDK as `embedding_provider="bedrock"`
 - **gRPC + REST + MCP** Three integration paths for any use case
 
 ### Entity-Centric Memory
