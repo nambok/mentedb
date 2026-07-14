@@ -131,11 +131,18 @@ class MenteDB:
         target: str,
         edge_type: str | EdgeType = EdgeType.RELATED,
         weight: float = 1.0,
+        valid_from: int | None = None,
+        valid_until: int | None = None,
     ):
-        """Add a relationship between two memories."""
+        """Add a relationship between two memories.
+
+        valid_from / valid_until are optional bi-temporal bounds (microsecond
+        timestamps) for the wall-clock window in which the relationship holds.
+        Leave them as None for an edge that is valid for all time.
+        """
         if isinstance(edge_type, EdgeType):
             edge_type = edge_type.value
-        self._db.relate(source, target, edge_type, weight)
+        self._db.relate(source, target, edge_type, weight, valid_from, valid_until)
 
     def forget(self, memory_id: str):
         """Remove a memory by its UUID."""
