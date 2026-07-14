@@ -15,9 +15,7 @@ yourself and open an issue.
   mem0 2/5. That is a one-question difference on five questions, i.e. within
   noise. We do **not** claim an accuracy advantage.
 
-We also concede where mem0 leads: distribution, ecosystem breadth, framework
-integrations, and adoption. This page is about measured cost/efficiency on
-identical inputs, nothing more.
+This page is about measured cost and efficiency on identical inputs, nothing more.
 
 ## Fairness controls
 
