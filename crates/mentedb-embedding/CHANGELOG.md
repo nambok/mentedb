@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.12.1...mentedb-embedding-v0.12.2) - 2026-07-14
+
+### Added
+
+- *(embedding)* native AWS Bedrock (Titan) embedding provider (feature-gated) ([#213](https://github.com/nambok/mentedb/pull/213))
+
 ## [0.11.13](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.11.12...mentedb-embedding-v0.11.13) - 2026-07-12
 
 ### Other
