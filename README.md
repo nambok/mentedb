@@ -349,11 +349,18 @@ graph TD
         CONTRA_EX["Contradiction Check"]
     end
 
+    subgraph Embeddings["Embedding Providers"]
+        EMB["Candle local / OpenAI / Cohere / AWS Bedrock Titan / hash"]
+    end
+
     subgraph Cognitive["Cognitive Engine"]
         CTX["Context Assembly<br/>U curve, delta aware"]
+        INJ["Injection / Attention Policy<br/>outcome learning"]
         STREAM["Stream Cognition<br/>live push corrections"]
         PAIN["Pain Signals<br/>mistake aversion"]
         PHANTOM["Phantom Memories<br/>knowledge gap tracking"]
+        TRAJ["Trajectory Tracking"]
+        SPEC["Speculative Pre-assembly"]
     end
 
     subgraph Intelligence["Inference Layer"]
@@ -365,13 +372,19 @@ graph TD
     subgraph Index["Index Layer"]
         HNSW["HNSW Vector Index"]
         ROAR["Roaring Bitmap Tags"]
-        TEMP["Temporal Index"]
+        TEMP["Temporal / Bi-temporal Index"]
     end
 
     subgraph Graph["Knowledge Graph"]
         CSR["CSR/CSC Storage"]
         TRAV["BFS / DFS Traversal"]
         ENTG["Entity Graph<br/>Derived edges, resolution"]
+    end
+
+    subgraph Lifecycle["Consolidation"]
+        DECAY["Decay / Salience"]
+        ARCH["Archival / Compression"]
+        FORGET["GDPR Forget"]
     end
 
     subgraph Storage["Storage Engine"]
@@ -381,10 +394,12 @@ graph TD
     end
 
     LLM --> ENT --> QF --> DEDUP --> CONTRA_EX --> WI
+    EMB --> HNSW
 
     MQL --> QE
     GRPC --> QE
     QE --> CTX
+    CTX --> INJ
     QE --> Index
     QE --> Graph
 
@@ -395,6 +410,7 @@ graph TD
 
     Index --> Storage
     Graph --> Storage
+    Lifecycle --> Storage
 
     BUF --> PAGE
     WAL --> PAGE
