@@ -15,7 +15,7 @@
 //! use mentedb_embedding::bedrock_provider::{BedrockEmbeddingConfig, BedrockEmbeddingProvider};
 //! use mentedb_embedding::provider::EmbeddingProvider;
 //!
-//! let cfg = BedrockEmbeddingConfig::titan_v2("us-east-1"); // reads creds from env
+//! let cfg = BedrockEmbeddingConfig::titan_v2("us-east-1")?; // reads creds from env
 //! let provider = BedrockEmbeddingProvider::new(cfg)?;
 //! let vector = provider.embed("the sky is blue")?;
 //! # Ok::<(), mentedb_core::error::MenteError>(())
