@@ -23,11 +23,17 @@ candle-nn = { version = "0.11", optional = true }
 candle-transformers = { version = "0.11", optional = true }
 tokenizers = { version = "0.21", optional = true, default-features = false, features = ["onig"] }
 hf-hub = { version = "0.4", optional = true }
+sha2 = { version = "0.10", optional = true }
+hmac = { version = "0.12", optional = true }
+chrono = { version = "0.4", optional = true, default-features = false, features = ["clock"] }
 
 [features]
 default = []
 http = ["ureq"]
 local = ["candle-core", "candle-nn", "candle-transformers", "tokenizers", "hf-hub"]
+# Native AWS Bedrock (Amazon Titan) embeddings via a lightweight sync ureq call
+# plus a hand-rolled SigV4 signer (no heavy async AWS SDK).
+bedrock = ["ureq", "sha2", "hmac", "chrono"]
 
 [dev-dependencies]
 uuid = { workspace = true }

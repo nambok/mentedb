@@ -23,6 +23,8 @@ jobs:
       # plain workspace check misses breaks in it, which then only surface in
       # the Docker/wheel build. Check it explicitly.
       - run: cargo check -p mentedb-embedding --features local
+      # Same for the optional native Bedrock (Titan) embedding provider.
+      - run: cargo test -p mentedb-embedding --features bedrock
 
   test:
     name: Test

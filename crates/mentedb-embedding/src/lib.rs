@@ -3,6 +3,9 @@
 //! Provides a trait-based architecture for embedding providers with built-in
 //! caching and a hash-based provider for testing.
 
+/// Native AWS Bedrock (Amazon Titan) embedding provider (sync ureq + SigV4).
+#[cfg(feature = "bedrock")]
+pub mod bedrock_provider;
 /// LRU embedding cache with hit/miss tracking.
 pub mod cache;
 /// Local embedding provider using Candle (pure Rust ML framework).
@@ -17,6 +20,8 @@ pub mod manager;
 /// Trait definitions for sync and async embedding providers.
 pub mod provider;
 
+#[cfg(feature = "bedrock")]
+pub use bedrock_provider::{AwsCredentials, BedrockEmbeddingConfig, BedrockEmbeddingProvider};
 pub use cache::{CacheStats, CachedEmbedding, EmbeddingCache};
 #[cfg(feature = "local")]
 pub use candle_provider::CandleEmbeddingProvider;
