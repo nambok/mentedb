@@ -255,16 +255,21 @@ impl MenteDb {
             &input.session_id,
         )?;
 
+        // Scope internal recalls to the turn's agent so cross-user inference,
+        // fact linking, and proactive recall cannot surface or link another
+        // user's private memories. None (no agent) preserves global behavior.
+        let scope_agent = input.agent_id.map(AgentId);
+
         // §4: Write inference on the episodic memory
         let inference_actions = if let Some(eid) = episodic_id {
-            self.run_explicit_write_inference(eid)?
+            self.run_explicit_write_inference(eid, scope_agent)?
         } else {
             0
         };
 
         // §5: Extract facts + link edges
         let (facts_extracted, edges_created) = if let Some(eid) = episodic_id {
-            self.extract_and_link_facts(eid)?
+            self.extract_and_link_facts(eid, scope_agent)?
         } else {
             (0, 0)
         };
@@ -274,7 +279,7 @@ impl MenteDb {
         let detected_actions = detect_actions(&combined_text);
 
         // §7: Proactive recall
-        let proactive_recalls = self.proactive_recall(&detected_actions)?;
+        let proactive_recalls = self.proactive_recall(&detected_actions, scope_agent)?;
 
         // §8: Auto-detect corrections (tags the episodic turn, never mints a node)
         let correction_id = self.auto_detect_correction(&input.user_message, episodic_id)?;
@@ -486,10 +491,25 @@ impl MenteDb {
         Ok((vec![id], Some(id)))
     }
 
-    fn run_explicit_write_inference(&self, id: MemoryId) -> crate::MenteResult<u32> {
+    fn run_explicit_write_inference(
+        &self,
+        id: MemoryId,
+        agent: Option<AgentId>,
+    ) -> crate::MenteResult<u32> {
         let target = self.get_memory(id)?;
+        // Scope to the turn's agent: contradiction and dedup edges must not form
+        // across users. Nil owned (shared/global) memories remain in scope.
         let similar_ids = self
-            .recall_similar(&target.embedding, 50)
+            .recall_hybrid_scoped_at_mode(
+                &target.embedding,
+                None,
+                50,
+                now_us(),
+                None,
+                false,
+                None,
+                agent,
+            )
             .unwrap_or_default();
         let existing: Vec<MemoryNode> = similar_ids
             .iter()
@@ -630,7 +650,11 @@ impl MenteDb {
         Ok(applied)
     }
 
-    fn extract_and_link_facts(&self, id: MemoryId) -> crate::MenteResult<(usize, u32)> {
+    fn extract_and_link_facts(
+        &self,
+        id: MemoryId,
+        agent: Option<AgentId>,
+    ) -> crate::MenteResult<(usize, u32)> {
         let target = self.get_memory(id)?;
         let extractor = FactExtractor::new();
         let facts = extractor.extract_facts(&target);
@@ -638,8 +662,19 @@ impl MenteDb {
             return Ok((0, 0));
         }
 
+        // Scope to the turn's agent: "related" edges must not link one user's
+        // memory to another's. Nil owned (shared/global) memories remain in scope.
         let similar_ids = self
-            .recall_similar(&target.embedding, 50)
+            .recall_hybrid_scoped_at_mode(
+                &target.embedding,
+                None,
+                50,
+                now_us(),
+                None,
+                false,
+                None,
+                agent,
+            )
             .unwrap_or_default();
         let nearby: Vec<MemoryNode> = similar_ids
             .iter()
@@ -680,6 +715,7 @@ impl MenteDb {
     fn proactive_recall(
         &self,
         actions: &[DetectedAction],
+        agent: Option<AgentId>,
     ) -> crate::MenteResult<Vec<ProactiveRecall>> {
         let mut recalls = Vec::new();
         for action in actions {
@@ -687,7 +723,11 @@ impl MenteDb {
             let Some(emb) = self.embed_text(&search_query)? else {
                 continue;
             };
-            let results = self.recall_similar(&emb, 3).unwrap_or_default();
+            // Scope to the turn's agent so proactive recall never surfaces
+            // another user's private memories (nil owned/global still pass).
+            let results = self
+                .recall_hybrid_scoped_at_mode(&emb, None, 3, now_us(), None, false, None, agent)
+                .unwrap_or_default();
             for (mid, score) in &results {
                 if let Ok(mem) = self.get_memory(*mid) {
                     recalls.push(ProactiveRecall {
