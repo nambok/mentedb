@@ -24,7 +24,7 @@ pub mod pb {
     tonic::include_proto!("mentedb");
 }
 
-use mentedb_core::types::{AgentId, MemoryId, SpaceId};
+use mentedb_core::types::{AgentId, MemoryId, SpaceId, UserId};
 use pb::cognition_service_server::CognitionService;
 use pb::memory_service_server::MemoryService;
 
@@ -227,6 +227,7 @@ impl MemoryService for MemoryServiceImpl {
         let node = MemoryNode {
             id,
             agent_id,
+            user_id: UserId::nil(),
             memory_type,
             embedding: req.embedding,
             content: req.content,

@@ -3,7 +3,16 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::*;
-use crate::types::{AgentId, MemoryId, SpaceId};
+use crate::types::{AgentId, MemoryId, SpaceId, UserId};
+
+/// Default `user_id` for memories deserialized from data written before the
+/// `user_id` axis existed: the nil (shared/global) user. This must be an
+/// explicit function, not `#[serde(default)]`, because `UserId::default()`
+/// mints a fresh random id, which would make old memories look owned by a
+/// random user instead of shared.
+fn default_user_id() -> UserId {
+    UserId::nil()
+}
 
 /// The type classification of a memory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -32,6 +41,13 @@ pub struct MemoryNode {
     pub id: MemoryId,
     /// The agent that owns this memory.
     pub agent_id: AgentId,
+    /// The end user that owns this memory (orthogonal to `agent_id`).
+    ///
+    /// A memory belongs to both a user and an agent; a scoped query sees it
+    /// only when it is visible on both axes. Defaults to the nil (shared)
+    /// user, both for `new()` and for data written before this field existed.
+    #[serde(default = "default_user_id")]
+    pub user_id: UserId,
     /// Memory type classification.
     pub memory_type: MemoryType,
     /// Embedding vector for semantic similarity search.
@@ -80,6 +96,7 @@ impl MemoryNode {
         Self {
             id: MemoryId::new(),
             agent_id,
+            user_id: UserId::nil(),
             memory_type,
             embedding,
             content,
@@ -94,6 +111,15 @@ impl MemoryNode {
             valid_from: None,
             valid_until: None,
         }
+    }
+
+    /// Set the owning end user, returning the node (builder style).
+    ///
+    /// Parallels the `agent_id` constructor argument on the orthogonal user
+    /// axis. Leave unset (nil) for shared/global memories.
+    pub fn with_user_id(mut self, user_id: UserId) -> Self {
+        self.user_id = user_id;
+        self
     }
 }
 
@@ -121,7 +147,7 @@ impl MemoryNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::AgentId;
+    use crate::types::{AgentId, UserId};
 
     #[test]
     fn new_memory_has_no_temporal_bounds() {
@@ -159,6 +185,27 @@ mod tests {
         assert_eq!(node.valid_from, None);
         assert_eq!(node.valid_until, None);
         assert!(node.is_valid_at(5000));
+        // Data written before the user_id axis existed must deserialize as the
+        // nil (shared) user, never a random one. A random default would make
+        // legacy memories look privately owned and vanish from every scoped
+        // query.
+        assert!(
+            node.user_id.is_nil(),
+            "legacy memory (no user_id) must default to the nil user"
+        );
+    }
+
+    #[test]
+    fn with_user_id_sets_owner() {
+        let user = UserId::new();
+        let node = MemoryNode::new(
+            AgentId::new(),
+            MemoryType::Semantic,
+            "test".to_string(),
+            vec![1.0],
+        )
+        .with_user_id(user);
+        assert_eq!(node.user_id, user);
     }
 }
 

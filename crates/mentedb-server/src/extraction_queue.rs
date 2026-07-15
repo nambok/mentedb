@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use mentedb_core::types::{AgentId, SpaceId};
+use mentedb_core::types::{AgentId, SpaceId, UserId};
 use mentedb_extraction::ExtractionConfig;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -87,6 +87,7 @@ async fn process_extraction(req: ExtractionRequest) -> Result<(), String> {
         let node = MemoryNode {
             id,
             agent_id: req.agent_id,
+            user_id: UserId::nil(),
             memory_type,
             embedding: vec![],
             content: memory.content.clone(),

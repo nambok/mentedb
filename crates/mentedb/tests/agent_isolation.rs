@@ -78,6 +78,7 @@ fn scoped_recall_isolates_agents() {
             false,
             None,
             Some(coder),
+            None,
         )
         .unwrap();
     let ids: Vec<MemoryId> = hits.iter().map(|(id, _)| *id).collect();
@@ -93,7 +94,17 @@ fn scoped_recall_isolates_agents() {
 
     // No scope: global visibility, everything is recallable.
     let hits = db
-        .recall_hybrid_scoped_at_mode(&query, Some("rust"), 10, now_us(), None, false, None, None)
+        .recall_hybrid_scoped_at_mode(
+            &query,
+            Some("rust"),
+            10,
+            now_us(),
+            None,
+            false,
+            None,
+            None,
+            None,
+        )
         .unwrap();
     let ids: Vec<MemoryId> = hits.iter().map(|(id, _)| *id).collect();
     assert!(ids.contains(&coder_mem));
@@ -115,6 +126,7 @@ fn process_turn_context_is_agent_scoped() {
         turn_id: 0,
         project_context: None,
         agent_id: Some(coder),
+        user_id: None,
         session_id: None,
     };
     db.process_turn(&input, &mut delta).unwrap();
@@ -126,6 +138,7 @@ fn process_turn_context_is_agent_scoped() {
         turn_id: 1,
         project_context: None,
         agent_id: Some(researcher),
+        user_id: None,
         session_id: None,
     };
     let result = db.process_turn(&input, &mut delta).unwrap();
@@ -144,6 +157,7 @@ fn process_turn_context_is_agent_scoped() {
         turn_id: 2,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
     let result = db.process_turn(&input, &mut delta).unwrap();
@@ -192,6 +206,7 @@ fn injection_respects_agent_scope() {
             max_items: 6,
             max_episodic: 2,
             agent_id: Some(coder),
+            user_id: None,
         })
         .unwrap();
 
@@ -229,6 +244,7 @@ fn ghost_memories_never_inject() {
             max_items: 6,
             max_episodic: 2,
             agent_id: None,
+            user_id: None,
         })
         .unwrap();
     let contents: Vec<&str> = selected.iter().map(|c| c.node.content.as_str()).collect();

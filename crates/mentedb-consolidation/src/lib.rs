@@ -36,7 +36,7 @@ pub use forget::{ForgetEngine, ForgetRequest, ForgetResult};
 pub(crate) mod test_helpers {
     use mentedb_core::MemoryNode;
     use mentedb_core::memory::MemoryType;
-    use mentedb_core::types::{AgentId, Embedding, MemoryId, SpaceId};
+    use mentedb_core::types::{AgentId, Embedding, MemoryId, SpaceId, UserId};
     use std::collections::HashMap;
 
     /// Create a simple test memory with given content and embedding.
@@ -44,6 +44,7 @@ pub(crate) mod test_helpers {
         MemoryNode {
             id: MemoryId::new(),
             agent_id: AgentId::new(),
+            user_id: UserId::nil(),
             memory_type: MemoryType::Episodic,
             embedding,
             content: content.to_string(),

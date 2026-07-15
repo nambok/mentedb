@@ -19,7 +19,7 @@ use mentedb_cognitive::llm::{
 use mentedb_core::edge::EdgeType;
 use mentedb_core::error::MenteResult;
 use mentedb_core::memory::MemoryType;
-use mentedb_core::types::{AgentId, MemoryId};
+use mentedb_core::types::{AgentId, MemoryId, UserId};
 use mentedb_core::{MemoryEdge, MemoryNode};
 
 /// Tunables for LLM consolidation. Defaults mirror the contradiction sweep's
@@ -193,6 +193,7 @@ impl MenteDb {
                     continue;
                 };
                 if cand.agent_id != new_node.agent_id
+                    || cand.user_id != new_node.user_id
                     || cand.is_invalidated()
                     || scope_key(&cand.tags).map(|s| s.to_string()) != new_scope
                 {
@@ -218,7 +219,13 @@ impl MenteDb {
             let Ok(decision) = svc.consolidate(&members).await else {
                 continue; // fail soft on judge/parse error
             };
-            if self.apply_consolidation(&decision, &cluster, new_node.agent_id, params) {
+            if self.apply_consolidation(
+                &decision,
+                &cluster,
+                new_node.agent_id,
+                new_node.user_id,
+                params,
+            ) {
                 consolidated += 1;
             }
         }
@@ -233,6 +240,7 @@ impl MenteDb {
         decision: &ConsolidationDecision,
         cluster: &[MemoryNode],
         agent: AgentId,
+        user: UserId,
         params: &ConsolidationParams,
     ) -> bool {
         let in_cluster = |id: &str| -> Option<&MemoryNode> {
@@ -254,12 +262,13 @@ impl MenteDb {
                 if merged_content.is_empty() {
                     return false;
                 }
-                // Resolve + revalidate sources: in the cluster, same agent, still
-                // valid. Closes the window if a concurrent write invalidated one.
+                // Resolve + revalidate sources: in the cluster, same agent AND
+                // same user, still valid. Closes the window if a concurrent
+                // write invalidated one.
                 let sources: Vec<&MemoryNode> = remove_ids
                     .iter()
                     .filter_map(|id| in_cluster(id))
-                    .filter(|n| n.agent_id == agent && !n.is_invalidated())
+                    .filter(|n| n.agent_id == agent && n.user_id == user && !n.is_invalidated())
                     .collect();
                 if sources.len() < 2 {
                     return false;
@@ -280,7 +289,8 @@ impl MenteDb {
                     mtype_from(merged_type),
                     merged_content.to_string(),
                     embedding,
-                );
+                )
+                .with_user_id(user);
                 merged.tags = merged_tags(&sources);
                 let merged_id = merged.id;
                 if self.store(merged).is_err() {
@@ -300,13 +310,18 @@ impl MenteDb {
                 let Some(keep) = in_cluster(keep_id) else {
                     return false;
                 };
-                if keep.agent_id != agent || keep.is_invalidated() {
+                if keep.agent_id != agent || keep.user_id != user || keep.is_invalidated() {
                     return false;
                 }
                 let removes: Vec<&MemoryNode> = remove_ids
                     .iter()
                     .filter_map(|id| in_cluster(id))
-                    .filter(|n| n.agent_id == agent && !n.is_invalidated() && n.id != keep.id)
+                    .filter(|n| {
+                        n.agent_id == agent
+                            && n.user_id == user
+                            && !n.is_invalidated()
+                            && n.id != keep.id
+                    })
                     .collect();
                 if removes.is_empty() {
                     return false;
@@ -398,10 +413,11 @@ impl MenteDb {
                 let Ok(other) = self.get_memory(nid) else {
                     continue;
                 };
-                // Same agent + same scope + not already a duplicate string, and
-                // not already judged (a conflict edge exists).
+                // Same agent + same user + same scope + not already a duplicate
+                // string, and not already judged (a conflict edge exists).
                 if other.is_invalidated()
                     || other.agent_id != node.agent_id
+                    || other.user_id != node.user_id
                     || other.content == node.content
                     || scope_key(&other.tags).map(|s| s.to_string()) != scope
                     || self.has_conflict_edge(cid, nid)
@@ -617,6 +633,7 @@ mod tests {
             &decision,
             &cluster,
             agent,
+            UserId::nil(),
             &ConsolidationParams::default()
         ));
 
@@ -657,6 +674,7 @@ mod tests {
             &decision,
             &cluster,
             agent,
+            UserId::nil(),
             &ConsolidationParams::default()
         ));
         assert!(!db.get_memory(keep).unwrap().is_invalidated());
@@ -679,6 +697,7 @@ mod tests {
             &decision,
             &cluster,
             agent,
+            UserId::nil(),
             &ConsolidationParams::default()
         ));
         assert!(!db.get_memory(a).unwrap().is_invalidated());
@@ -715,6 +734,7 @@ mod tests {
             &decision,
             &cluster,
             agent,
+            UserId::nil(),
             &ConsolidationParams::default()
         ));
         assert!(!db.get_memory(e).unwrap().is_invalidated());

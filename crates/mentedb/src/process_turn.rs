@@ -25,7 +25,7 @@ use mentedb_consolidation::FactExtractor;
 use mentedb_context::{DeltaTracker, ScoredMemory};
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
-use mentedb_core::types::{AgentId, MemoryId, Timestamp};
+use mentedb_core::types::{AgentId, MemoryId, Timestamp, UserId};
 use mentedb_core::{MemoryEdge, MemoryNode};
 use tracing::{debug, warn};
 use uuid::Uuid;
@@ -45,6 +45,11 @@ pub struct ProcessTurnInput {
     pub project_context: Option<String>,
     /// Agent UUID (defaults to nil if not provided).
     pub agent_id: Option<Uuid>,
+    /// End-user UUID, orthogonal to `agent_id` (defaults to nil if not
+    /// provided). The stored turn is tagged with both owners, and internal
+    /// recalls are scoped to this user AND the agent so another user's private
+    /// memories can never surface or be linked.
+    pub user_id: Option<Uuid>,
     /// Originating session, tagged onto stored turns so injection recall
     /// can exclude memories already present in that session's context.
     pub session_id: Option<String>,
@@ -223,6 +228,7 @@ impl MenteDb {
         delta_tracker: &mut DeltaTracker,
     ) -> crate::MenteResult<ProcessTurnResult> {
         let agent_id = AgentId(input.agent_id.unwrap_or(Uuid::nil()));
+        let user_id = UserId(input.user_id.unwrap_or(Uuid::nil()));
         let assistant_resp = input.assistant_response.as_deref().unwrap_or("");
         let conversation = format!(
             "User: {}\nAssistant: {}",
@@ -237,6 +243,7 @@ impl MenteDb {
             &input.user_message,
             &query_embedding,
             input.agent_id.map(AgentId),
+            input.user_id.map(UserId),
             delta_tracker,
         )?;
 
@@ -251,25 +258,28 @@ impl MenteDb {
         let (stored_ids, episodic_id) = self.store_episodic(
             &conversation,
             agent_id,
+            user_id,
             &input.project_context,
             &input.session_id,
         )?;
 
-        // Scope internal recalls to the turn's agent so cross-user inference,
-        // fact linking, and proactive recall cannot surface or link another
-        // user's private memories. None (no agent) preserves global behavior.
+        // Scope internal recalls to the turn's owner on BOTH axes so cross-owner
+        // inference, fact linking, and proactive recall cannot surface or link
+        // another user's or agent's private memories. None on an axis preserves
+        // global behavior for that axis.
         let scope_agent = input.agent_id.map(AgentId);
+        let scope_user = input.user_id.map(UserId);
 
         // §4: Write inference on the episodic memory
         let inference_actions = if let Some(eid) = episodic_id {
-            self.run_explicit_write_inference(eid, scope_agent)?
+            self.run_explicit_write_inference(eid, scope_agent, scope_user)?
         } else {
             0
         };
 
         // §5: Extract facts + link edges
         let (facts_extracted, edges_created) = if let Some(eid) = episodic_id {
-            self.extract_and_link_facts(eid, scope_agent)?
+            self.extract_and_link_facts(eid, scope_agent, scope_user)?
         } else {
             (0, 0)
         };
@@ -279,7 +289,8 @@ impl MenteDb {
         let detected_actions = detect_actions(&combined_text);
 
         // §7: Proactive recall
-        let proactive_recalls = self.proactive_recall(&detected_actions, scope_agent)?;
+        let proactive_recalls =
+            self.proactive_recall(&detected_actions, scope_agent, scope_user)?;
 
         // §8: Auto-detect corrections (tags the episodic turn, never mints a node)
         let correction_id = self.auto_detect_correction(&input.user_message, episodic_id)?;
@@ -299,6 +310,7 @@ impl MenteDb {
         let predicted_topics = self.update_trajectory(
             input,
             agent_id,
+            user_id,
             &stored_ids,
             &detected_actions,
             &combined_text,
@@ -339,6 +351,7 @@ impl MenteDb {
         user_message: &str,
         query_embedding: &[f32],
         agent: Option<AgentId>,
+        user: Option<UserId>,
         _delta_tracker: &DeltaTracker,
     ) -> crate::MenteResult<(Vec<ScoredMemory>, Vec<MemoryId>, bool)> {
         // Try speculative cache first
@@ -347,7 +360,9 @@ impl MenteDb {
                 .memory_ids
                 .iter()
                 .filter_map(|id| self.get_memory(*id).ok())
-                .filter(|m| crate::agent_visible(m.agent_id, agent))
+                .filter(|m| {
+                    crate::agent_visible(m.agent_id, agent) && crate::user_visible(m.user_id, user)
+                })
                 .map(|m| ScoredMemory {
                     memory: m,
                     score: 0.9,
@@ -370,6 +385,7 @@ impl MenteDb {
             false,
             None,
             agent,
+            user,
         )?;
         let mut scored: Vec<ScoredMemory> = results
             .iter()
@@ -391,6 +407,7 @@ impl MenteDb {
                 && mem.tags.iter().any(|t| t == always_scope_tag)
                 && !hybrid_ids.contains(&mem.id)
                 && crate::agent_visible(mem.agent_id, agent)
+                && crate::user_visible(mem.user_id, user)
             {
                 scored.push(ScoredMemory {
                     memory: mem,
@@ -469,6 +486,7 @@ impl MenteDb {
         &self,
         conversation: &str,
         agent_id: AgentId,
+        user_id: UserId,
         project_context: &Option<String>,
         session_id: &Option<String>,
     ) -> crate::MenteResult<(Vec<MemoryId>, Option<MemoryId>)> {
@@ -478,7 +496,8 @@ impl MenteDb {
             MemoryType::Episodic,
             conversation.to_string(),
             embedding,
-        );
+        )
+        .with_user_id(user_id);
         node.tags.push("turn".to_string());
         if let Some(ctx) = project_context {
             node.tags.push(format!("scope:project:{}", ctx));
@@ -495,10 +514,12 @@ impl MenteDb {
         &self,
         id: MemoryId,
         agent: Option<AgentId>,
+        user: Option<UserId>,
     ) -> crate::MenteResult<u32> {
         let target = self.get_memory(id)?;
-        // Scope to the turn's agent: contradiction and dedup edges must not form
-        // across users. Nil owned (shared/global) memories remain in scope.
+        // Scope to the turn's owner on BOTH axes: contradiction and dedup edges
+        // must not form across users or agents. Nil owned (shared/global)
+        // memories remain in scope.
         let similar_ids = self
             .recall_hybrid_scoped_at_mode(
                 &target.embedding,
@@ -509,6 +530,7 @@ impl MenteDb {
                 false,
                 None,
                 agent,
+                user,
             )
             .unwrap_or_default();
         let existing: Vec<MemoryNode> = similar_ids
@@ -654,6 +676,7 @@ impl MenteDb {
         &self,
         id: MemoryId,
         agent: Option<AgentId>,
+        user: Option<UserId>,
     ) -> crate::MenteResult<(usize, u32)> {
         let target = self.get_memory(id)?;
         let extractor = FactExtractor::new();
@@ -662,8 +685,9 @@ impl MenteDb {
             return Ok((0, 0));
         }
 
-        // Scope to the turn's agent: "related" edges must not link one user's
-        // memory to another's. Nil owned (shared/global) memories remain in scope.
+        // Scope to the turn's owner on BOTH axes: "related" edges must not link
+        // one user's or agent's memory to another's. Nil owned (shared/global)
+        // memories remain in scope.
         let similar_ids = self
             .recall_hybrid_scoped_at_mode(
                 &target.embedding,
@@ -674,6 +698,7 @@ impl MenteDb {
                 false,
                 None,
                 agent,
+                user,
             )
             .unwrap_or_default();
         let nearby: Vec<MemoryNode> = similar_ids
@@ -716,6 +741,7 @@ impl MenteDb {
         &self,
         actions: &[DetectedAction],
         agent: Option<AgentId>,
+        user: Option<UserId>,
     ) -> crate::MenteResult<Vec<ProactiveRecall>> {
         let mut recalls = Vec::new();
         for action in actions {
@@ -723,10 +749,21 @@ impl MenteDb {
             let Some(emb) = self.embed_text(&search_query)? else {
                 continue;
             };
-            // Scope to the turn's agent so proactive recall never surfaces
-            // another user's private memories (nil owned/global still pass).
+            // Scope to the turn's owner on BOTH axes so proactive recall never
+            // surfaces another user's or agent's private memories (nil
+            // owned/global still pass).
             let results = self
-                .recall_hybrid_scoped_at_mode(&emb, None, 3, now_us(), None, false, None, agent)
+                .recall_hybrid_scoped_at_mode(
+                    &emb,
+                    None,
+                    3,
+                    now_us(),
+                    None,
+                    false,
+                    None,
+                    agent,
+                    user,
+                )
                 .unwrap_or_default();
             for (mid, score) in &results {
                 if let Ok(mem) = self.get_memory(*mid) {
@@ -826,6 +863,7 @@ impl MenteDb {
         &self,
         input: &ProcessTurnInput,
         agent_id: AgentId,
+        user_id: UserId,
         stored_ids: &[MemoryId],
         detected_actions: &[DetectedAction],
         combined_text: &str,
@@ -869,7 +907,8 @@ impl MenteDb {
             );
             if let Ok(Some(ghost_emb)) = self.embed_text(&ghost_content) {
                 let mut ghost_node =
-                    MemoryNode::new(agent_id, MemoryType::Semantic, ghost_content, ghost_emb);
+                    MemoryNode::new(agent_id, MemoryType::Semantic, ghost_content, ghost_emb)
+                        .with_user_id(user_id);
                 ghost_node.confidence = 0.3;
                 ghost_node.tags = vec!["ghost-memory".to_string(), "unconfirmed".to_string()];
                 if let Some(ctx) = &input.project_context {

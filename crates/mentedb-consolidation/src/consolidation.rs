@@ -70,10 +70,14 @@ impl ConsolidationEngine {
 
         for i in 0..n {
             for j in (i + 1)..n {
-                // Never consolidate across owners: memories belonging to different
-                // agents (and agent-owned vs global) must never merge into one, or
-                // one user's content would leak into another's consolidated memory.
-                if memories[i].agent_id != memories[j].agent_id {
+                // Never consolidate across owners: memories belonging to
+                // different agents OR different users (and owned vs global on
+                // either axis) must never merge into one, or one owner's content
+                // would leak into another's consolidated memory. Both owner axes
+                // are checked independently.
+                if memories[i].agent_id != memories[j].agent_id
+                    || memories[i].user_id != memories[j].user_id
+                {
                     continue;
                 }
                 let sim = cosine_similarity(&memories[i].embedding, &memories[j].embedding);
