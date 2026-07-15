@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.6](https://github.com/nambok/mentedb/compare/mentedb-v0.12.4...mentedb-v0.12.6) - 2026-07-15
+
+### Fixed
+
+- prevent cross-user memory merge in consolidation (scope clustering by agent) ([#227](https://github.com/nambok/mentedb/pull/227))
+
+### Other
+
+- release v0.12.5 ([#226](https://github.com/nambok/mentedb/pull/226))
+
 ## [0.12.5](https://github.com/nambok/mentedb/compare/mentedb-v0.12.4...mentedb-v0.12.5) - 2026-07-15
 
 ### Fixed
