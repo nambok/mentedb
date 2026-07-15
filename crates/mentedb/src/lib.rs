@@ -952,8 +952,20 @@ impl MenteDb {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_micros() as u64;
-            self.recall_hybrid_at(&new_memory.embedding, None, 20, now, None, None)
-                .unwrap_or_default()
+            // Scope to the new memory's owner: contradiction and relationship
+            // inference must never compare against another user's memories.
+            // Nil owned (shared/global) memories stay in scope.
+            self.recall_hybrid_scoped_at_mode(
+                &new_memory.embedding,
+                None,
+                20,
+                now,
+                None,
+                false,
+                None,
+                Some(new_memory.agent_id),
+            )
+            .unwrap_or_default()
         } else {
             vec![]
         };
@@ -1972,21 +1984,53 @@ impl MenteDb {
         *self.enrichment_pending.write() = true;
     }
 
+    /// Distinct agent ids that own at least one memory. Enrichment runs once per
+    /// owner so one user's derived knowledge never mixes with another's.
+    fn distinct_agent_ids(&self) -> Vec<AgentId> {
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        let mut agents: Vec<AgentId> = Vec::new();
+        for pid in &page_ids {
+            if let Ok(mem) = self.storage.load_memory(*pid)
+                && !agents.contains(&mem.agent_id)
+            {
+                agents.push(mem.agent_id);
+            }
+        }
+        agents
+    }
+
     /// Get episodic memories that haven't been enriched yet.
     ///
     /// Returns all Episodic memories created after the last enrichment turn,
-    /// sorted by creation time. These are the candidates for LLM extraction.
-    pub fn enrichment_candidates(&self) -> Vec<MemoryNode> {
+    /// owned by `agent` (exact-owner match, so one user's episodics are never
+    /// enriched into another user's knowledge), sorted by creation time. These
+    /// are the candidates for LLM extraction.
+    pub fn enrichment_candidates(&self, agent: AgentId) -> Vec<MemoryNode> {
         let last_turn = *self.last_enrichment_turn.read();
         let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
         let mut candidates: Vec<MemoryNode> = page_ids
             .iter()
             .filter_map(|pid| self.storage.load_memory(*pid).ok())
             .filter(|m| {
-                m.memory_type == mentedb_core::memory::MemoryType::Episodic
+                m.agent_id == agent
+                    && m.memory_type == mentedb_core::memory::MemoryType::Episodic
                     && !m.tags.contains(&"source:enrichment".to_string())
                     && m.created_at > last_turn
             })
+            .collect();
+        candidates.sort_by_key(|m| m.created_at);
+        candidates
+    }
+
+    /// All unenriched episodic candidates across every owner, sorted by creation
+    /// time. This is an owner-agnostic introspection view (the enrichment
+    /// pipeline itself scopes per owner via [`Self::enrichment_candidates`]); it
+    /// exists so SDK callers can list pending work without an agent argument.
+    pub fn all_enrichment_candidates(&self) -> Vec<MemoryNode> {
+        let mut candidates: Vec<MemoryNode> = self
+            .distinct_agent_ids()
+            .into_iter()
+            .flat_map(|agent| self.enrichment_candidates(agent))
             .collect();
         candidates.sort_by_key(|m| m.created_at);
         candidates
@@ -2064,15 +2108,19 @@ impl MenteDb {
         &self.cognitive_config.enrichment_config
     }
 
-    /// Get all unique entity names from stored entity memories.
+    /// Get all unique entity names from stored entity memories owned by `agent`.
     ///
     /// Returns deduplicated, normalized entity names extracted from
-    /// `entity:{name}` tags across all stored memories.
-    pub fn all_entity_names(&self) -> Vec<String> {
+    /// `entity:{name}` tags across this agent's stored memories only, so one
+    /// user's entities never bleed into another's resolution.
+    pub fn all_entity_names(&self, agent: AgentId) -> Vec<String> {
         let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
         let mut names = std::collections::HashSet::new();
         for pid in &page_ids {
             if let Ok(mem) = self.storage.load_memory(*pid) {
+                if mem.agent_id != agent {
+                    continue;
+                }
                 for tag in &mem.tags {
                     if let Some(name) = tag.strip_prefix("entity:") {
                         names.insert(name.to_lowercase().trim().to_string());
@@ -2089,8 +2137,8 @@ impl MenteDb {
     ///
     /// These are the entities that need LLM resolution. The EntityResolver
     /// cache handles known entities for free.
-    pub fn unresolved_entity_names(&self) -> Vec<String> {
-        let all_names = self.all_entity_names();
+    pub fn unresolved_entity_names(&self, agent: AgentId) -> Vec<String> {
+        let all_names = self.all_entity_names(agent);
         self.entity_resolver.read().unresolved_names(&all_names)
     }
 
@@ -2099,12 +2147,15 @@ impl MenteDb {
     /// Returns (name, content) pairs for entities that need resolution.
     /// The content helps the LLM disambiguate (e.g., "Python" near
     /// "web framework" vs "Python" near "Monty Python").
-    pub fn entity_names_with_context(&self) -> Vec<(String, Option<String>)> {
+    pub fn entity_names_with_context(&self, agent: AgentId) -> Vec<(String, Option<String>)> {
         let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
         let mut entity_contexts: HashMap<String, String> = HashMap::new();
 
         for pid in &page_ids {
             if let Ok(mem) = self.storage.load_memory(*pid) {
+                if mem.agent_id != agent {
+                    continue;
+                }
                 for tag in &mem.tags {
                     if let Some(name) = tag.strip_prefix("entity:") {
                         let normalized = name.to_lowercase().trim().to_string();
@@ -2145,6 +2196,7 @@ impl MenteDb {
         &self,
         merge_groups: &[EntityLinkResolution],
         separations: &[EntitySeparation],
+        agent: AgentId,
     ) -> MenteResult<EntityLinkResult> {
         let mut result = EntityLinkResult::default();
         let now = std::time::SystemTime::now()
@@ -2152,8 +2204,9 @@ impl MenteDb {
             .unwrap_or_default()
             .as_micros() as u64;
 
-        // Build a map: normalized entity name → list of memory IDs
-        let entity_memory_map = self.build_entity_memory_map();
+        // Build a map: normalized entity name → list of memory IDs (this agent's
+        // entities only, so links never span owners).
+        let entity_memory_map = self.build_entity_memory_map(agent);
 
         let mut resolver = self.entity_resolver.write();
 
@@ -2263,10 +2316,22 @@ impl MenteDb {
     /// Link entities using only the sync EntityResolver (cache + rules, no LLM).
     ///
     /// This is the fast path — links entities that are already known to be
-    /// the same from previous LLM resolutions. For full LLM-powered resolution,
-    /// use `unresolved_entity_names()` + `apply_entity_link_resolutions()`.
+    /// the same from previous LLM resolutions. Runs once per owner so entity
+    /// links never span users; each owner's entities are linked in isolation
+    /// (nil owned / global entities are linked among themselves).
     pub fn link_entities(&self) -> MenteResult<EntityLinkResult> {
-        let entity_memory_map = self.build_entity_memory_map();
+        let mut total = EntityLinkResult::default();
+        for agent in self.distinct_agent_ids() {
+            let r = self.link_entities_for(agent)?;
+            total.linked += r.linked;
+            total.edges_created += r.edges_created;
+        }
+        Ok(total)
+    }
+
+    /// Sync entity linking scoped to a single owner. See [`Self::link_entities`].
+    pub(crate) fn link_entities_for(&self, agent: AgentId) -> MenteResult<EntityLinkResult> {
+        let entity_memory_map = self.build_entity_memory_map(agent);
         let resolver = self.entity_resolver.read();
 
         // Group entity names by their resolved canonical name
@@ -2355,12 +2420,17 @@ impl MenteDb {
         Ok(result)
     }
 
-    /// Build a map of normalized entity name → list of MemoryIds.
-    fn build_entity_memory_map(&self) -> HashMap<String, Vec<MemoryId>> {
+    /// Build a map of normalized entity name → list of MemoryIds, restricted to
+    /// entity memories owned by `agent` so links and community membership never
+    /// cross owners.
+    fn build_entity_memory_map(&self, agent: AgentId) -> HashMap<String, Vec<MemoryId>> {
         let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
         let mut map: HashMap<String, Vec<MemoryId>> = HashMap::new();
         for pid in &page_ids {
             if let Ok(mem) = self.storage.load_memory(*pid) {
+                if mem.agent_id != agent {
+                    continue;
+                }
                 for tag in &mem.tags {
                     if let Some(name) = tag.strip_prefix("entity:") {
                         let normalized = name.to_lowercase().trim().to_string();
@@ -2388,12 +2458,16 @@ impl MenteDb {
     ///
     /// Returns a map of category → list of (entity_name, context_snippet).
     /// Categories come from `entity_type:` tags on entity memories.
-    pub fn entity_communities(&self) -> HashMap<String, Vec<(String, String)>> {
+    pub fn entity_communities(&self, agent: AgentId) -> HashMap<String, Vec<(String, String)>> {
         let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
         let mut categories: HashMap<String, Vec<(String, String)>> = HashMap::new();
 
         for pid in &page_ids {
             if let Ok(mem) = self.storage.load_memory(*pid) {
+                // Only cluster this agent's entities so communities never mix owners.
+                if mem.agent_id != agent {
+                    continue;
+                }
                 // Skip non-entity memories and existing community summaries
                 if mem.tags.iter().any(|t| t == "community_summary") {
                     continue;
@@ -2436,6 +2510,7 @@ impl MenteDb {
         category: &str,
         summary: &str,
         member_names: &[String],
+        agent: AgentId,
     ) -> MenteResult<MemoryId> {
         if category.is_empty() {
             return Err(MenteError::Storage(
@@ -2448,12 +2523,14 @@ impl MenteDb {
             .unwrap_or_default()
             .as_micros() as u64;
 
-        // Check if a community summary already exists for this category
+        // Check if a community summary already exists for this category AND owner,
+        // so one user's summary never overwrites another's.
         let community_tag = format!("community:{}", category);
         let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
         let mut existing_id = None;
         for pid in &page_ids {
             if let Ok(mem) = self.storage.load_memory(*pid)
+                && mem.agent_id == agent
                 && mem.tags.iter().any(|t| t == &community_tag)
             {
                 // Update existing summary content
@@ -2480,12 +2557,8 @@ impl MenteDb {
                 .and_then(|e| e.embed(summary).ok())
                 .unwrap_or_default();
 
-            let mut node = MemoryNode::new(
-                mentedb_core::types::AgentId::new(),
-                MemoryType::Semantic,
-                summary.to_string(),
-                embedding,
-            );
+            let mut node =
+                MemoryNode::new(agent, MemoryType::Semantic, summary.to_string(), embedding);
             node.tags = vec![
                 "community_summary".to_string(),
                 community_tag,
@@ -2499,7 +2572,7 @@ impl MenteDb {
 
         // (Re)create Derived edges from summary to member entity memories.
         // On update this refreshes edges to reflect current membership.
-        let entity_map = self.build_entity_memory_map();
+        let entity_map = self.build_entity_memory_map(agent);
         for name in member_names {
             let normalized = name.to_lowercase();
             if let Some(member_ids) = entity_map.get(&normalized) {
@@ -2521,25 +2594,31 @@ impl MenteDb {
         Ok(node_id)
     }
 
-    /// Get existing community summaries.
-    pub fn community_summaries(&self) -> Vec<MemoryNode> {
+    /// Get existing community summaries owned by `agent`, so each owner only sees
+    /// its own community summaries.
+    pub fn community_summaries(&self, agent: AgentId) -> Vec<MemoryNode> {
         let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
         page_ids
             .iter()
             .filter_map(|pid| self.storage.load_memory(*pid).ok())
-            .filter(|m| m.tags.iter().any(|t| t == "community_summary"))
+            .filter(|m| m.agent_id == agent && m.tags.iter().any(|t| t == "community_summary"))
             .collect()
     }
 
     /// Collect all semantic/procedural facts for user profile generation.
     ///
     /// Returns high-confidence memories suitable for profile building.
-    pub fn profile_facts(&self) -> Vec<String> {
+    pub fn profile_facts(&self, agent: AgentId) -> Vec<String> {
         let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
         let mut facts = Vec::new();
 
         for pid in &page_ids {
             if let Ok(mem) = self.storage.load_memory(*pid) {
+                // Only this agent's facts, so a profile is built from one owner's
+                // knowledge and never mixes in another user's memories.
+                if mem.agent_id != agent {
+                    continue;
+                }
                 // Only semantic and procedural memories with decent confidence
                 if mem.confidence < 0.5 {
                     continue;
@@ -2566,15 +2645,18 @@ impl MenteDb {
         facts
     }
 
-    /// Store or update the user profile as an always-scoped memory.
+    /// Store or update the user profile as an always-scoped memory owned by
+    /// `agent`.
     ///
-    /// There is exactly one user profile memory (tagged `user_profile`).
-    /// If one already exists, it's replaced entirely.
-    pub fn store_user_profile(&self, profile: &str) -> MenteResult<MemoryId> {
-        // Find existing profile
+    /// There is exactly one user profile memory (tagged `user_profile`) per
+    /// owner. If one already exists for this agent, it's replaced entirely; one
+    /// user's profile never overwrites another's.
+    pub fn store_user_profile(&self, profile: &str, agent: AgentId) -> MenteResult<MemoryId> {
+        // Find existing profile for this owner
         let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
         for pid in &page_ids {
             if let Ok(mem) = self.storage.load_memory(*pid)
+                && mem.agent_id == agent
                 && mem.tags.iter().any(|t| t == "user_profile")
             {
                 // Update in place, bumping created_at so it reflects when the
@@ -2604,12 +2686,7 @@ impl MenteDb {
             .and_then(|e| e.embed(profile).ok())
             .unwrap_or_default();
 
-        let mut node = MemoryNode::new(
-            mentedb_core::types::AgentId::new(),
-            MemoryType::Semantic,
-            profile.to_string(),
-            embedding,
-        );
+        let mut node = MemoryNode::new(agent, MemoryType::Semantic, profile.to_string(), embedding);
         node.tags = vec![
             "user_profile".to_string(),
             "scope:always".to_string(),
@@ -2633,5 +2710,43 @@ impl MenteDb {
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod distinct_agent_tests {
+    use super::*;
+
+    /// `distinct_agent_ids` must enumerate every owner that holds a memory, since
+    /// enrichment loops over its result to scope derived knowledge per owner. This
+    /// is a unit test (not an integration test) because the method is private.
+    #[test]
+    fn distinct_agent_ids_returns_all_owners() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+        let alice = AgentId::new();
+        let bob = AgentId::new();
+
+        db.store(MemoryNode::new(
+            alice,
+            MemoryType::Semantic,
+            "alice likes falcons".into(),
+            vec![0.1_f32; 8],
+        ))
+        .unwrap();
+        db.store(MemoryNode::new(
+            bob,
+            MemoryType::Semantic,
+            "bob likes turtles".into(),
+            vec![0.2_f32; 8],
+        ))
+        .unwrap();
+
+        let agents = db.distinct_agent_ids();
+        assert!(
+            agents.contains(&alice),
+            "distinct owners must include alice"
+        );
+        assert!(agents.contains(&bob), "distinct owners must include bob");
     }
 }

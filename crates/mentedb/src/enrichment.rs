@@ -63,167 +63,192 @@ pub async fn run_enrichment<J: LlmJudge>(
 ) -> EnrichmentResult {
     let mut result = EnrichmentResult::default();
 
-    if !skip_extraction {
-        let candidates = db.enrichment_candidates();
-        if candidates.is_empty() {
-            tracing::debug!("enrichment: no candidates, marking complete");
-            db.mark_enrichment_complete(current_turn);
-            return result;
-        }
-
-        tracing::info!(
-            candidates = candidates.len(),
-            "starting sleeptime enrichment"
-        );
-
-        // ── Phase 1: Batch LLM Extraction ──
-        let http_provider = match HttpExtractionProvider::new(extraction_config.clone()) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::error!(error = %e, "enrichment: failed to create HTTP provider");
-                db.mark_enrichment_complete(current_turn);
-                return result;
-            }
-        };
-
-        let enrichment_config = db.enrichment_config().clone();
-        let pipeline_cfg = ExtractionConfig {
-            quality_threshold: enrichment_config.min_confidence,
-            ..extraction_config
-        };
-        let pipeline = ExtractionPipeline::new(http_provider, pipeline_cfg);
-
-        let batches = batch_conversations(&candidates, 10);
-
-        for (batch_idx, batch) in batches.iter().enumerate() {
-            let conversation = batch
-                .iter()
-                .map(|m| m.content.as_str())
-                .collect::<Vec<_>>()
-                .join("\n---\n");
-
-            let source_ids: Vec<mentedb_core::types::MemoryId> =
-                batch.iter().map(|m| m.id).collect();
-
-            // Get existing memories for dedup
-            let existing: Vec<MemoryNode> = if let Ok(Some(emb)) =
-                db.embed_text(&conversation[..conversation.len().min(500)])
-            {
-                db.recall_similar(&emb, 30)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|(id, _)| db.get_memory(id).ok())
-                    .collect()
+    // Enrichment runs once per owning agent (nil / global included, as just
+    // another owner). Each pass reads and writes only that owner's memories, so
+    // one user's derived knowledge (extracted facts, entities, communities,
+    // profile) never mixes with another's.
+    for agent in db.distinct_agent_ids() {
+        if !skip_extraction {
+            let candidates = db.enrichment_candidates(agent);
+            if candidates.is_empty() {
+                tracing::debug!(?agent, "enrichment: no candidates for owner, skipping");
             } else {
-                Vec::new()
-            };
+                tracing::info!(
+                    ?agent,
+                    candidates = candidates.len(),
+                    "starting sleeptime enrichment for owner"
+                );
 
-            match pipeline.process(&conversation, &existing, embedder).await {
-                Ok(extraction_result) => {
-                    result.duplicates_skipped += extraction_result.stats.rejected_duplicate;
-                    result.contradictions_found += extraction_result.stats.contradictions_found;
+                // ── Phase 1: Batch LLM Extraction ──
+                let http_provider = match HttpExtractionProvider::new(extraction_config.clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::error!(error = %e, "enrichment: failed to create HTTP provider");
+                        db.mark_enrichment_complete(current_turn);
+                        return result;
+                    }
+                };
 
-                    let mut nodes = Vec::new();
-                    for mem in extraction_result
-                        .to_store
+                let enrichment_config = db.enrichment_config().clone();
+                let pipeline_cfg = ExtractionConfig {
+                    quality_threshold: enrichment_config.min_confidence,
+                    ..extraction_config.clone()
+                };
+                let pipeline = ExtractionPipeline::new(http_provider, pipeline_cfg);
+
+                let batches = batch_conversations(&candidates, 10);
+
+                for (batch_idx, batch) in batches.iter().enumerate() {
+                    let conversation = batch
                         .iter()
-                        .chain(extraction_result.contradictions.iter().map(|(m, _)| m))
+                        .map(|m| m.content.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n---\n");
+
+                    let source_ids: Vec<mentedb_core::types::MemoryId> =
+                        batch.iter().map(|m| m.id).collect();
+
+                    // Get existing memories for dedup, scoped to this owner (plus
+                    // global) so dedup never compares against another user's data.
+                    let existing: Vec<MemoryNode> = if let Ok(Some(emb)) =
+                        db.embed_text(&conversation[..conversation.len().min(500)])
                     {
-                        let mem_type = mentedb_extraction::map_extraction_type_to_memory_type(
-                            &mem.memory_type,
-                        );
-                        let embedding = match embedder.embed(&mem.content) {
-                            Ok(e) => e,
-                            Err(e) => {
-                                tracing::warn!(error = %e, "enrichment: embedding failed");
-                                continue;
-                            }
-                        };
-                        let mut node = MemoryNode::new(
-                            AgentId::nil(),
-                            mem_type,
-                            mem.content.clone(),
-                            embedding,
-                        );
-                        node.tags = mem.tags.clone();
-                        node.confidence = mem.confidence;
-                        nodes.push(node);
-                    }
+                        let now_us = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_micros() as u64;
+                        db.recall_hybrid_scoped_at_mode(
+                            &emb,
+                            None,
+                            30,
+                            now_us,
+                            None,
+                            false,
+                            None,
+                            Some(agent),
+                        )
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|(id, _)| db.get_memory(id).ok())
+                        .collect()
+                    } else {
+                        Vec::new()
+                    };
 
-                    // Build entity nodes
-                    for entity in &extraction_result.entities {
-                        let content = entity.to_content();
-                        let embedding_text = entity.embedding_key();
-                        let embedding = match embedder.embed(&embedding_text) {
-                            Ok(e) => e,
-                            Err(e) => {
-                                tracing::warn!(error = %e, "enrichment: entity embedding failed");
-                                continue;
-                            }
-                        };
-                        let mut node = MemoryNode::new(
-                            AgentId::nil(),
-                            MemoryType::Semantic,
-                            content,
-                            embedding,
-                        );
-                        let name_lower = entity.name.to_lowercase();
-                        node.tags.push(format!("entity:{}", name_lower));
-                        node.tags
-                            .push(format!("entity_type:{}", entity.entity_type));
-                        if let Some(cat) = entity.attributes.get("category") {
-                            for c in cat.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-                                node.tags.push(format!("category:{}", c.to_lowercase()));
-                            }
-                        }
-                        nodes.push(node);
-                        result.entities_extracted += 1;
-                    }
+                    match pipeline.process(&conversation, &existing, embedder).await {
+                        Ok(extraction_result) => {
+                            result.duplicates_skipped += extraction_result.stats.rejected_duplicate;
+                            result.contradictions_found +=
+                                extraction_result.stats.contradictions_found;
 
-                    match db.store_enrichment_memories(nodes, &source_ids) {
-                        Ok((stored, edges)) => {
-                            result.memories_stored += stored;
-                            result.edges_created += edges;
+                            let mut nodes = Vec::new();
+                            for mem in extraction_result
+                                .to_store
+                                .iter()
+                                .chain(extraction_result.contradictions.iter().map(|(m, _)| m))
+                            {
+                                let mem_type =
+                                    mentedb_extraction::map_extraction_type_to_memory_type(
+                                        &mem.memory_type,
+                                    );
+                                let embedding = match embedder.embed(&mem.content) {
+                                    Ok(e) => e,
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "enrichment: embedding failed");
+                                        continue;
+                                    }
+                                };
+                                let mut node = MemoryNode::new(
+                                    agent,
+                                    mem_type,
+                                    mem.content.clone(),
+                                    embedding,
+                                );
+                                node.tags = mem.tags.clone();
+                                node.confidence = mem.confidence;
+                                nodes.push(node);
+                            }
+
+                            // Build entity nodes
+                            for entity in &extraction_result.entities {
+                                let content = entity.to_content();
+                                let embedding_text = entity.embedding_key();
+                                let embedding = match embedder.embed(&embedding_text) {
+                                    Ok(e) => e,
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "enrichment: entity embedding failed");
+                                        continue;
+                                    }
+                                };
+                                let mut node = MemoryNode::new(
+                                    agent,
+                                    MemoryType::Semantic,
+                                    content,
+                                    embedding,
+                                );
+                                let name_lower = entity.name.to_lowercase();
+                                node.tags.push(format!("entity:{}", name_lower));
+                                node.tags
+                                    .push(format!("entity_type:{}", entity.entity_type));
+                                if let Some(cat) = entity.attributes.get("category") {
+                                    for c in
+                                        cat.split(',').map(|s| s.trim()).filter(|s| !s.is_empty())
+                                    {
+                                        node.tags.push(format!("category:{}", c.to_lowercase()));
+                                    }
+                                }
+                                nodes.push(node);
+                                result.entities_extracted += 1;
+                            }
+
+                            match db.store_enrichment_memories(nodes, &source_ids) {
+                                Ok((stored, edges)) => {
+                                    result.memories_stored += stored;
+                                    result.edges_created += edges;
+                                }
+                                Err(e) => {
+                                    tracing::error!(batch = batch_idx, error = %e, "enrichment: failed to store batch");
+                                }
+                            }
                         }
                         Err(e) => {
-                            tracing::error!(batch = batch_idx, error = %e, "enrichment: failed to store batch");
+                            tracing::error!(batch = batch_idx, error = %e, "enrichment: extraction failed");
                         }
                     }
                 }
-                Err(e) => {
-                    tracing::error!(batch = batch_idx, error = %e, "enrichment: extraction failed");
-                }
             }
+        } else {
+            tracing::info!("enrichment: skipping Phase 1 extraction (skip_extraction=true)");
         }
-    } else {
-        tracing::info!("enrichment: skipping Phase 1 extraction (skip_extraction=true)");
-    }
 
-    // ── Phase 2: Entity Linking ──
-    let sync_link_result = match db.link_entities() {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(error = %e, "enrichment: sync entity linking failed");
-            crate::EntityLinkResult::default()
+        // ── Phase 2: Entity Linking (this owner only) ──
+        let sync_link_result = match db.link_entities_for(agent) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(error = %e, "enrichment: sync entity linking failed");
+                crate::EntityLinkResult::default()
+            }
+        };
+        result.sync_linked += sync_link_result.linked;
+        result.edges_created += sync_link_result.edges_created;
+
+        if let Some(llm) = cognitive_llm {
+            let llm_link = run_llm_entity_linking(db, llm, agent).await;
+            result.llm_linked += llm_link.linked;
+            result.edges_created += llm_link.edges_created;
         }
-    };
-    result.sync_linked = sync_link_result.linked;
-    result.edges_created += sync_link_result.edges_created;
 
-    if let Some(llm) = cognitive_llm {
-        let llm_link = run_llm_entity_linking(db, llm).await;
-        result.llm_linked = llm_link.linked;
-        result.edges_created += llm_link.edges_created;
-    }
+        // ── Phase 3: Community Detection (this owner only) ──
+        if let Some(llm) = cognitive_llm {
+            result.communities_created += run_community_detection(db, llm, agent).await;
+        }
 
-    // ── Phase 3: Community Detection ──
-    if let Some(llm) = cognitive_llm {
-        result.communities_created = run_community_detection(db, llm).await;
-    }
-
-    // ── Phase 4: User Model ──
-    if let Some(llm) = cognitive_llm {
-        result.user_model_updated = run_user_model(db, llm).await;
+        // ── Phase 4: User Model (this owner only) ──
+        if let Some(llm) = cognitive_llm
+            && run_user_model(db, llm, agent).await
+        {
+            result.user_model_updated = true;
+        }
     }
 
     db.mark_enrichment_complete(current_turn);
@@ -245,13 +270,14 @@ pub async fn run_enrichment<J: LlmJudge>(
     result
 }
 
-/// Phase 2b: LLM entity resolution for unresolved entities.
+/// Phase 2b: LLM entity resolution for unresolved entities owned by `agent`.
 async fn run_llm_entity_linking<J: LlmJudge>(
     db: &MenteDb,
     llm: &CognitiveLlmService<J>,
+    agent: AgentId,
 ) -> crate::EntityLinkResult {
-    let all_entities_with_context = db.entity_names_with_context();
-    let unresolved = db.unresolved_entity_names();
+    let all_entities_with_context = db.entity_names_with_context(agent);
+    let unresolved = db.unresolved_entity_names(agent);
 
     if unresolved.is_empty() {
         return crate::EntityLinkResult::default();
@@ -302,7 +328,7 @@ async fn run_llm_entity_linking<J: LlmJudge>(
 
     let separations: Vec<crate::EntitySeparation> = Vec::new();
 
-    match db.apply_entity_link_resolutions(&resolutions, &separations) {
+    match db.apply_entity_link_resolutions(&resolutions, &separations, agent) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "enrichment: failed to apply entity resolutions");
@@ -311,11 +337,16 @@ async fn run_llm_entity_linking<J: LlmJudge>(
     }
 }
 
-/// Phase 3: Community detection — group entities by category, generate LLM summaries.
-async fn run_community_detection<J: LlmJudge>(db: &MenteDb, llm: &CognitiveLlmService<J>) -> usize {
-    let communities = db.entity_communities();
+/// Phase 3: Community detection — group this owner's entities by category,
+/// generate LLM summaries owned by `agent`.
+async fn run_community_detection<J: LlmJudge>(
+    db: &MenteDb,
+    llm: &CognitiveLlmService<J>,
+    agent: AgentId,
+) -> usize {
+    let communities = db.entity_communities(agent);
     let existing_summaries: HashSet<String> = db
-        .community_summaries()
+        .community_summaries(agent)
         .iter()
         .flat_map(|m| {
             m.tags
@@ -341,7 +372,7 @@ async fn run_community_detection<J: LlmJudge>(db: &MenteDb, llm: &CognitiveLlmSe
             Ok(summary) => {
                 let member_names: Vec<String> =
                     entity_pairs.iter().map(|(n, _)| n.clone()).collect();
-                match db.store_community_summary(category, &summary.summary, &member_names) {
+                match db.store_community_summary(category, &summary.summary, &member_names, agent) {
                     Ok(_) => {
                         created += 1;
                         tracing::info!(category = %category, members = members.len(), "community summary created");
@@ -360,11 +391,16 @@ async fn run_community_detection<J: LlmJudge>(db: &MenteDb, llm: &CognitiveLlmSe
     created
 }
 
-/// Phase 4: User model generation — synthesize always-scoped profile.
-async fn run_user_model<J: LlmJudge>(db: &MenteDb, llm: &CognitiveLlmService<J>) -> bool {
-    let facts = db.profile_facts();
+/// Phase 4: User model generation — synthesize an always-scoped profile for
+/// `agent` from that owner's facts and community summaries only.
+async fn run_user_model<J: LlmJudge>(
+    db: &MenteDb,
+    llm: &CognitiveLlmService<J>,
+    agent: AgentId,
+) -> bool {
+    let facts = db.profile_facts(agent);
     let community_texts: Vec<String> = db
-        .community_summaries()
+        .community_summaries(agent)
         .iter()
         .map(|m| m.content.clone())
         .collect();
@@ -374,7 +410,7 @@ async fn run_user_model<J: LlmJudge>(db: &MenteDb, llm: &CognitiveLlmService<J>)
     }
 
     match llm.generate_user_profile(&facts, &community_texts).await {
-        Ok(profile) => match db.store_user_profile(&profile.profile) {
+        Ok(profile) => match db.store_user_profile(&profile.profile, agent) {
             Ok(_) => {
                 tracing::info!("user profile updated");
                 true

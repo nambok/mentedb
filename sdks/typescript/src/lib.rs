@@ -457,7 +457,7 @@ impl MenteDB {
     /// Get episodic memories that need enrichment.
     #[napi]
     pub fn enrichment_candidates(&self) -> Result<Vec<JsContextItem>> {
-        let candidates = self.inner.enrichment_candidates();
+        let candidates = self.inner.all_enrichment_candidates();
         Ok(candidates
             .iter()
             .map(|m| JsContextItem {

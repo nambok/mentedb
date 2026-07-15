@@ -30,12 +30,14 @@ class MenteDB:
         embedding_provider: str | None = None,
         embedding_api_key: str | None = None,
         embedding_model: str | None = None,
+        dimension: int | None = None,
     ):
         self._db = _MenteDB(
             data_dir,
             embedding_provider=embedding_provider,
             embedding_api_key=embedding_api_key,
             embedding_model=embedding_model,
+            dimension=dimension,
         )
 
     def process_turn(
