@@ -41,6 +41,7 @@ fn mock_extraction_config() -> ExtractionConfig {
         api_key: Some("test-key".to_string()),
         api_url: "http://localhost:0/fake".to_string(),
         model: "test-model".to_string(),
+        region: None,
         max_extractions_per_conversation: 50,
         quality_threshold: 0.7,
         deduplication_threshold: 0.85,

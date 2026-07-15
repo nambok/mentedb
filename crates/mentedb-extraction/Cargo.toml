@@ -21,6 +21,16 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
+sha2 = { version = "0.10", optional = true }
+hmac = { version = "0.12", optional = true }
+chrono = { version = "0.4", optional = true, default-features = false, features = ["clock"] }
+
+[features]
+default = []
+# Native AWS Bedrock (Anthropic Claude) LLM extraction via an async reqwest call
+# signed with a hand-rolled SigV4 signer (no heavy async AWS SDK). Mirrors the
+# mentedb-embedding `bedrock` feature and reuses its AwsCredentials loader.
+bedrock = ["dep:sha2", "dep:hmac", "dep:chrono", "mentedb-embedding/bedrock"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
