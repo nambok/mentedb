@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.13.0...mentedb-consolidation-v0.13.1) - 2026-07-15
+
+### Added
+
+- add orthogonal user_id isolation dimension (per-user scoping alongside agent_id) ([#232](https://github.com/nambok/mentedb/pull/232))
+
 ## [0.12.6](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.12.4...mentedb-consolidation-v0.12.6) - 2026-07-15
 
 ### Fixed
