@@ -68,7 +68,7 @@ use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
 use mentedb_embedding::provider::EmbeddingProvider;
 use mentedb_graph::GraphManager;
 use mentedb_index::IndexManager;
-use mentedb_query::{Mql, QueryPlan};
+use mentedb_query::{Field, Filter, Mql, Operator, QueryPlan, Value};
 use mentedb_storage::StorageEngine;
 use parking_lot::RwLock;
 use tracing::{debug, info, warn};
@@ -1497,16 +1497,68 @@ impl MenteDb {
     /// Executes a query plan against the indexes and graph, returning scored memories.
     fn execute_plan(&self, plan: &QueryPlan) -> MenteResult<Vec<ScoredMemory>> {
         match plan {
-            QueryPlan::VectorSearch { query, k, .. } => {
-                let hits = self.index.hybrid_search(query, None, None, *k);
-                self.load_scored_memories(&hits)
+            QueryPlan::VectorSearch { query, k, filters } => {
+                // `content ~> "text"` arrives with an empty vector and the
+                // SimilarTo filter left in place for us to embed now (no embedder
+                // at plan time). NEAR arrives with the vector already filled in.
+                let embedded;
+                let qvec: &[f32] = if query.is_empty() {
+                    match filters
+                        .iter()
+                        .find(|f| f.op == Operator::SimilarTo)
+                        .map(|f| &f.value)
+                    {
+                        Some(Value::Text(text)) => {
+                            match self.embedder.as_ref().and_then(|e| e.embed(text).ok()) {
+                                Some(v) => {
+                                    embedded = v;
+                                    &embedded
+                                }
+                                // No embedder configured: a semantic query can't run.
+                                None => return Ok(vec![]),
+                            }
+                        }
+                        _ => query,
+                    }
+                } else {
+                    query
+                };
+                let hits = self.index.hybrid_search(qvec, None, None, *k);
+                let mut scored = self.load_scored_memories(&hits)?;
+                // The SimilarTo filter is the query itself; apply any others.
+                scored.retain(|sm| {
+                    filters
+                        .iter()
+                        .filter(|f| f.op != Operator::SimilarTo)
+                        .all(|f| Self::filter_matches(f, &sm.memory))
+                });
+                Ok(scored)
             }
-            QueryPlan::TagScan { tags, limit, .. } => {
-                let tag_refs: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
-                let k = limit.unwrap_or(10);
-                // Use a zero-vector for tag-only search; salience+bitmap still apply.
-                let hits = self.index.hybrid_search(&[], Some(&tag_refs), None, k);
-                self.load_scored_memories(&hits)
+            QueryPlan::TagScan {
+                tags,
+                filters,
+                limit,
+            } => {
+                let k = limit.unwrap_or(20);
+                let mut scored = if tags.is_empty() {
+                    // No tag constraint: a bare RECALL, or a metadata-only filter
+                    // like `WHERE type = semantic`. Full-scan and let the filters
+                    // below narrow it, instead of returning nothing.
+                    let pm = self.page_map.read();
+                    pm.values()
+                        .filter_map(|&pid| self.storage.load_memory(pid).ok())
+                        .map(|memory| ScoredMemory { memory, score: 1.0 })
+                        .collect::<Vec<_>>()
+                } else {
+                    let tag_refs: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
+                    // Zero-vector for tag-only search; salience+bitmap still apply.
+                    let hits = self.index.hybrid_search(&[], Some(&tag_refs), None, k);
+                    self.load_scored_memories(&hits)?
+                };
+                // Apply the metadata filters the planner attached (type, etc.).
+                scored.retain(|sm| filters.iter().all(|f| Self::filter_matches(f, &sm.memory)));
+                scored.truncate(k);
+                Ok(scored)
             }
             QueryPlan::TemporalScan { start, end, .. } => {
                 let hits = self
@@ -1544,6 +1596,58 @@ impl MenteDb {
                 }])
             }
             _ => Ok(vec![]),
+        }
+    }
+
+    /// Whether a memory satisfies a single MQL filter. Applies the metadata
+    /// filters the planner attaches to a plan (type, tag, content, time), so
+    /// `WHERE type = semantic` and similar clauses actually narrow results
+    /// instead of being ignored. Unhandled field/value combinations are
+    /// permissive (they do not exclude), so a supported query is never dropped
+    /// by a clause this does not understand.
+    fn filter_matches(f: &Filter, node: &MemoryNode) -> bool {
+        match (&f.field, &f.value) {
+            (Field::Type, Value::MemoryType(t)) => {
+                if f.op == Operator::Neq {
+                    node.memory_type != *t
+                } else {
+                    node.memory_type == *t
+                }
+            }
+            (Field::Tag, Value::Text(tag)) => {
+                let has = node.tags.iter().any(|x| x == tag);
+                if f.op == Operator::Neq { !has } else { has }
+            }
+            (Field::Content, Value::Text(s)) => {
+                let hit = node.content.to_lowercase().contains(&s.to_lowercase());
+                if f.op == Operator::Neq { !hit } else { hit }
+            }
+            (Field::Created, v) => Self::num_cmp(node.created_at as f64, f.op, Self::value_f64(v)),
+            (Field::Accessed, v) => {
+                Self::num_cmp(node.accessed_at as f64, f.op, Self::value_f64(v))
+            }
+            _ => true,
+        }
+    }
+
+    fn value_f64(v: &Value) -> Option<f64> {
+        match v {
+            Value::Number(n) => Some(*n),
+            Value::Integer(i) => Some(*i as f64),
+            _ => None,
+        }
+    }
+
+    fn num_cmp(a: f64, op: Operator, b: Option<f64>) -> bool {
+        let Some(b) = b else { return true };
+        match op {
+            Operator::Gt => a > b,
+            Operator::Gte => a >= b,
+            Operator::Lt => a < b,
+            Operator::Lte => a <= b,
+            Operator::Eq => (a - b).abs() < f64::EPSILON,
+            Operator::Neq => (a - b).abs() >= f64::EPSILON,
+            Operator::SimilarTo => true,
         }
     }
 
@@ -2814,6 +2918,63 @@ impl MenteDb {
         }
         owners.sort_by_key(|(_, _, ts)| std::cmp::Reverse(*ts));
         owners.into_iter().map(|(u, a, _)| (u, a)).collect()
+    }
+}
+
+#[cfg(test)]
+mod mql_execution_tests {
+    use super::*;
+
+    /// Regression: a bare `RECALL` and a `WHERE type = ...` filter must return
+    /// the matching memories. Before the executor fix these produced an empty
+    /// TagScan (empty tags, filters ignored) and returned nothing.
+    #[test]
+    fn recall_bare_and_by_type_return_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+        db.store(MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            "the sky is blue".into(),
+            vec![0.1_f32; 8],
+        ))
+        .unwrap();
+        db.store(MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            "water is wet".into(),
+            vec![0.2_f32; 8],
+        ))
+        .unwrap();
+        db.store(MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Procedural,
+            "how to tie a knot".into(),
+            vec![0.3_f32; 8],
+        ))
+        .unwrap();
+
+        // Bare RECALL returns all memories (previously empty).
+        let all = db.recall("RECALL memories LIMIT 50").unwrap();
+        let all_n: usize = all.blocks.iter().map(|b| b.memories.len()).sum();
+        assert_eq!(all_n, 3, "bare RECALL should return all three memories");
+
+        // A type filter narrows to just that type (previously empty).
+        let sem = db
+            .recall("RECALL memories WHERE type = semantic LIMIT 50")
+            .unwrap();
+        let sem_mems: Vec<&ScoredMemory> = sem.blocks.iter().flat_map(|b| &b.memories).collect();
+        assert_eq!(
+            sem_mems.len(),
+            2,
+            "type = semantic should return two memories"
+        );
+        assert!(
+            sem_mems
+                .iter()
+                .all(|sm| sm.memory.memory_type == MemoryType::Semantic),
+            "only semantic memories should come back"
+        );
     }
 }
 

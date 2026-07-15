@@ -15,9 +15,13 @@ fn test_recall_with_similar_to_produces_vector_search() {
     match plan {
         QueryPlan::VectorSearch { k, filters, .. } => {
             assert_eq!(k, 10);
-            // The tag filter should remain in filters
-            assert_eq!(filters.len(), 1);
-            assert_eq!(filters[0].field, Field::Tag);
+            // Both filters are kept now: the executor embeds the SimilarTo
+            // content filter into the query vector, and applies the tag filter
+            // to the results. (Previously the SimilarTo filter was dropped, so
+            // the text was lost and the query returned nothing.)
+            assert_eq!(filters.len(), 2);
+            assert!(filters.iter().any(|f| f.field == Field::Content));
+            assert!(filters.iter().any(|f| f.field == Field::Tag));
         }
         other => panic!("expected VectorSearch, got {:?}", other),
     }
