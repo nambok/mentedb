@@ -46,6 +46,8 @@ struct ServerConfig {
     llm_api_key: Option<String>,
     llm_model: Option<String>,
     llm_base_url: Option<String>,
+    /// AWS region for the Bedrock provider (MENTEDB_LLM_REGION / AWS_REGION).
+    llm_region: Option<String>,
     extraction_quality_threshold: Option<f32>,
     extraction_dedup_threshold: Option<f32>,
     embedding_provider: Option<String>,
@@ -64,6 +66,7 @@ fn parse_args() -> ServerConfig {
     let mut llm_api_key: Option<String> = None;
     let mut llm_model: Option<String> = None;
     let mut llm_base_url: Option<String> = None;
+    let mut llm_region: Option<String> = None;
     let mut extraction_quality_threshold: Option<f32> = None;
     let mut extraction_dedup_threshold: Option<f32> = None;
     let mut embedding_provider: Option<String> = None;
@@ -171,6 +174,15 @@ fn parse_args() -> ServerConfig {
                     std::process::exit(1);
                 }
             }
+            "--llm-region" => {
+                if i + 1 < args.len() {
+                    llm_region = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --llm-region requires a value");
+                    std::process::exit(1);
+                }
+            }
             "--embedding-provider" => {
                 if i + 1 < args.len() {
                     embedding_provider = Some(args[i + 1].clone());
@@ -228,6 +240,12 @@ fn parse_args() -> ServerConfig {
     {
         llm_base_url = Some(v);
     }
+    // Bedrock region: MENTEDB_LLM_REGION takes precedence, then AWS_REGION.
+    if llm_region.is_none()
+        && let Ok(v) = env::var("MENTEDB_LLM_REGION").or_else(|_| env::var("AWS_REGION"))
+    {
+        llm_region = Some(v);
+    }
     if !auto_extract && let Ok(v) = env::var("MENTEDB_AUTO_EXTRACT") {
         auto_extract = v == "true" || v == "1";
     }
@@ -263,6 +281,7 @@ fn parse_args() -> ServerConfig {
         llm_api_key,
         llm_model,
         llm_base_url,
+        llm_region,
         extraction_quality_threshold,
         extraction_dedup_threshold,
         embedding_provider,
@@ -524,9 +543,22 @@ fn build_extraction_config(config: &ServerConfig) -> Option<ExtractionConfig> {
         "openai" => LlmProvider::OpenAI,
         "anthropic" => LlmProvider::Anthropic,
         "ollama" => LlmProvider::Ollama,
+        #[cfg(feature = "bedrock")]
+        "bedrock" => LlmProvider::Bedrock,
+        #[cfg(not(feature = "bedrock"))]
+        "bedrock" => {
+            eprintln!(
+                "WARNING: LLM provider 'bedrock' requires the server to be built with \
+                 --features bedrock; extraction disabled"
+            );
+            return None;
+        }
         "none" | "" => return None,
         other => {
-            eprintln!("WARNING: Unknown LLM provider '{other}', extraction disabled");
+            eprintln!(
+                "WARNING: Unknown LLM provider '{other}' (expected one of: openai, anthropic, \
+                 ollama, bedrock [needs --features bedrock], none), extraction disabled"
+            );
             return None;
         }
     };
@@ -545,6 +577,7 @@ fn build_extraction_config(config: &ServerConfig) -> Option<ExtractionConfig> {
         api_key: config.llm_api_key.clone(),
         api_url,
         model,
+        region: config.llm_region.clone(),
         max_extractions_per_conversation: 50,
         quality_threshold: config.extraction_quality_threshold.unwrap_or(0.7),
         deduplication_threshold: config.extraction_dedup_threshold.unwrap_or(0.85),

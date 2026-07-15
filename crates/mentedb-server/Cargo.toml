@@ -38,6 +38,10 @@ default = []
 # Bundle the local Candle embedding model (all-MiniLM-L6-v2) so the server has
 # zero-config semantic search. Enabled in release/Docker builds.
 local-embeddings = ["mentedb-embedding/local"]
+# Native AWS Bedrock (Anthropic Claude) LLM extraction, signed with SigV4.
+# Enables MENTEDB_LLM_PROVIDER=bedrock. Credentials come from the AWS
+# environment; region from MENTEDB_LLM_REGION / AWS_REGION.
+bedrock = ["mentedb-extraction/bedrock"]
 
 [build-dependencies]
 tonic-build = "0.13"

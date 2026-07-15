@@ -2336,12 +2336,15 @@ dependencies = [
 name = "mentedb-extraction"
 version = "0.13.1"
 dependencies = [
+ "chrono",
+ "hmac",
  "mentedb-cognitive",
  "mentedb-core",
  "mentedb-embedding",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

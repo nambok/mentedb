@@ -1,6 +1,139 @@
 use crate::config::{ExtractionConfig, LlmProvider};
 use crate::error::ExtractionError;
 
+/// AWS Bedrock SigV4 signing for the Anthropic Messages API on Bedrock.
+///
+/// This ports the hand-rolled SigV4 signer from `mentedb-embedding`'s
+/// `bedrock_provider` (which signs a synchronous `ureq` call) to produce the
+/// headers for an asynchronous `reqwest` request. Credentials are reused from
+/// `mentedb_embedding::AwsCredentials`. Only compiled with the `bedrock`
+/// feature.
+#[cfg(feature = "bedrock")]
+mod bedrock_sig {
+    use hmac::{Hmac, Mac};
+    use mentedb_embedding::AwsCredentials;
+    use sha2::{Digest, Sha256};
+
+    type HmacSha256 = Hmac<Sha256>;
+
+    const SERVICE: &str = "bedrock";
+
+    fn hex(bytes: &[u8]) -> String {
+        let mut s = String::with_capacity(bytes.len() * 2);
+        for b in bytes {
+            s.push_str(&format!("{b:02x}"));
+        }
+        s
+    }
+
+    fn sha256_hex(data: &[u8]) -> String {
+        hex(&Sha256::digest(data))
+    }
+
+    fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
+        let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+        mac.update(data);
+        mac.finalize().into_bytes().to_vec()
+    }
+
+    /// SigV4 signing key: HMAC chain over date, region, service, "aws4_request".
+    fn signing_key(secret: &str, datestamp: &str, region: &str, service: &str) -> Vec<u8> {
+        let k_date = hmac_sha256(format!("AWS4{secret}").as_bytes(), datestamp.as_bytes());
+        let k_region = hmac_sha256(&k_date, region.as_bytes());
+        let k_service = hmac_sha256(&k_region, service.as_bytes());
+        hmac_sha256(&k_service, b"aws4_request")
+    }
+
+    /// URI-encode a single path segment per SigV4 rules (unreserved chars pass
+    /// through; everything else, including the `:` in a model id, is percent
+    /// encoded). The request URL and the signed canonical URI must match.
+    fn uri_encode_segment(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        for b in s.bytes() {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+                out.push(b as char);
+            } else {
+                out.push_str(&format!("%{b:02X}"));
+            }
+        }
+        out
+    }
+
+    /// A fully signed Bedrock request, ready to hand to `reqwest`.
+    pub(super) struct SignedRequest {
+        pub url: String,
+        pub body: Vec<u8>,
+        /// Header (name, value) pairs to set on the request. Includes
+        /// `Authorization`, `X-Amz-Date`, `X-Amz-Content-Sha256`, and
+        /// `X-Amz-Security-Token` when a session token is present.
+        pub headers: Vec<(&'static str, String)>,
+    }
+
+    /// Build and SigV4-sign a Bedrock InvokeModel request for the given region,
+    /// model, and JSON body. `amzdate`/`datestamp` are passed in (rather than
+    /// read from the clock) so this is deterministically testable; the live
+    /// caller passes the current UTC time.
+    pub(super) fn build_signed_request(
+        region: &str,
+        model: &str,
+        body: Vec<u8>,
+        creds: &AwsCredentials,
+        amzdate: &str,
+        datestamp: &str,
+    ) -> SignedRequest {
+        let host = format!("bedrock-runtime.{region}.amazonaws.com");
+        // Sign the percent-encoded path; send the raw path. AWS re-encodes the
+        // received path the same way, so the signatures match (this is what the
+        // AWS SDKs do for model ids containing ':').
+        let canonical_uri = format!("/model/{}/invoke", uri_encode_segment(model));
+        let url = format!("https://{host}/model/{model}/invoke");
+
+        let payload_hash = sha256_hex(&body);
+
+        let mut signed: Vec<(String, String)> = vec![
+            ("host".to_string(), host.clone()),
+            ("x-amz-content-sha256".to_string(), payload_hash.clone()),
+            ("x-amz-date".to_string(), amzdate.to_string()),
+        ];
+        if let Some(token) = &creds.session_token {
+            signed.push(("x-amz-security-token".to_string(), token.clone()));
+        }
+        signed.sort_by(|a, b| a.0.cmp(&b.0));
+        let canonical_headers: String = signed.iter().map(|(k, v)| format!("{k}:{v}\n")).collect();
+        let signed_headers = signed
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect::<Vec<_>>()
+            .join(";");
+
+        let canonical_request = format!(
+            "POST\n{canonical_uri}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+        );
+        let scope = format!("{datestamp}/{region}/{SERVICE}/aws4_request");
+        let string_to_sign = format!(
+            "AWS4-HMAC-SHA256\n{amzdate}\n{scope}\n{}",
+            sha256_hex(canonical_request.as_bytes())
+        );
+        let key = signing_key(&creds.secret_access_key, datestamp, region, SERVICE);
+        let signature = hex(&hmac_sha256(&key, string_to_sign.as_bytes()));
+        let authorization = format!(
+            "AWS4-HMAC-SHA256 Credential={}/{scope}, SignedHeaders={signed_headers}, Signature={signature}",
+            creds.access_key_id
+        );
+
+        let mut headers: Vec<(&'static str, String)> = vec![
+            ("Authorization", authorization),
+            ("X-Amz-Date", amzdate.to_string()),
+            ("X-Amz-Content-Sha256", payload_hash),
+        ];
+        if let Some(token) = &creds.session_token {
+            headers.push(("X-Amz-Security-Token", token.clone()));
+        }
+
+        SignedRequest { url, body, headers }
+    }
+}
+
 /// Classify an HTTP error response into a specific ExtractionError variant.
 fn classify_api_error(
     status: reqwest::StatusCode,
@@ -43,10 +176,34 @@ pub struct HttpExtractionProvider {
 
 impl HttpExtractionProvider {
     pub fn new(config: ExtractionConfig) -> Result<Self, ExtractionError> {
-        if config.provider != LlmProvider::Ollama && config.api_key.is_none() {
+        // Ollama needs no auth; Bedrock authenticates with AWS credentials from
+        // the environment (verified below), not an api_key. Every other
+        // provider requires an api_key.
+        let needs_api_key = !matches!(config.provider, LlmProvider::Ollama | LlmProvider::Bedrock);
+        if needs_api_key && config.api_key.is_none() {
             return Err(ExtractionError::ConfigError(
                 "API key is required for this provider".to_string(),
             ));
+        }
+        if config.provider == LlmProvider::Bedrock {
+            #[cfg(feature = "bedrock")]
+            {
+                // Fail fast with a clear message if AWS creds are missing,
+                // rather than at the first extraction call.
+                mentedb_embedding::AwsCredentials::from_env().map_err(|e| {
+                    ExtractionError::ConfigError(format!(
+                        "Bedrock requires AWS credentials in the environment \
+                         (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, and \
+                         AWS_SESSION_TOKEN for temporary/SSO credentials): {e}"
+                    ))
+                })?;
+            }
+            #[cfg(not(feature = "bedrock"))]
+            {
+                return Err(ExtractionError::ConfigError(
+                    "bedrock support not compiled in (build with --features bedrock)".to_string(),
+                ));
+            }
         }
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
@@ -307,6 +464,119 @@ impl HttpExtractionProvider {
         }
     }
 
+    /// Call AWS Bedrock's Anthropic Messages API, signed with SigV4.
+    ///
+    /// The endpoint is built from `config.region` and `config.model`; the body
+    /// uses the Bedrock Anthropic Messages format. Credentials are read from the
+    /// AWS environment via `mentedb_embedding::AwsCredentials`. Compiled only
+    /// with the `bedrock` feature; otherwise returns a clear ConfigError.
+    #[cfg(feature = "bedrock")]
+    async fn call_bedrock(
+        &self,
+        conversation: &str,
+        system_prompt: &str,
+    ) -> Result<String, ExtractionError> {
+        let region = self
+            .config
+            .region
+            .clone()
+            .unwrap_or_else(crate::config::default_bedrock_region);
+
+        let body_json = serde_json::json!({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 4096,
+            "system": system_prompt,
+            "messages": [
+                { "role": "user", "content": conversation }
+            ]
+        });
+        let body = serde_json::to_vec(&body_json)?;
+
+        let creds = mentedb_embedding::AwsCredentials::from_env().map_err(|e| {
+            ExtractionError::ConfigError(format!(
+                "Bedrock requires AWS credentials in the environment \
+                 (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, and AWS_SESSION_TOKEN \
+                 for temporary/SSO credentials): {e}"
+            ))
+        })?;
+
+        let now = chrono::Utc::now();
+        let amzdate = now.format("%Y%m%dT%H%M%SZ").to_string();
+        let datestamp = now.format("%Y%m%d").to_string();
+
+        let signed = bedrock_sig::build_signed_request(
+            &region,
+            &self.config.model,
+            body,
+            &creds,
+            &amzdate,
+            &datestamp,
+        );
+
+        let mut req = self
+            .client
+            .post(&signed.url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json");
+        for (name, value) in &signed.headers {
+            req = req.header(*name, value);
+        }
+
+        let resp = req.body(signed.body).send().await?;
+
+        let status = resp.status();
+        let text = resp.text().await?;
+
+        if !status.is_success() {
+            return Err(classify_api_error(
+                status,
+                &text,
+                "Bedrock",
+                &self.config.model,
+            ));
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&text)?;
+
+        // Bedrock returns the Anthropic content-block shape: concatenate all
+        // text blocks (mirrors call_anthropic's fallback behavior on empty).
+        let content_text: String = parsed["content"]
+            .as_array()
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter(|block| block["type"].as_str() == Some("text"))
+                    .filter_map(|block| block["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .unwrap_or_default();
+
+        if content_text.trim().is_empty() {
+            tracing::warn!(
+                model = %self.config.model,
+                response_preview = &text[..text.len().min(300)],
+                "No text block found in Bedrock response"
+            );
+            return Ok("{\"memories\": []}".to_string());
+        }
+        Ok(content_text)
+    }
+
+    /// Feature-disabled stub: when built without `--features bedrock`, selecting
+    /// the Bedrock provider fails with a clear, actionable message instead of a
+    /// panic.
+    #[cfg(not(feature = "bedrock"))]
+    async fn call_bedrock(
+        &self,
+        _conversation: &str,
+        _system_prompt: &str,
+    ) -> Result<String, ExtractionError> {
+        Err(ExtractionError::ConfigError(
+            "bedrock support not compiled in (build with --features bedrock)".to_string(),
+        ))
+    }
+
     async fn call_ollama(
         &self,
         conversation: &str,
@@ -409,6 +679,9 @@ impl HttpExtractionProvider {
                     }
                 }
                 LlmProvider::Anthropic => self.call_anthropic(conversation, system_prompt).await,
+                // Bedrock (Anthropic on Bedrock) handles both the JSON and text
+                // paths with one method, like the native Anthropic provider.
+                LlmProvider::Bedrock => self.call_bedrock(conversation, system_prompt).await,
                 LlmProvider::Ollama => self.call_ollama(conversation, system_prompt).await,
             };
 
@@ -543,5 +816,153 @@ impl ExtractionProvider for MockExtractionProvider {
         _system_prompt: &str,
     ) -> Result<String, ExtractionError> {
         Ok(self.response.clone())
+    }
+}
+
+#[cfg(all(test, feature = "bedrock"))]
+mod bedrock_tests {
+    use super::*;
+    use mentedb_embedding::AwsCredentials;
+
+    /// Build the exact JSON body call_bedrock sends, so the test and the real
+    /// code stay in sync on the wire format.
+    fn bedrock_body(system: &str, user: &str) -> Vec<u8> {
+        let body_json = serde_json::json!({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 4096,
+            "system": system,
+            "messages": [
+                { "role": "user", "content": user }
+            ]
+        });
+        serde_json::to_vec(&body_json).unwrap()
+    }
+
+    /// Construct a signed Bedrock request with fixed credentials and timestamp
+    /// (no network call) and assert: the URL is the region/model
+    /// bedrock-runtime path, the body is valid Anthropic-Bedrock JSON carrying
+    /// the system + user message, and an `Authorization: AWS4-HMAC-SHA256`
+    /// header is produced.
+    #[test]
+    fn signed_bedrock_request_has_expected_url_body_and_auth() {
+        let creds = AwsCredentials {
+            access_key_id: "AKIDEXAMPLE".to_string(),
+            secret_access_key: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".to_string(),
+            session_token: None,
+        };
+        let region = "us-east-1";
+        let model = "us.anthropic.claude-haiku-4-5";
+        let system = "You extract memories.";
+        let user = "I switched my database to PostgreSQL.";
+        let body = bedrock_body(system, user);
+
+        let signed = bedrock_sig::build_signed_request(
+            region,
+            model,
+            body,
+            &creds,
+            "20150830T123600Z",
+            "20150830",
+        );
+
+        // URL is the region/model bedrock-runtime InvokeModel path (raw model id).
+        assert_eq!(
+            signed.url,
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-haiku-4-5/invoke"
+        );
+
+        // Body is valid Anthropic-Bedrock JSON with system + user message.
+        let parsed: serde_json::Value = serde_json::from_slice(&signed.body).unwrap();
+        assert_eq!(parsed["anthropic_version"], "bedrock-2023-05-31");
+        assert_eq!(parsed["max_tokens"], 4096);
+        assert_eq!(parsed["system"], system);
+        assert_eq!(parsed["messages"][0]["role"], "user");
+        assert_eq!(parsed["messages"][0]["content"], user);
+
+        // An AWS4-HMAC-SHA256 Authorization header is produced.
+        let auth = signed
+            .headers
+            .iter()
+            .find(|(k, _)| *k == "Authorization")
+            .map(|(_, v)| v.as_str())
+            .expect("Authorization header present");
+        assert!(
+            auth.starts_with("AWS4-HMAC-SHA256 "),
+            "unexpected auth scheme: {auth}"
+        );
+        assert!(auth.contains("Credential=AKIDEXAMPLE/20150830/us-east-1/bedrock/aws4_request"));
+        assert!(auth.contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date"));
+        assert!(auth.contains("Signature="));
+
+        // X-Amz-Date is set; no security token header without a session token.
+        assert!(
+            signed
+                .headers
+                .iter()
+                .any(|(k, v)| *k == "X-Amz-Date" && v == "20150830T123600Z")
+        );
+        assert!(
+            !signed
+                .headers
+                .iter()
+                .any(|(k, _)| *k == "X-Amz-Security-Token")
+        );
+    }
+
+    /// Signing is deterministic for fixed inputs, and a session token adds the
+    /// X-Amz-Security-Token header (and includes it in SignedHeaders).
+    #[test]
+    fn session_token_adds_security_token_header() {
+        let creds = AwsCredentials {
+            access_key_id: "AKIDEXAMPLE".to_string(),
+            secret_access_key: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".to_string(),
+            session_token: Some("FQoGZQ-token".to_string()),
+        };
+        let signed = bedrock_sig::build_signed_request(
+            "us-west-2",
+            "us.anthropic.claude-sonnet-4-6",
+            bedrock_body("sys", "usr"),
+            &creds,
+            "20150830T123600Z",
+            "20150830",
+        );
+
+        let token = signed
+            .headers
+            .iter()
+            .find(|(k, _)| *k == "X-Amz-Security-Token")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(token, Some("FQoGZQ-token"));
+
+        let auth = signed
+            .headers
+            .iter()
+            .find(|(k, _)| *k == "Authorization")
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        // The session token participates in the signed headers.
+        assert!(auth.contains("x-amz-security-token"));
+        // The region flows into the endpoint host.
+        assert!(
+            signed
+                .url
+                .starts_with("https://bedrock-runtime.us-west-2.amazonaws.com/")
+        );
+    }
+
+    /// The config defaults for the Bedrock provider are the Claude-on-Bedrock
+    /// model ids and an empty (region-derived) default URL.
+    #[test]
+    fn bedrock_config_defaults() {
+        let cfg = ExtractionConfig::bedrock("eu-central-1");
+        assert_eq!(cfg.provider, LlmProvider::Bedrock);
+        assert!(cfg.api_key.is_none());
+        assert_eq!(cfg.region.as_deref(), Some("eu-central-1"));
+        assert_eq!(cfg.model, "us.anthropic.claude-haiku-4-5");
+        assert_eq!(LlmProvider::Bedrock.default_url(), "");
+        assert_eq!(
+            LlmProvider::Bedrock.default_reader_model(),
+            "us.anthropic.claude-sonnet-4-6"
+        );
     }
 }

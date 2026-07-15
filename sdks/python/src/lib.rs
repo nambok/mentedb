@@ -5259,12 +5259,17 @@ fn build_extraction_config_from_env(provider_override: Option<&str>) -> PyResult
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1usize);
+    // AWS region for the Bedrock provider (ignored by other providers).
+    let region = std::env::var("MENTEDB_LLM_REGION")
+        .or_else(|_| std::env::var("AWS_REGION"))
+        .ok();
 
     Ok(ExtractionConfig {
         provider,
         api_key,
         api_url,
         model,
+        region,
         max_extractions_per_conversation: 50,
         quality_threshold,
         deduplication_threshold: 0.85,
