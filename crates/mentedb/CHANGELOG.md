@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/nambok/mentedb/compare/mentedb-v0.12.6...mentedb-v0.13.0) - 2026-07-15
+
+### Fixed
+
+- scope enrichment, profile, entity-linking and community detection by agent (full memory isolation) ([#229](https://github.com/nambok/mentedb/pull/229))
+
 ## [0.12.6](https://github.com/nambok/mentedb/compare/mentedb-v0.12.4...mentedb-v0.12.6) - 2026-07-15
 
 ### Fixed
