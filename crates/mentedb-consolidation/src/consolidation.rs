@@ -70,6 +70,12 @@ impl ConsolidationEngine {
 
         for i in 0..n {
             for j in (i + 1)..n {
+                // Never consolidate across owners: memories belonging to different
+                // agents (and agent-owned vs global) must never merge into one, or
+                // one user's content would leak into another's consolidated memory.
+                if memories[i].agent_id != memories[j].agent_id {
+                    continue;
+                }
                 let sim = cosine_similarity(&memories[i].embedding, &memories[j].embedding);
                 if sim > similarity_threshold {
                     union(&mut parent, &mut rank, i, j);
@@ -260,7 +266,8 @@ mod tests {
     fn test_find_candidates_and_consolidate() {
         let engine = ConsolidationEngine::new();
         let m1 = make_memory("topic A info", vec![1.0, 0.0, 0.0]);
-        let m2 = make_memory("topic A data", vec![0.99, 0.1, 0.0]);
+        let mut m2 = make_memory("topic A data", vec![0.99, 0.1, 0.0]);
+        m2.agent_id = m1.agent_id; // same owner: consolidation only merges within an agent
         let m3 = make_memory("topic B info", vec![0.0, 0.0, 1.0]);
 
         let candidates = engine.find_candidates(&[m1.clone(), m2.clone(), m3], 2, 0.9);
@@ -270,5 +277,43 @@ mod tests {
         let consolidated = engine.consolidate(&[m1, m2]);
         assert_eq!(consolidated.new_type, MemoryType::Semantic);
         assert!(!consolidated.combined_embedding.is_empty());
+    }
+
+    #[test]
+    fn find_candidates_never_merges_across_agents() {
+        use mentedb_core::types::AgentId;
+        let engine = ConsolidationEngine::new();
+        let alice = AgentId::new();
+        let bob = AgentId::new();
+
+        // Identical embeddings across owners. Without the owner guard these would
+        // all union into one cross-agent cluster, merging Bob's memory into Alice's.
+        let emb = vec![1.0, 0.0, 0.0];
+        let mut a1 = make_memory("the primary database is postgres", emb.clone());
+        a1.agent_id = alice;
+        let mut a2 = make_memory("the primary database is postgres as well", emb.clone());
+        a2.agent_id = alice;
+        let mut b1 = make_memory("the primary database is postgres", emb.clone());
+        b1.agent_id = bob;
+
+        let mems = vec![a1, a2, b1];
+        let candidates = engine.find_candidates(&mems, 2, 0.5);
+
+        for c in &candidates {
+            let owners: Vec<AgentId> = c
+                .memories
+                .iter()
+                .map(|id| mems.iter().find(|m| m.id == *id).unwrap().agent_id)
+                .collect();
+            assert!(
+                owners.windows(2).all(|w| w[0] == w[1]),
+                "consolidation cluster mixed owners across agents"
+            );
+        }
+        // Same-owner memories still consolidate: isolation is not a black hole.
+        assert!(
+            candidates.iter().any(|c| c.memories.len() == 2),
+            "two memories owned by the same agent should still cluster"
+        );
     }
 }

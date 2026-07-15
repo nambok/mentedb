@@ -1294,6 +1294,16 @@ impl MenteDb {
             ));
         }
 
+        // Never merge across owners. find_candidates already groups by agent, but
+        // if a caller hands us a hand-built mixed cluster, refuse rather than leak
+        // one user's content into another's consolidated memory.
+        let owner = cluster[0].agent_id;
+        if cluster.iter().any(|m| m.agent_id != owner) {
+            return Err(MenteError::Query(
+                "consolidation cluster mixes agents; refusing to merge across owners".into(),
+            ));
+        }
+
         let result = self.consolidation.consolidate(&cluster);
 
         // Create the consolidated memory node.
