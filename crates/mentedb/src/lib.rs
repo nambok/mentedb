@@ -2770,17 +2770,50 @@ impl MenteDb {
         Ok(node_id)
     }
 
-    /// Get the current user profile, if one exists.
+    /// Get the account-level user profile: the one owned by neither a user nor
+    /// an agent (both owner axes nil).
+    ///
+    /// Deterministic. Since enrichment now builds one profile per (user, agent)
+    /// owner pair, an account may hold many; this returns only the shared,
+    /// unowned one, never an arbitrary owner's. A multi-user app that keeps only
+    /// per-owner profiles gets `None` here; use [`user_profile_for`] to read a
+    /// specific owner's, and [`profile_owners`] to list which owners have one.
     pub fn user_profile(&self) -> Option<MemoryNode> {
+        self.user_profile_for(UserId::nil(), AgentId::nil())
+    }
+
+    /// Get the user profile owned by exactly this (`user`, `agent`) pair, if one
+    /// exists. One owner's profile is never returned for another, so a dashboard
+    /// or a per-turn context primer can show the right profile for a scope.
+    pub fn user_profile_for(&self, user: UserId, agent: AgentId) -> Option<MemoryNode> {
         let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
         for pid in &page_ids {
             if let Ok(mem) = self.storage.load_memory(*pid)
+                && mem.user_id == user
+                && mem.agent_id == agent
                 && mem.tags.iter().any(|t| t == "user_profile")
             {
                 return Some(mem);
             }
         }
         None
+    }
+
+    /// List the owner pairs that have a user profile, most recently built first.
+    /// Lets a dashboard enumerate the profiles it can show without scanning
+    /// memory bodies itself.
+    pub fn profile_owners(&self) -> Vec<(UserId, AgentId)> {
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        let mut owners: Vec<(UserId, AgentId, u64)> = Vec::new();
+        for pid in &page_ids {
+            if let Ok(mem) = self.storage.load_memory(*pid)
+                && mem.tags.iter().any(|t| t == "user_profile")
+            {
+                owners.push((mem.user_id, mem.agent_id, mem.created_at));
+            }
+        }
+        owners.sort_by_key(|(_, _, ts)| std::cmp::Reverse(*ts));
+        owners.into_iter().map(|(u, a, _)| (u, a)).collect()
     }
 }
 
@@ -2869,5 +2902,50 @@ mod distinct_owner_tests {
             (ub, agent),
             "same agent, different users are distinct owner pairs"
         );
+    }
+
+    /// A user profile belongs to exactly one (user, agent) owner. Reading one
+    /// owner's profile must never return another's, the account-level
+    /// `user_profile()` must return only the unowned/global one (never an
+    /// arbitrary owner's), and `profile_owners` must enumerate them all. This is
+    /// the fix for the owner-blind `user_profile()` that returned whichever
+    /// profile happened to be scanned first once several owners had one.
+    #[test]
+    fn profile_is_owner_scoped_and_enumerable() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+        let agent = AgentId::new();
+        let alice = UserId::new();
+        let bob = UserId::new();
+
+        db.store_user_profile("alice's profile", alice, agent)
+            .unwrap();
+        db.store_user_profile("bob's profile", bob, agent).unwrap();
+        db.store_user_profile("the shared profile", UserId::nil(), AgentId::nil())
+            .unwrap();
+
+        // Each owner reads exactly its own, never the other's.
+        assert_eq!(
+            db.user_profile_for(alice, agent).unwrap().content,
+            "alice's profile"
+        );
+        assert_eq!(
+            db.user_profile_for(bob, agent).unwrap().content,
+            "bob's profile"
+        );
+
+        // The account-level accessor returns only the unowned/global profile,
+        // deterministically, not alice's or bob's.
+        assert_eq!(db.user_profile().unwrap().content, "the shared profile");
+
+        // An owner with no profile gets None, never a fallback to someone else's.
+        assert!(db.user_profile_for(UserId::new(), agent).is_none());
+
+        // Every owner with a profile is enumerable.
+        let owners = db.profile_owners();
+        assert_eq!(owners.len(), 3);
+        assert!(owners.contains(&(alice, agent)));
+        assert!(owners.contains(&(bob, agent)));
+        assert!(owners.contains(&(UserId::nil(), AgentId::nil())));
     }
 }
