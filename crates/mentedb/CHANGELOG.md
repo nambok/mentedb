@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/nambok/mentedb/compare/mentedb-v0.13.1...mentedb-v0.14.0) - 2026-07-15
+
+### Added
+
+- add AWS Bedrock as a self-host LLM provider (feature-gated, SigV4) ([#234](https://github.com/nambok/mentedb/pull/234))
+
+### Other
+
+- release v0.14.0 ([#233](https://github.com/nambok/mentedb/pull/233))
+
 ## [0.13.1](https://github.com/nambok/mentedb/compare/mentedb-v0.12.6...mentedb-v0.13.1) - 2026-07-15
 
 ### Fixed
