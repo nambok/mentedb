@@ -9,6 +9,18 @@ from mentedb._mentedb_python import MenteDB as _MenteDB
 from mentedb.types import EdgeType, MemoryType
 
 
+def _ns(obj):
+    """Recursively turn dicts into attribute-accessible namespaces so that,
+    for example, ``result.context[0].content`` works. Mirrors the hosted
+    client, keeping the embedded and hosted process_turn results identical.
+    """
+    if isinstance(obj, dict):
+        return SimpleNamespace(**{k: _ns(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return [_ns(v) for v in obj]
+    return obj
+
+
 class MenteDB:
     """The mind database for AI agents.
 
@@ -71,7 +83,7 @@ class MenteDB:
             session_id,
             user_id,
         )
-        return SimpleNamespace(**result) if isinstance(result, dict) else result
+        return _ns(result) if isinstance(result, dict) else result
 
     def store(
         self,
