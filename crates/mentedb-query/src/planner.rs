@@ -76,18 +76,13 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
     // Check for SimilarTo operator in filters — implies vector search via text embedding
     if let Some(sim_filter) = recall.filters.iter().find(|f| f.op == Operator::SimilarTo) {
         if let Value::Text(ref _text) = sim_filter.value {
-            // The text will need to be embedded at execution time; we still emit VectorSearch
-            // with an empty query vec — the executor is responsible for embedding the text.
-            let remaining: Vec<Filter> = recall
-                .filters
-                .iter()
-                .filter(|f| f.op != Operator::SimilarTo)
-                .cloned()
-                .collect();
+            // The text is embedded at execution time (no embedder here), so keep
+            // ALL filters, including the SimilarTo one: the executor reads its
+            // text to build the query vector and applies the rest (type, tag).
             return Ok(QueryPlan::VectorSearch {
-                query: Vec::new(), // placeholder — executor embeds text
+                query: Vec::new(), // placeholder — executor embeds the SimilarTo text
                 k: limit,
-                filters: remaining,
+                filters: recall.filters.clone(),
             });
         }
         // SimilarTo with non-text value doesn't make sense
