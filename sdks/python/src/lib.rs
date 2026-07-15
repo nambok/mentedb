@@ -4611,7 +4611,7 @@ impl MenteDB {
     /// cache_hit, inference_actions, detected_actions, proactive_recalls,
     /// correction_id, sentiment, phantom_count, contradiction_count,
     /// predicted_topics, facts_extracted, edges_created.
-    #[pyo3(signature = (user_message, assistant_response=None, turn_id=0, project_context=None, agent_id=None, session_id=None))]
+    #[pyo3(signature = (user_message, assistant_response=None, turn_id=0, project_context=None, agent_id=None, session_id=None, user_id=None))]
     #[allow(clippy::too_many_arguments)]
     fn process_turn(
         &self,
@@ -4622,6 +4622,7 @@ impl MenteDB {
         project_context: Option<String>,
         agent_id: Option<&str>,
         session_id: Option<String>,
+        user_id: Option<&str>,
     ) -> PyResult<Py<PyAny>> {
         let db = self
             .db
@@ -4633,12 +4634,20 @@ impl MenteDB {
             None => None,
         };
 
+        // Orthogonal user owner axis; defaults to None (nil / global user) so
+        // existing callers that pass only agent_id are unaffected.
+        let uid = match user_id {
+            Some(s) => Some(parse_uuid(s)?),
+            None => None,
+        };
+
         let input = ProcessTurnInput {
             user_message: user_message.to_string(),
             assistant_response,
             turn_id,
             project_context,
             agent_id: aid,
+            user_id: uid,
             session_id,
         };
 

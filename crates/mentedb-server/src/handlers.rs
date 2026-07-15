@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::error::ApiError;
 use crate::state::AppState;
-use mentedb_core::types::{AgentId, MemoryId, SpaceId};
+use mentedb_core::types::{AgentId, MemoryId, SpaceId, UserId};
 
 // ---------------------------------------------------------------------------
 // GET /v1/health
@@ -121,6 +121,7 @@ pub async fn store_memory(
     let node = MemoryNode {
         id,
         agent_id,
+        user_id: UserId::nil(),
         memory_type,
         embedding,
         content: content.clone(),
@@ -453,6 +454,7 @@ async fn run_extraction(
         let node = MemoryNode {
             id,
             agent_id,
+            user_id: UserId::nil(),
             memory_type,
             embedding: vec![],
             content: memory.content.clone(),

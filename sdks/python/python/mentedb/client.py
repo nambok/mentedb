@@ -48,6 +48,7 @@ class MenteDB:
         project_context: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
+        user_id: str | None = None,
     ):
         """Process a conversation turn through the full cognitive pipeline.
 
@@ -56,6 +57,10 @@ class MenteDB:
         attention-ordered context plus what was learned. Returns an object with
         ``context`` (memories for your prompt), ``facts_extracted``,
         ``contradiction_count``, and more.
+
+        ``agent_id`` and ``user_id`` are orthogonal owner scopes: the turn's
+        memories are owned by that (user_id, agent_id), and recall for one owner
+        never returns another's. Leave both unset for a single-owner (global) app.
         """
         result = self._db.process_turn(
             user_message,
@@ -64,6 +69,7 @@ class MenteDB:
             project_context,
             agent_id,
             session_id,
+            user_id,
         )
         return SimpleNamespace(**result) if isinstance(result, dict) else result
 

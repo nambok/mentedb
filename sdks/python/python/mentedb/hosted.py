@@ -128,6 +128,7 @@ class MenteDBClient:
         project_context: Optional[str] = None,
         agent_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ):
         """Process one conversation turn through the managed cognitive pipeline.
 
@@ -135,6 +136,9 @@ class MenteDBClient:
         runs hybrid recall, extracts facts, and returns attention-ordered
         ``context`` for your next prompt (each item exposes ``.content``), plus the
         other fields the service reports.
+
+        ``agent_id`` and ``user_id`` are orthogonal owner scopes: recall for one
+        (user_id, agent_id) never returns another owner's memories.
         """
         payload: dict[str, Any] = {
             "user_message": user_message,
@@ -147,6 +151,8 @@ class MenteDBClient:
             payload["agent_id"] = agent_id
         if session_id is not None:
             payload["session_id"] = session_id
+        if user_id is not None:
+            payload["user_id"] = user_id
         return _ns(self._post("/v1/process_turn", payload))
 
     def search(

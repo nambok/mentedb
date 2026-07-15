@@ -107,6 +107,7 @@ fn other_users_memory_never_leaks_into_a_turn() {
         turn_id: 0,
         project_context: None,
         agent_id: Some(bob),
+        user_id: None,
         session_id: None,
     };
     let bob_result = db.process_turn(&input, &mut delta).unwrap();
@@ -139,6 +140,7 @@ fn scoped_user_still_sees_own_and_global() {
             false,
             None,
             Some(bob),
+            None,
         )
         .unwrap();
     let ids: Vec<MemoryId> = hits.iter().map(|(id, _)| *id).collect();
@@ -173,6 +175,7 @@ fn scoped_recall_excludes_other_users_even_as_top_match() {
             false,
             None,
             Some(bob),
+            None,
         )
         .unwrap();
     let ids: Vec<MemoryId> = hits.iter().map(|(id, _)| *id).collect();
@@ -206,7 +209,7 @@ fn enrichment_helpers_are_owner_scoped() {
     );
     db.store(b).unwrap();
 
-    let alice_facts = db.profile_facts(alice);
+    let alice_facts = db.profile_facts(UserId::nil(), alice);
     assert!(
         alice_facts.iter().any(|f| f.contains("falcons")),
         "alice sees her own fact"
@@ -216,7 +219,7 @@ fn enrichment_helpers_are_owner_scoped() {
         "alice must NOT see bob's fact in her profile facts"
     );
 
-    let bob_facts = db.profile_facts(bob);
+    let bob_facts = db.profile_facts(UserId::nil(), bob);
     assert!(
         !bob_facts.iter().any(|f| f.contains("falcons")),
         "bob must NOT see alice's fact"
@@ -224,5 +227,107 @@ fn enrichment_helpers_are_owner_scoped() {
     assert!(
         bob_facts.iter().any(|f| f.contains("turtles")),
         "bob sees his own fact"
+    );
+}
+
+/// The user axis is orthogonal to the agent axis: under one shared agent, two
+/// different users must never see each other's memories. This is the core
+/// user-isolation security boundary.
+#[test]
+fn user_scoping_is_orthogonal_to_agent() {
+    // Same agent id, different users: user A must never see user B's memory.
+    let (db, _dir) = open_db();
+    let agent = AgentId::new();
+    let ua = UserId::new();
+    let ub = UserId::new();
+    let a = MemoryNode::new(
+        agent,
+        MemoryType::Semantic,
+        "user A secret plan".into(),
+        emb("user A secret plan"),
+    )
+    .with_user_id(ua);
+    let a_id = a.id;
+    db.store(a).unwrap();
+    let b = MemoryNode::new(
+        agent,
+        MemoryType::Semantic,
+        "user B secret plan".into(),
+        emb("user B secret plan"),
+    )
+    .with_user_id(ub);
+    db.store(b).unwrap();
+    // Recall scoped to (user A, agent): sees A's, never B's.
+    let hits = db
+        .recall_hybrid_scoped_at_mode(
+            &emb("secret plan"),
+            Some("secret plan"),
+            10,
+            now_us(),
+            None,
+            false,
+            None,
+            Some(agent),
+            Some(ua),
+        )
+        .unwrap();
+    let ids: Vec<MemoryId> = hits.iter().map(|(id, _)| *id).collect();
+    assert!(ids.contains(&a_id), "user A sees own memory");
+    // B's memory (same agent, different user) must be excluded:
+    assert!(
+        hits.iter()
+            .filter_map(|(id, _)| db.get_memory(*id).ok())
+            .all(|m| !m.content.contains("user B")),
+        "user A must never see user B's memory under the same agent"
+    );
+}
+
+/// The enrichment/profile path is also user-orthogonal: `profile_facts` scoped
+/// to (user, agent) must never surface another user's facts under a shared
+/// agent, so one user's profile is never built from another's knowledge.
+#[test]
+fn profile_facts_are_orthogonal_to_agent() {
+    let (db, _dir) = open_db();
+    let agent = AgentId::new();
+    let ua = UserId::new();
+    let ub = UserId::new();
+
+    let a = MemoryNode::new(
+        agent,
+        MemoryType::Semantic,
+        "user A likes falcons".into(),
+        emb("user A likes falcons"),
+    )
+    .with_user_id(ua);
+    db.store(a).unwrap();
+    let b = MemoryNode::new(
+        agent,
+        MemoryType::Semantic,
+        "user B likes turtles".into(),
+        emb("user B likes turtles"),
+    )
+    .with_user_id(ub);
+    db.store(b).unwrap();
+
+    // User A's profile facts under the shared agent: own fact only.
+    let a_facts = db.profile_facts(ua, agent);
+    assert!(
+        a_facts.iter().any(|f| f.contains("falcons")),
+        "user A sees own fact"
+    );
+    assert!(
+        !a_facts.iter().any(|f| f.contains("turtles")),
+        "user A must NOT see user B's fact under the same agent"
+    );
+
+    // And the reverse.
+    let b_facts = db.profile_facts(ub, agent);
+    assert!(
+        b_facts.iter().any(|f| f.contains("turtles")),
+        "user B sees own fact"
+    );
+    assert!(
+        !b_facts.iter().any(|f| f.contains("falcons")),
+        "user B must NOT see user A's fact under the same agent"
     );
 }

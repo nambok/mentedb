@@ -4,7 +4,7 @@ use mentedb_consolidation::{
 };
 use mentedb_core::MemoryNode;
 use mentedb_core::memory::MemoryType;
-use mentedb_core::types::{AgentId, MemoryId, SpaceId};
+use mentedb_core::types::{AgentId, MemoryId, SpaceId, UserId};
 use std::collections::HashMap;
 
 const DAY_US: u64 = 24 * 3600 * 1_000_000;
@@ -13,6 +13,7 @@ fn make_memory(content: &str, embedding: Vec<f32>) -> MemoryNode {
     MemoryNode {
         id: MemoryId::new(),
         agent_id: AgentId::new(),
+        user_id: UserId::nil(),
         memory_type: MemoryType::Episodic,
         embedding,
         content: content.to_string(),

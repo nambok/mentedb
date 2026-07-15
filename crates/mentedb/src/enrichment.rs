@@ -13,7 +13,7 @@ use std::collections::HashSet;
 use mentedb_cognitive::llm::{CognitiveLlmService, LlmJudge};
 use mentedb_core::MemoryNode;
 use mentedb_core::memory::MemoryType;
-use mentedb_core::types::AgentId;
+use mentedb_core::types::{AgentId, UserId};
 use mentedb_embedding::provider::EmbeddingProvider;
 use mentedb_extraction::{ExtractionConfig, ExtractionPipeline, HttpExtractionProvider};
 
@@ -63,17 +63,23 @@ pub async fn run_enrichment<J: LlmJudge>(
 ) -> EnrichmentResult {
     let mut result = EnrichmentResult::default();
 
-    // Enrichment runs once per owning agent (nil / global included, as just
-    // another owner). Each pass reads and writes only that owner's memories, so
-    // one user's derived knowledge (extracted facts, entities, communities,
-    // profile) never mixes with another's.
-    for agent in db.distinct_agent_ids() {
+    // Enrichment runs once per distinct (user, agent) owner pair (nil / global
+    // included on either axis, as just another owner). Each pass reads and
+    // writes only that pair's memories, so one owner's derived knowledge
+    // (extracted facts, entities, communities, profile) never mixes with
+    // another's across either the user or the agent axis.
+    for (user, agent) in db.distinct_owner_pairs() {
         if !skip_extraction {
-            let candidates = db.enrichment_candidates(agent);
+            let candidates = db.enrichment_candidates(user, agent);
             if candidates.is_empty() {
-                tracing::debug!(?agent, "enrichment: no candidates for owner, skipping");
+                tracing::debug!(
+                    ?user,
+                    ?agent,
+                    "enrichment: no candidates for owner, skipping"
+                );
             } else {
                 tracing::info!(
+                    ?user,
                     ?agent,
                     candidates = candidates.len(),
                     "starting sleeptime enrichment for owner"
@@ -108,8 +114,9 @@ pub async fn run_enrichment<J: LlmJudge>(
                     let source_ids: Vec<mentedb_core::types::MemoryId> =
                         batch.iter().map(|m| m.id).collect();
 
-                    // Get existing memories for dedup, scoped to this owner (plus
-                    // global) so dedup never compares against another user's data.
+                    // Get existing memories for dedup, scoped to this (user,
+                    // agent) pair (plus global) so dedup never compares against
+                    // another owner's data on either axis.
                     let existing: Vec<MemoryNode> = if let Ok(Some(emb)) =
                         db.embed_text(&conversation[..conversation.len().min(500)])
                     {
@@ -126,6 +133,7 @@ pub async fn run_enrichment<J: LlmJudge>(
                             false,
                             None,
                             Some(agent),
+                            Some(user),
                         )
                         .unwrap_or_default()
                         .into_iter()
@@ -163,7 +171,8 @@ pub async fn run_enrichment<J: LlmJudge>(
                                     mem_type,
                                     mem.content.clone(),
                                     embedding,
-                                );
+                                )
+                                .with_user_id(user);
                                 node.tags = mem.tags.clone();
                                 node.confidence = mem.confidence;
                                 nodes.push(node);
@@ -185,7 +194,8 @@ pub async fn run_enrichment<J: LlmJudge>(
                                     MemoryType::Semantic,
                                     content,
                                     embedding,
-                                );
+                                )
+                                .with_user_id(user);
                                 let name_lower = entity.name.to_lowercase();
                                 node.tags.push(format!("entity:{}", name_lower));
                                 node.tags
@@ -221,8 +231,8 @@ pub async fn run_enrichment<J: LlmJudge>(
             tracing::info!("enrichment: skipping Phase 1 extraction (skip_extraction=true)");
         }
 
-        // ── Phase 2: Entity Linking (this owner only) ──
-        let sync_link_result = match db.link_entities_for(agent) {
+        // ── Phase 2: Entity Linking (this owner pair only) ──
+        let sync_link_result = match db.link_entities_for(user, agent) {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!(error = %e, "enrichment: sync entity linking failed");
@@ -233,19 +243,19 @@ pub async fn run_enrichment<J: LlmJudge>(
         result.edges_created += sync_link_result.edges_created;
 
         if let Some(llm) = cognitive_llm {
-            let llm_link = run_llm_entity_linking(db, llm, agent).await;
+            let llm_link = run_llm_entity_linking(db, llm, user, agent).await;
             result.llm_linked += llm_link.linked;
             result.edges_created += llm_link.edges_created;
         }
 
-        // ── Phase 3: Community Detection (this owner only) ──
+        // ── Phase 3: Community Detection (this owner pair only) ──
         if let Some(llm) = cognitive_llm {
-            result.communities_created += run_community_detection(db, llm, agent).await;
+            result.communities_created += run_community_detection(db, llm, user, agent).await;
         }
 
-        // ── Phase 4: User Model (this owner only) ──
+        // ── Phase 4: User Model (this owner pair only) ──
         if let Some(llm) = cognitive_llm
-            && run_user_model(db, llm, agent).await
+            && run_user_model(db, llm, user, agent).await
         {
             result.user_model_updated = true;
         }
@@ -270,14 +280,16 @@ pub async fn run_enrichment<J: LlmJudge>(
     result
 }
 
-/// Phase 2b: LLM entity resolution for unresolved entities owned by `agent`.
+/// Phase 2b: LLM entity resolution for unresolved entities owned by exactly
+/// this (`user`, `agent`) pair.
 async fn run_llm_entity_linking<J: LlmJudge>(
     db: &MenteDb,
     llm: &CognitiveLlmService<J>,
+    user: UserId,
     agent: AgentId,
 ) -> crate::EntityLinkResult {
-    let all_entities_with_context = db.entity_names_with_context(agent);
-    let unresolved = db.unresolved_entity_names(agent);
+    let all_entities_with_context = db.entity_names_with_context(user, agent);
+    let unresolved = db.unresolved_entity_names(user, agent);
 
     if unresolved.is_empty() {
         return crate::EntityLinkResult::default();
@@ -328,7 +340,7 @@ async fn run_llm_entity_linking<J: LlmJudge>(
 
     let separations: Vec<crate::EntitySeparation> = Vec::new();
 
-    match db.apply_entity_link_resolutions(&resolutions, &separations, agent) {
+    match db.apply_entity_link_resolutions(&resolutions, &separations, user, agent) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "enrichment: failed to apply entity resolutions");
@@ -337,16 +349,17 @@ async fn run_llm_entity_linking<J: LlmJudge>(
     }
 }
 
-/// Phase 3: Community detection — group this owner's entities by category,
-/// generate LLM summaries owned by `agent`.
+/// Phase 3: Community detection — group this owner pair's entities by category,
+/// generate LLM summaries owned by exactly this (`user`, `agent`) pair.
 async fn run_community_detection<J: LlmJudge>(
     db: &MenteDb,
     llm: &CognitiveLlmService<J>,
+    user: UserId,
     agent: AgentId,
 ) -> usize {
-    let communities = db.entity_communities(agent);
+    let communities = db.entity_communities(user, agent);
     let existing_summaries: HashSet<String> = db
-        .community_summaries(agent)
+        .community_summaries(user, agent)
         .iter()
         .flat_map(|m| {
             m.tags
@@ -372,7 +385,13 @@ async fn run_community_detection<J: LlmJudge>(
             Ok(summary) => {
                 let member_names: Vec<String> =
                     entity_pairs.iter().map(|(n, _)| n.clone()).collect();
-                match db.store_community_summary(category, &summary.summary, &member_names, agent) {
+                match db.store_community_summary(
+                    category,
+                    &summary.summary,
+                    &member_names,
+                    user,
+                    agent,
+                ) {
                     Ok(_) => {
                         created += 1;
                         tracing::info!(category = %category, members = members.len(), "community summary created");
@@ -392,15 +411,17 @@ async fn run_community_detection<J: LlmJudge>(
 }
 
 /// Phase 4: User model generation — synthesize an always-scoped profile for
-/// `agent` from that owner's facts and community summaries only.
+/// exactly this (`user`, `agent`) pair from that owner's facts and community
+/// summaries only.
 async fn run_user_model<J: LlmJudge>(
     db: &MenteDb,
     llm: &CognitiveLlmService<J>,
+    user: UserId,
     agent: AgentId,
 ) -> bool {
-    let facts = db.profile_facts(agent);
+    let facts = db.profile_facts(user, agent);
     let community_texts: Vec<String> = db
-        .community_summaries(agent)
+        .community_summaries(user, agent)
         .iter()
         .map(|m| m.content.clone())
         .collect();
@@ -410,7 +431,7 @@ async fn run_user_model<J: LlmJudge>(
     }
 
     match llm.generate_user_profile(&facts, &community_texts).await {
-        Ok(profile) => match db.store_user_profile(&profile.profile, agent) {
+        Ok(profile) => match db.store_user_profile(&profile.profile, user, agent) {
             Ok(_) => {
                 tracing::info!("user profile updated");
                 true

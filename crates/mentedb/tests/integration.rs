@@ -1489,6 +1489,7 @@ mod injection_attention {
             max_items: 6,
             max_episodic: 2,
             agent_id: None,
+            user_id: None,
         };
         let out = db.recall_for_injection(&query).unwrap();
 
@@ -1573,6 +1574,7 @@ mod injection_attention {
             max_items: 1,
             max_episodic: 0,
             agent_id: None,
+            user_id: None,
         };
         let out = db.recall_for_injection(&query).unwrap();
         let relevant: Vec<_> = out
@@ -1594,11 +1596,11 @@ fn test_store_user_profile_bumps_updated_timestamp() {
     // showed "updated N days ago" forever.
     let dir = tempfile::tempdir().unwrap();
     let db = MenteDb::open(dir.path()).unwrap();
-    db.store_user_profile("first version", AgentId::nil())
+    db.store_user_profile("first version", UserId::nil(), AgentId::nil())
         .unwrap();
     let t1 = db.user_profile().unwrap().created_at;
     std::thread::sleep(std::time::Duration::from_millis(2));
-    db.store_user_profile("second version", AgentId::nil())
+    db.store_user_profile("second version", UserId::nil(), AgentId::nil())
         .unwrap();
     let node = db.user_profile().unwrap();
     assert_eq!(

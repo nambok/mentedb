@@ -27,7 +27,7 @@ use std::collections::HashSet;
 
 use mentedb_core::error::MenteResult;
 use mentedb_core::memory::{AttributeValue, MemoryNode, MemoryType};
-use mentedb_core::types::{AgentId, MemoryId};
+use mentedb_core::types::{AgentId, MemoryId, UserId};
 
 use crate::MenteDb;
 
@@ -88,6 +88,10 @@ pub struct InjectionQuery<'a> {
     /// Restrict recall to this agent's memories plus shared (nil owned)
     /// knowledge. None recalls globally.
     pub agent_id: Option<AgentId>,
+    /// Restrict recall to this user's memories plus shared (nil owned)
+    /// knowledge, orthogonal to `agent_id`. None recalls globally on the user
+    /// axis. A memory is injectable only when visible on BOTH axes.
+    pub user_id: Option<UserId>,
 }
 
 /// Why an item was selected, for introspection and client display.
@@ -191,6 +195,7 @@ impl MenteDb {
                 false,
                 None,
                 query.agent_id,
+                query.user_id,
             )
             .unwrap_or_default();
 
@@ -289,6 +294,7 @@ impl MenteDb {
                 && has_tag(&node, "scope:always")
                 && !excluded.contains(&node.id)
                 && crate::agent_visible(node.agent_id, query.agent_id)
+                && crate::user_visible(node.user_id, query.user_id)
             {
                 result.push(InjectionCandidate {
                     node,

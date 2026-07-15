@@ -338,6 +338,7 @@ impl MenteDB {
     /// Returns context, stored memories, pain warnings, detected actions,
     /// sentiment, phantom count, predictions, and more.
     #[napi]
+    #[allow(clippy::too_many_arguments)]
     pub fn process_turn(
         &self,
         user_message: String,
@@ -346,8 +347,16 @@ impl MenteDB {
         project_context: Option<String>,
         agent_id: Option<String>,
         session_id: Option<String>,
+        user_id: Option<String>,
     ) -> Result<JsProcessTurnResult> {
         let aid = match agent_id {
+            Some(ref s) => Some(parse_uuid(s)?),
+            None => None,
+        };
+
+        // Orthogonal user owner axis; defaults to None (nil / global user) so
+        // existing callers that pass only agent_id are unaffected.
+        let uid = match user_id {
             Some(ref s) => Some(parse_uuid(s)?),
             None => None,
         };
@@ -358,6 +367,7 @@ impl MenteDB {
             turn_id: turn_id as u64,
             project_context,
             agent_id: aid,
+            user_id: uid,
             session_id,
         };
 

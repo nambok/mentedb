@@ -74,6 +74,15 @@ define_id!(
 );
 
 define_id!(
+    /// Unique identifier for an end user.
+    ///
+    /// An orthogonal owner axis alongside [`AgentId`]: a memory belongs to both
+    /// a user and an agent, and a scoped query only sees a memory when it is
+    /// visible on both axes. The nil user is shared/global (visible to all).
+    UserId
+);
+
+define_id!(
     /// Unique identifier for a memory space.
     SpaceId
 );

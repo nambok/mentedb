@@ -35,6 +35,7 @@ fn test_process_turn_basic() {
         turn_id: 0,
         project_context: Some("test-project".to_string()),
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
 
@@ -61,6 +62,7 @@ fn test_process_turn_detects_actions() {
         turn_id: 1,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
 
@@ -87,6 +89,7 @@ fn test_process_turn_detects_corrections() {
         turn_id: 1,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
 
@@ -114,6 +117,7 @@ fn test_assistant_prose_does_not_trigger_correction() {
         turn_id: 1,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
 
@@ -135,6 +139,7 @@ fn test_process_turn_sentiment() {
         turn_id: 0,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
 
@@ -151,6 +156,7 @@ fn test_process_turn_sentiment() {
         turn_id: 1,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
 
@@ -174,6 +180,7 @@ fn test_process_turn_multi_turn_context() {
         turn_id: 0,
         project_context: Some("shopflow".to_string()),
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
     let r0 = db.process_turn(&input0, &mut delta).unwrap();
@@ -186,6 +193,7 @@ fn test_process_turn_multi_turn_context() {
         turn_id: 1,
         project_context: Some("shopflow".to_string()),
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
     let r1 = db.process_turn(&input1, &mut delta).unwrap();
@@ -222,6 +230,7 @@ fn test_process_turn_pain_signals() {
         turn_id: 0,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
 
@@ -246,6 +255,7 @@ fn test_process_turn_delta_tracking() {
         turn_id: 0,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
     let r0 = db.process_turn(&input0, &mut delta).unwrap();
@@ -260,6 +270,7 @@ fn test_process_turn_delta_tracking() {
         turn_id: 1,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
     let _r1 = db.process_turn(&input1, &mut delta).unwrap();
@@ -278,6 +289,7 @@ fn test_process_turn_maintenance_intervals() {
         turn_id: 0,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
     let _ = db.process_turn(&input, &mut delta).unwrap();
@@ -289,6 +301,7 @@ fn test_process_turn_maintenance_intervals() {
         turn_id: 50,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
     let _ = db.process_turn(&input50, &mut delta).unwrap();
@@ -300,6 +313,7 @@ fn test_process_turn_maintenance_intervals() {
         turn_id: 200,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
     let _ = db.process_turn(&input200, &mut delta).unwrap();
@@ -311,8 +325,11 @@ fn test_enrichment_disabled_by_default() {
     assert!(!db.needs_enrichment());
     assert_eq!(db.last_enrichment_turn(), 0);
     assert!(
-        db.enrichment_candidates(mentedb_core::types::AgentId::nil())
-            .is_empty()
+        db.enrichment_candidates(
+            mentedb_core::types::UserId::nil(),
+            mentedb_core::types::AgentId::nil()
+        )
+        .is_empty()
     );
 }
 
@@ -329,6 +346,7 @@ fn test_enrichment_trigger_after_interval() {
             turn_id: i,
             project_context: None,
             agent_id: None,
+            user_id: None,
             session_id: None,
         };
         let result = db.process_turn(&input, &mut delta).unwrap();
@@ -342,6 +360,7 @@ fn test_enrichment_trigger_after_interval() {
         turn_id: 5,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
     let result = db.process_turn(&input5, &mut delta).unwrap();
@@ -362,12 +381,16 @@ fn test_enrichment_candidates_returns_episodics() {
             turn_id: i as u64,
             project_context: None,
             agent_id: None,
+            user_id: None,
             session_id: None,
         };
         db.process_turn(&input, &mut delta).unwrap();
     }
 
-    let candidates = db.enrichment_candidates(mentedb_core::types::AgentId::nil());
+    let candidates = db.enrichment_candidates(
+        mentedb_core::types::UserId::nil(),
+        mentedb_core::types::AgentId::nil(),
+    );
     assert!(
         candidates.len() >= 3,
         "should have at least 3 episodic candidates"
@@ -391,6 +414,7 @@ fn test_enrichment_store_results() {
         turn_id: 1,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
     let result = db.process_turn(&input, &mut delta).unwrap();
@@ -412,7 +436,10 @@ fn test_enrichment_store_results() {
     assert_eq!(edges, 1);
 
     // Verify the stored memory has enrichment tag and capped confidence
-    let candidates = db.enrichment_candidates(mentedb_core::types::AgentId::nil());
+    let candidates = db.enrichment_candidates(
+        mentedb_core::types::UserId::nil(),
+        mentedb_core::types::AgentId::nil(),
+    );
     // The enrichment memory should NOT show up as a candidate (it has source:enrichment tag)
     for c in &candidates {
         assert!(
@@ -435,6 +462,7 @@ fn test_enrichment_mark_complete_resets_pending() {
             turn_id: i,
             project_context: None,
             agent_id: None,
+            user_id: None,
             session_id: None,
         };
         db.process_turn(&input, &mut delta).unwrap();
@@ -454,6 +482,7 @@ fn test_enrichment_mark_complete_resets_pending() {
             turn_id: i,
             project_context: None,
             agent_id: None,
+            user_id: None,
             session_id: None,
         };
         let result = db.process_turn(&input, &mut delta).unwrap();
@@ -467,6 +496,7 @@ fn test_enrichment_mark_complete_resets_pending() {
         turn_id: 6,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
     let result = db.process_turn(&input6, &mut delta).unwrap();
@@ -495,6 +525,7 @@ fn test_always_scope_in_retrieve_context() {
         turn_id: 1,
         project_context: None,
         agent_id: None,
+        user_id: None,
         session_id: None,
     };
     let result = db.process_turn(&input, &mut delta).unwrap();
@@ -622,6 +653,7 @@ fn test_apply_entity_link_resolutions() {
         .apply_entity_link_resolutions(
             &resolutions,
             &separations,
+            mentedb_core::types::UserId::nil(),
             mentedb_core::types::AgentId::nil(),
         )
         .unwrap();
@@ -675,13 +707,17 @@ fn test_entity_separation_negative_cache() {
     db.apply_entity_link_resolutions(
         &resolutions,
         &separations,
+        mentedb_core::types::UserId::nil(),
         mentedb_core::types::AgentId::nil(),
     )
     .unwrap();
 
     // Verify: "java" and "java programming" should show as unresolved
     // (negative cache prevents future LLM calls for this pair)
-    let unresolved = db.unresolved_entity_names(mentedb_core::types::AgentId::nil());
+    let unresolved = db.unresolved_entity_names(
+        mentedb_core::types::UserId::nil(),
+        mentedb_core::types::AgentId::nil(),
+    );
     // Both are still "unresolved" in terms of having no canonical alias,
     // but the negative cache will skip them in future LLM batches
     assert!(unresolved.contains(&"java".to_string()));
