@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.3](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.12.2...mentedb-embedding-v0.12.3) - 2026-07-15
+
+### Other
+
+- update architecture diagram (embedding providers incl. Bedrock, consolidation, injection/attention, trajectory + speculative) ([#220](https://github.com/nambok/mentedb/pull/220))
+- add AWS Bedrock embeddings to the feature list ([#216](https://github.com/nambok/mentedb/pull/216))
+
 ## [0.12.2](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.12.1...mentedb-embedding-v0.12.2) - 2026-07-14
 
 ### Added
