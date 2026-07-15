@@ -77,6 +77,33 @@ with MenteDB("./agent-memory") as db:
     db.forget(mid)
 ```
 
+## MenteDB Cloud (hosted)
+
+Prefer a managed API with no engine to run? Use `MenteDBClient` with an `mdb_`
+key from [app.mentedb.com](https://app.mentedb.com). The verbs mirror the
+embedded client, so only the constructor changes.
+
+```python
+from mentedb import MenteDBClient
+
+client = MenteDBClient(api_key="mdb_...")
+
+# Turn 0: tell it something.
+client.process_turn("I switched from Postgres to SQLite for side projects", "Noted.", 0)
+
+# Turn 1: it remembers.
+result = client.process_turn("what database am I using for side projects?", "", 1)
+for memory in result.context:
+    print(memory.content)
+
+# Also available: client.search(...), client.store(...),
+# client.store_multimodal(data, media_type=...), client.forget(memory_id)
+```
+
+`MenteDBClient` is pure standard library (no extra dependencies) and talks to
+`https://api.mentedb.com`. `process_turn` uses the REST endpoint, while `store`,
+`search`, `store_multimodal`, and `forget` use the hosted MCP tools.
+
 ## Cognitive features
 
 The SDK also exposes MenteDB cognitive subsystems for real time stream
