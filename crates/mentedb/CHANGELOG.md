@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.4](https://github.com/nambok/mentedb/compare/mentedb-v0.12.3...mentedb-v0.12.4) - 2026-07-15
+
+### Fixed
+
+- prevent cross-user memory leak in process_turn proactive recall and write inference ([#224](https://github.com/nambok/mentedb/pull/224))
+
 ## [0.12.3](https://github.com/nambok/mentedb/compare/mentedb-v0.12.2...mentedb-v0.12.3) - 2026-07-15
 
 ### Other
