@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2](https://github.com/nambok/mentedb/compare/mentedb-v0.14.0...mentedb-v0.14.2) - 2026-07-15
+
+### Added
+
+- owner-scoped user profile accessors (user_profile_for, profile_owners) ([#237](https://github.com/nambok/mentedb/pull/237))
+
+### Other
+
+- release v0.14.1 ([#238](https://github.com/nambok/mentedb/pull/238))
+
 ## [0.14.1](https://github.com/nambok/mentedb/compare/mentedb-v0.14.0...mentedb-v0.14.1) - 2026-07-15
 
 ### Added
