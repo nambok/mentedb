@@ -310,7 +310,10 @@ fn test_enrichment_disabled_by_default() {
     let (db, _dir) = open_db();
     assert!(!db.needs_enrichment());
     assert_eq!(db.last_enrichment_turn(), 0);
-    assert!(db.enrichment_candidates().is_empty());
+    assert!(
+        db.enrichment_candidates(mentedb_core::types::AgentId::nil())
+            .is_empty()
+    );
 }
 
 #[test]
@@ -364,7 +367,7 @@ fn test_enrichment_candidates_returns_episodics() {
         db.process_turn(&input, &mut delta).unwrap();
     }
 
-    let candidates = db.enrichment_candidates();
+    let candidates = db.enrichment_candidates(mentedb_core::types::AgentId::nil());
     assert!(
         candidates.len() >= 3,
         "should have at least 3 episodic candidates"
@@ -409,7 +412,7 @@ fn test_enrichment_store_results() {
     assert_eq!(edges, 1);
 
     // Verify the stored memory has enrichment tag and capped confidence
-    let candidates = db.enrichment_candidates();
+    let candidates = db.enrichment_candidates(mentedb_core::types::AgentId::nil());
     // The enrichment memory should NOT show up as a candidate (it has source:enrichment tag)
     for c in &candidates {
         assert!(
@@ -616,7 +619,11 @@ fn test_apply_entity_link_resolutions() {
     let separations = vec![];
 
     let result = db
-        .apply_entity_link_resolutions(&resolutions, &separations)
+        .apply_entity_link_resolutions(
+            &resolutions,
+            &separations,
+            mentedb_core::types::AgentId::nil(),
+        )
         .unwrap();
     assert!(result.edges_created > 0, "should create cross-name edges");
     assert!(result.linked > 0, "should report linked pairs");
@@ -665,12 +672,16 @@ fn test_entity_separation_negative_cache() {
         name_b: "java programming".to_string(),
     }];
 
-    db.apply_entity_link_resolutions(&resolutions, &separations)
-        .unwrap();
+    db.apply_entity_link_resolutions(
+        &resolutions,
+        &separations,
+        mentedb_core::types::AgentId::nil(),
+    )
+    .unwrap();
 
     // Verify: "java" and "java programming" should show as unresolved
     // (negative cache prevents future LLM calls for this pair)
-    let unresolved = db.unresolved_entity_names();
+    let unresolved = db.unresolved_entity_names(mentedb_core::types::AgentId::nil());
     // Both are still "unresolved" in terms of having no canonical alias,
     // but the negative cache will skip them in future LLM batches
     assert!(unresolved.contains(&"java".to_string()));

@@ -123,12 +123,13 @@ struct MenteDB {
 #[pymethods]
 impl MenteDB {
     #[new]
-    #[pyo3(signature = (data_dir, embedding_provider=None, embedding_api_key=None, embedding_model=None))]
+    #[pyo3(signature = (data_dir, embedding_provider=None, embedding_api_key=None, embedding_model=None, dimension=None))]
     fn new(
         data_dir: &str,
         embedding_provider: Option<&str>,
         embedding_api_key: Option<&str>,
         embedding_model: Option<&str>,
+        dimension: Option<usize>,
     ) -> PyResult<Self> {
         let embedder: Option<Box<dyn EmbeddingProvider>> = match embedding_provider {
             Some("openai") => {
@@ -191,9 +192,18 @@ impl MenteDB {
 
         let mut db = MenteDb::open_with_config(Path::new(data_dir), CognitiveConfig::default())
             .map_err(to_pyerr)?;
-        if let Some(ref e) = embedder {
-            db.set_embedder(Box::new(HashEmbeddingProvider::new(e.dimensions())));
-        }
+        // An explicit `dimension` lets callers bring their own embeddings at an
+        // arbitrary size (for example a 4096-dim external embedder), overriding
+        // the provider-derived or default 384 vector dimension.
+        let embedder: Option<Box<dyn EmbeddingProvider>> = if let Some(d) = dimension {
+            db.set_embedder(Box::new(HashEmbeddingProvider::new(d)));
+            Some(Box::new(HashEmbeddingProvider::new(d)))
+        } else {
+            if let Some(ref e) = embedder {
+                db.set_embedder(Box::new(HashEmbeddingProvider::new(e.dimensions())));
+            }
+            embedder
+        };
         Ok(Self {
             db: Some(db),
             embedder,
@@ -4781,7 +4791,7 @@ impl MenteDB {
             .db
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
-        let candidates = db.enrichment_candidates();
+        let candidates = db.all_enrichment_candidates();
         let result: Vec<Py<PyAny>> = candidates
             .iter()
             .map(|m| {

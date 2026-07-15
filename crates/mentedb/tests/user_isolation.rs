@@ -181,3 +181,48 @@ fn scoped_recall_excludes_other_users_even_as_top_match() {
         "SECURITY: another user's private memory must never appear, even as the top match"
     );
 }
+
+/// The enrichment helpers must be exact-owner scoped: the derived-knowledge
+/// pipeline (profile, entities, communities) may only read the target owner's
+/// memories, so one user's profile is never built from another user's facts.
+#[test]
+fn enrichment_helpers_are_owner_scoped() {
+    let (db, _dir) = open_db();
+    let alice = AgentId::new();
+    let bob = AgentId::new();
+    // Alice and Bob each store a semantic fact.
+    let a = MemoryNode::new(
+        alice,
+        MemoryType::Semantic,
+        "alice likes falcons".into(),
+        emb("alice likes falcons"),
+    );
+    db.store(a).unwrap();
+    let b = MemoryNode::new(
+        bob,
+        MemoryType::Semantic,
+        "bob likes turtles".into(),
+        emb("bob likes turtles"),
+    );
+    db.store(b).unwrap();
+
+    let alice_facts = db.profile_facts(alice);
+    assert!(
+        alice_facts.iter().any(|f| f.contains("falcons")),
+        "alice sees her own fact"
+    );
+    assert!(
+        !alice_facts.iter().any(|f| f.contains("turtles")),
+        "alice must NOT see bob's fact in her profile facts"
+    );
+
+    let bob_facts = db.profile_facts(bob);
+    assert!(
+        !bob_facts.iter().any(|f| f.contains("falcons")),
+        "bob must NOT see alice's fact"
+    );
+    assert!(
+        bob_facts.iter().any(|f| f.contains("turtles")),
+        "bob sees his own fact"
+    );
+}
