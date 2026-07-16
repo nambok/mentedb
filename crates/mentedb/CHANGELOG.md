@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.4](https://github.com/nambok/mentedb/compare/mentedb-v0.14.2...mentedb-v0.14.4) - 2026-07-16
+
+### Added
+
+- engine-native standing-rules cleanup (prune_standing_rules) ([#243](https://github.com/nambok/mentedb/pull/243))
+
+### Other
+
+- release v0.14.3 ([#241](https://github.com/nambok/mentedb/pull/241))
+
 ## [0.14.3](https://github.com/nambok/mentedb/compare/mentedb-v0.14.2...mentedb-v0.14.3) - 2026-07-16
 
 ### Added

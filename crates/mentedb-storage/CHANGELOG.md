@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.4](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.14.2...mentedb-storage-v0.14.4) - 2026-07-16
+
+### Added
+
+- cross-host single-writer lock (fcntl OFD) for horizontal scale ([#244](https://github.com/nambok/mentedb/pull/244))
+
+### Other
+
+- release v0.14.3 ([#241](https://github.com/nambok/mentedb/pull/241))
+- remove platform-specific design doc; genericize lock comments ([#245](https://github.com/nambok/mentedb/pull/245))
+
 ## [0.14.3](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.14.2...mentedb-storage-v0.14.3) - 2026-07-16
 
 ### Added
