@@ -50,8 +50,13 @@ fn ofd_set(file: &File, l_type: libc::c_int) -> io::Result<bool> {
     // F_OFD_SETLK never blocks; it returns EAGAIN/EACCES when the range is
     // already locked by a conflicting open file description (possibly on another
     // host, via the NFSv4 lock manager).
-    let ret =
-        unsafe { libc::fcntl(file.as_raw_fd(), libc::F_OFD_SETLK, &fl as *const libc::flock) };
+    let ret = unsafe {
+        libc::fcntl(
+            file.as_raw_fd(),
+            libc::F_OFD_SETLK,
+            &fl as *const libc::flock,
+        )
+    };
     if ret == 0 {
         return Ok(true);
     }
