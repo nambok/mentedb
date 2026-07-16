@@ -26,6 +26,12 @@ uuid = { workspace = true }
 fs2 = { workspace = true }
 bincode = "1"
 
+# Cross-host single-writer lock (fcntl byte-range locks are enforced across
+# hosts on NFSv4/EFS, unlike flock). Unix only; Windows keeps fs2/flock, which
+# is fine there since the multi-host EFS case is Linux.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = { workspace = true }
 

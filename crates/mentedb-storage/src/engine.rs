@@ -77,12 +77,24 @@ impl StorageEngine {
             .truncate(false)
             .write(true)
             .open(&lock_path)?;
-        fs2::FileExt::try_lock_exclusive(&lock_file).map_err(|_| {
-            MenteError::Storage(format!(
-                "database directory {} is locked by another process",
-                path.display()
-            ))
-        })?;
+        // Cross-host lock: fcntl OFD lock on Linux (enforced across hosts on
+        // EFS), flock elsewhere. This is what makes single-writer safe when the
+        // directory lives on shared storage mounted by multiple tasks.
+        match crate::lock::try_lock_exclusive(&lock_file) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(MenteError::Storage(format!(
+                    "database directory {} is locked by another process",
+                    path.display()
+                )));
+            }
+            Err(e) => {
+                return Err(MenteError::Storage(format!(
+                    "failed to lock database directory {}: {e}",
+                    path.display()
+                )));
+            }
+        }
 
         let page_manager = PageManager::open(path)?;
         let buffer_pool = BufferPool::new(DEFAULT_BUFFER_POOL_SIZE);
@@ -213,7 +225,7 @@ impl StorageEngine {
         // Release the process lock so the directory can be reopened, by this
         // process or another, without waiting for us to exit.
         if let Some(lock_file) = self.process_lock.lock().take() {
-            let _ = fs2::FileExt::unlock(&lock_file);
+            let _ = crate::lock::unlock(&lock_file);
         }
         info!("storage engine closed");
         Ok(())
@@ -226,7 +238,7 @@ impl StorageEngine {
     #[doc(hidden)]
     pub fn release_process_lock(&self) {
         if let Some(lock_file) = self.process_lock.lock().take() {
-            let _ = fs2::FileExt::unlock(&lock_file);
+            let _ = crate::lock::unlock(&lock_file);
         }
     }
 
