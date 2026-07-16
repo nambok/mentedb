@@ -77,9 +77,10 @@ impl StorageEngine {
             .truncate(false)
             .write(true)
             .open(&lock_path)?;
-        // Cross-host lock: fcntl OFD lock on Linux (enforced across hosts on
-        // EFS), flock elsewhere. This is what makes single-writer safe when the
-        // directory lives on shared storage mounted by multiple tasks.
+        // Cross-host lock: fcntl OFD lock on Linux (enforced across hosts by the
+        // NFSv4 lock manager), flock elsewhere. This makes single-writer safe
+        // when the directory lives on a network filesystem mounted by more than
+        // one host.
         match crate::lock::try_lock_exclusive(&lock_file) {
             Ok(true) => {}
             Ok(false) => {

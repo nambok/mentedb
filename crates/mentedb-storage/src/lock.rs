@@ -1,22 +1,22 @@
 //! Cross-host single-writer lock for a database directory.
 //!
 //! The engine permits exactly one writer per directory. On a single host
-//! `flock` (fs2) is enough, but MenteDB's hosted deployment keeps each tenant's
-//! directory on a shared NFSv4 filesystem (Amazon EFS) that several hosts mount.
-//! `flock` on NFS is host-local: a second host does not observe the lock, so two
-//! tasks could open the same tenant and corrupt it.
+//! `flock` (fs2) is enough, but when a directory lives on a network filesystem
+//! (NFSv4) mounted by more than one host, `flock` is host-local: a second host
+//! does not observe the lock, so two processes could open the same directory and
+//! corrupt it.
 //!
 //! POSIX `fcntl` byte-range locks are enforced ACROSS hosts by the NFSv4 lock
 //! manager. On Linux we use open-file-description locks (`F_OFD_SETLK`), which
-//! keep the per-open-file-description semantics `flock` has (so a second open of
-//! the same directory is refused even within one process, which the engine and
-//! its tests rely on) while also being enforced across hosts on EFS. The lock is
-//! released when the fd is closed or the process dies, so a crashed task frees
-//! the tenant once the NFS lease expires; a merely paused task keeps the lock,
-//! so there is no zombie-write window.
+//! keep the per-open-file-description semantics `flock` has (a second open of the
+//! same directory is refused even within one process, which the engine and its
+//! tests rely on) while also being enforced across hosts. The lock releases when
+//! the fd is closed or the process dies, so a crashed writer frees the directory
+//! once the NFS lock lease expires; a merely paused writer keeps it, so there is
+//! no zombie-write window.
 //!
-//! Non-Linux platforms (macOS dev, Windows) keep `flock`: they are never on EFS,
-//! and `flock` gives the same per-open-file-description exclusion.
+//! Non-Linux platforms (macOS, Windows) keep `flock`: single-host use, and it
+//! gives the same per-open-file-description exclusion.
 
 use std::fs::File;
 use std::io;
