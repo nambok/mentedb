@@ -193,6 +193,20 @@ pub struct EntityLinkResult {
     pub edges_created: usize,
 }
 
+/// Outcome of a standing-rules (`scope:always`) cleanup pass.
+#[derive(Debug, Clone, Default)]
+pub struct PruneReport {
+    /// Total `scope:always` memories found before cleanup.
+    pub total_always: usize,
+    /// Number of exact-content duplicate groups collapsed.
+    pub duplicate_groups: usize,
+    /// Exact-duplicate always-rules removed (the healthiest copy was kept).
+    pub pruned: Vec<MemoryId>,
+    /// Auto-pinned always-rules un-pinned (the `scope:always` tag removed, the
+    /// memory kept so it is still recalled by relevance).
+    pub unpinned: Vec<MemoryId>,
+}
+
 /// A confirmed entity resolution from an external resolver (LLM).
 ///
 /// Used to feed LLM entity resolution results back into the engine
@@ -934,6 +948,81 @@ impl MenteDb {
         self.graph.remove_memory(id);
         self.page_map.write().remove(&id);
         Ok(())
+    }
+
+    /// Clean up the standing-rules (`scope:always`) set: remove exact-content
+    /// duplicates (keeping the healthiest copy) and un-pin every auto-pinned
+    /// always-rule, keeping only rules the user explicitly pinned
+    /// (`source:manual`) and the user profile (which the engine pins deliberately
+    /// so it injects every session).
+    ///
+    /// `scope:always` force-injects a memory into every assembled context
+    /// regardless of relevance, so the set must stay tiny; distilled facts belong
+    /// in relevance-based recall, not a fixed always-list. This is the single
+    /// source of truth for the policy, shared by the hosted platform, the local
+    /// daemon, and any SDK consumer, so behavior cannot drift between them.
+    pub fn prune_standing_rules(&self) -> MenteResult<PruneReport> {
+        use std::collections::{HashMap, HashSet};
+
+        let always: Vec<MemoryNode> = self
+            .memory_ids()
+            .into_iter()
+            .filter_map(|id| self.get_memory(id).ok())
+            .filter(|n| n.tags.iter().any(|t| t == "scope:always"))
+            .collect();
+
+        let mut report = PruneReport {
+            total_always: always.len(),
+            ..Default::default()
+        };
+
+        // Collapse exact-content duplicates: keep the healthiest copy, forget
+        // the rest.
+        let mut by_content: HashMap<&str, Vec<&MemoryNode>> = HashMap::new();
+        for n in &always {
+            by_content.entry(n.content.as_str()).or_default().push(n);
+        }
+        let mut prune_ids: HashSet<MemoryId> = HashSet::new();
+        for (_content, mut group) in by_content {
+            if group.len() > 1 {
+                report.duplicate_groups += 1;
+                group.sort_by(|a, b| {
+                    b.salience
+                        .partial_cmp(&a.salience)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                for n in group.into_iter().skip(1) {
+                    prune_ids.insert(n.id);
+                }
+            }
+        }
+
+        // Un-pin every auto-pinned always-rule (not source:manual, not the
+        // profile). Keep the memory, drop the pin.
+        let mut to_unpin: Vec<MemoryNode> = Vec::new();
+        for n in &always {
+            if prune_ids.contains(&n.id) {
+                continue;
+            }
+            let is_manual = n.tags.iter().any(|t| t == "source:manual");
+            let is_profile = n.tags.iter().any(|t| t == "user_profile");
+            if !is_manual && !is_profile {
+                to_unpin.push(n.clone());
+            }
+        }
+
+        for id in prune_ids {
+            self.forget(id)?;
+            report.pruned.push(id);
+        }
+        for mut n in to_unpin {
+            n.tags.retain(|t| t != "scope:always");
+            let id = n.id;
+            self.store(n)?;
+            report.unpinned.push(id);
+        }
+
+        Ok(report)
     }
 
     /// Returns a reference to the underlying graph manager.
