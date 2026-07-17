@@ -1,4 +1,5 @@
 use mentedb_core::MemoryNode;
+use mentedb_core::memory::MemoryType;
 use mentedb_core::types::{MemoryId, Timestamp};
 use serde::{Deserialize, Serialize};
 
@@ -52,20 +53,39 @@ impl ArchivalPipeline {
     /// last reinforcement, not the current one, so judging archival on it alone
     /// is only correct when the caller has no decay engine.
     pub fn evaluate(&self, memory: &MemoryNode, now: Timestamp) -> ArchivalDecision {
-        self.evaluate_effective(memory.salience, memory.created_at, memory.access_count, now)
+        self.evaluate_effective(
+            memory.salience,
+            memory.memory_type,
+            memory.created_at,
+            memory.access_count,
+            now,
+        )
     }
 
     /// Evaluate archival against an externally computed effective (decayed)
     /// salience, so lifecycle decisions reflect the memory's current strength
-    /// rather than a stored base that decay never re-reads. Takes only the three
-    /// fields the decision needs, so the caller need not clone the whole node.
+    /// rather than a stored base that decay never re-reads.
+    ///
+    /// Decay never deletes curated knowledge. Only raw `Episodic` turns, which
+    /// exist to be distilled into semantic facts and then cleaned up, are ever
+    /// archived or deleted here. Semantic facts, procedures, corrections,
+    /// anti-patterns and reasoning are kept regardless of salience: low salience
+    /// demotes them in recall, it does not destroy them. That is what stops an
+    /// account that went idle for months from returning to an empty memory.
+    /// Curated knowledge only leaves the store via explicit forget, supersession,
+    /// or exact-duplicate consolidation, never silently via decay.
     pub fn evaluate_effective(
         &self,
         effective_salience: f32,
+        memory_type: MemoryType,
         created_at: Timestamp,
         access_count: u32,
         now: Timestamp,
     ) -> ArchivalDecision {
+        if memory_type != MemoryType::Episodic {
+            return ArchivalDecision::Keep;
+        }
+
         let age = now.saturating_sub(created_at);
 
         // Delete: very low salience, very old, rarely accessed
@@ -179,12 +199,12 @@ mod tests {
             "derived salience {eff} should clear archive threshold"
         );
         assert_eq!(
-            pipe.evaluate_effective(eff, created, 0, now),
+            pipe.evaluate_effective(eff, MemoryType::Episodic, created, 0, now),
             ArchivalDecision::Keep,
         );
 
         // 40 days old, never reinforced: derived salience decays under the floor
-        // and, being 30d+ old and barely accessed, is deleted.
+        // and, being a raw episodic turn 30d+ old and barely accessed, is deleted.
         let now = 60 * DAY_US;
         let created = now - 40 * DAY_US;
         let eff = decay.compute_decay(1.0, created, created, 0, now);
@@ -193,7 +213,39 @@ mod tests {
             "derived salience {eff} should fall under delete threshold"
         );
         assert_eq!(
-            pipe.evaluate_effective(eff, created, 0, now),
+            pipe.evaluate_effective(eff, MemoryType::Episodic, created, 0, now),
+            ArchivalDecision::Delete,
+        );
+    }
+
+    // A curated fact must never be deleted by decay, however old or faint, so an
+    // account idle for months returns to its memories intact. Same 40-day,
+    // floor-salience input that deletes a raw turn is Kept for every curated type.
+    #[test]
+    fn curated_memories_are_never_archived_by_decay() {
+        use crate::decay::DecayEngine;
+        let pipe = ArchivalPipeline::default();
+        let now = 90 * DAY_US;
+        let created = now - 60 * DAY_US; // idle 2 months
+        let eff = DecayEngine::default().compute_decay(1.0, created, created, 0, now);
+        assert!(eff < 0.05, "2-month-idle salience {eff} is at the floor");
+
+        for mt in [
+            MemoryType::Semantic,
+            MemoryType::Procedural,
+            MemoryType::Correction,
+            MemoryType::AntiPattern,
+            MemoryType::Reasoning,
+        ] {
+            assert_eq!(
+                pipe.evaluate_effective(eff, mt, created, 0, now),
+                ArchivalDecision::Keep,
+                "curated {mt:?} must survive decay, not be forgotten"
+            );
+        }
+        // The same input for a raw turn is still cleaned up.
+        assert_eq!(
+            pipe.evaluate_effective(eff, MemoryType::Episodic, created, 0, now),
             ArchivalDecision::Delete,
         );
     }

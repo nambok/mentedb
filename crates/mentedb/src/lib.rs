@@ -2171,8 +2171,13 @@ impl MenteDb {
             memory.access_count,
             now,
         );
-        self.archival
-            .evaluate_effective(effective, memory.created_at, memory.access_count, now)
+        self.archival.evaluate_effective(
+            effective,
+            memory.memory_type,
+            memory.created_at,
+            memory.access_count,
+            now,
+        )
     }
 
     /// Evaluate archival decisions for a batch of memories.
@@ -2202,8 +2207,13 @@ impl MenteDb {
                 );
                 (
                     m.id,
-                    self.archival
-                        .evaluate_effective(effective, m.created_at, m.access_count, now),
+                    self.archival.evaluate_effective(
+                        effective,
+                        m.memory_type,
+                        m.created_at,
+                        m.access_count,
+                        now,
+                    ),
                 )
             })
             .collect()
