@@ -1589,6 +1589,39 @@ mod injection_attention {
             used_node.salience > before_salience,
             "used memory reinforced"
         );
+        // Retrieval reinforcement: the shown-but-not-echoed memory still had its
+        // decay clock and access count refreshed, so being recalled keeps it alive
+        // even though it did not earn the salience boost.
+        assert_eq!(count(&ignored_node, ATTR_INJECTION_USED), 0);
+        assert_eq!(
+            ignored_node.access_count, 1,
+            "shown memory's access count bumped even without echo"
+        );
+    }
+
+    #[test]
+    fn retrieval_refreshes_decay_clock_for_shown_not_echoed() {
+        // A memory surfaced by recall but not echoed by the reply must still have
+        // its decay clock refreshed, so anything actively recalled resists decay
+        // and is not forgotten while in use.
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+        let mut m = semantic(vec![1.0, 0.0, 0.0, 0.0], "recalled, never echoed", vec![]);
+        m.accessed_at = 1_000; // stale decay clock
+        m.access_count = 0;
+        let id = m.id;
+        db.store(m).unwrap();
+
+        // Reply embedding is orthogonal, so cosine < used_similarity: not "used".
+        db.record_injection_outcome(&[id], Some(&[0.0, 1.0, 0.0, 0.0]))
+            .unwrap();
+
+        let n = db.get_memory(id).unwrap();
+        assert_eq!(n.access_count, 1, "recall bumps access count");
+        assert!(
+            n.accessed_at > 1_000,
+            "recall refreshes the decay clock even without an echo"
+        );
     }
 
     #[test]
