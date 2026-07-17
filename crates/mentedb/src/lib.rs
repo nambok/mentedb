@@ -2505,12 +2505,17 @@ impl MenteDb {
                                 if existing.len() < 300 {
                                     existing.push_str(" | ");
                                     let remaining = 500usize.saturating_sub(existing.len());
-                                    existing
-                                        .push_str(&mem.content[..mem.content.len().min(remaining)]);
+                                    existing.push_str(
+                                        mentedb_core::text::truncate_on_char_boundary(
+                                            &mem.content,
+                                            remaining,
+                                        ),
+                                    );
                                 }
                             })
                             .or_insert_with(|| {
-                                mem.content[..mem.content.len().min(300)].to_string()
+                                mentedb_core::text::truncate_on_char_boundary(&mem.content, 300)
+                                    .to_string()
                             });
                         break;
                     }

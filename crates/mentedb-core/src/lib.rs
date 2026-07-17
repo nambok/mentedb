@@ -22,6 +22,7 @@ pub mod memory;
 pub mod metrics;
 pub mod mvcc;
 pub mod space;
+pub mod text;
 pub mod tier;
 pub mod types;
 
