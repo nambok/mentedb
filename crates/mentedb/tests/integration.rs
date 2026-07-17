@@ -829,6 +829,54 @@ fn test_reset_decay_state_repairs_corrupted_salience() {
 }
 
 #[test]
+fn reembed_all_embeds_and_indexes_and_is_idempotent() {
+    // Models the embedding-dimension migration: a memory whose stored vector is
+    // not at the current dimension (here, missing entirely) is unrecallable
+    // until reembed_all re-embeds it at the embedder's dimension and indexes it.
+    let dir = tempfile::tempdir().unwrap();
+    let db = MenteDb::open_with_embedder(
+        dir.path(),
+        Box::new(mentedb_embedding::hash_provider::HashEmbeddingProvider::new(8)),
+    )
+    .unwrap();
+    let agent = AgentId::new();
+
+    let target = db.embed_text("probe").unwrap().unwrap().len();
+    assert_eq!(target, 8);
+
+    let m = MemoryNode::new(
+        agent,
+        MemoryType::Semantic,
+        "the deploy runs on github actions".to_string(),
+        Vec::new(), // no vector, as if from an incompatible prior embedder
+    );
+    let id = m.id;
+    db.store(m).unwrap();
+
+    let n = db.reembed_all().unwrap();
+    assert_eq!(n, 1, "the vectorless memory is re-embedded");
+    let node = db.get_memory(id).unwrap();
+    assert_eq!(
+        node.embedding.len(),
+        target,
+        "re-embedded at the current embedder dimension"
+    );
+
+    // Idempotent: nothing left to migrate.
+    assert_eq!(db.reembed_all().unwrap(), 0);
+
+    // Now retrievable.
+    let q = db.embed_text("github actions deploy").unwrap().unwrap();
+    let hits = db.recall_similar(&q, 5).unwrap();
+    assert!(
+        hits.iter().any(|(hid, _)| *hid == id),
+        "the re-embedded memory is retrievable"
+    );
+
+    db.close().unwrap();
+}
+
+#[test]
 fn test_consolidation_api_empty_db() {
     let dir = tempfile::tempdir().unwrap();
     let db = MenteDb::open(dir.path()).unwrap();

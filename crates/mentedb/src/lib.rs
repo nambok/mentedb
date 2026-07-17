@@ -1373,6 +1373,56 @@ impl MenteDb {
         Ok(reset)
     }
 
+    /// Re-embed every memory at the embedder's current dimension and reindex it.
+    ///
+    /// This migrates a database whose stored vectors were produced by an
+    /// embedder of a different dimension (for example 256 to 1024): each memory's
+    /// content is re-embedded with the currently configured embedder, its stored
+    /// vector is replaced, and it is removed from and re-added to the vector
+    /// index. Memories already at the current dimension are skipped, so it is
+    /// idempotent and safe to re-run.
+    ///
+    /// The migration is safe to run on a live database: the HNSW index checks
+    /// vector dimension at query time, so a memory that has not been re-embedded
+    /// yet is simply skipped by recall (never returned, never crashing) until
+    /// this reaches it. Runs synchronously and re-embeds one memory at a time;
+    /// the caller should run it on a blocking pool.
+    pub fn reembed_all(&self) -> MenteResult<usize> {
+        let target = self.embedding_dim;
+        if target == 0 {
+            return Ok(0);
+        }
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+
+        let mut reembedded = 0usize;
+        for pid in &page_ids {
+            let Ok(mut node) = self.storage.load_memory(*pid) else {
+                continue;
+            };
+            // Already at the target dimension: nothing to do.
+            if node.embedding.len() == target || node.content.is_empty() {
+                continue;
+            }
+            let Some(embedding) = self.embed_text(&node.content)? else {
+                continue;
+            };
+            // The embedder is not yet producing the target dimension; leave the
+            // memory as-is rather than store a second wrong-dimension vector.
+            if embedding.len() != target {
+                continue;
+            }
+            self.index.remove_vector_only(node.id);
+            node.embedding = embedding;
+            self.storage.update_memory(*pid, &node)?;
+            self.index.index_memory(&node);
+            reembedded += 1;
+        }
+        if reembedded > 0 {
+            info!("Re-embedded {reembedded} memories at dimension {target}");
+        }
+        Ok(reembedded)
+    }
+
     // -----------------------------------------------------------------------
     // Cognitive Engine: Consolidation
     // -----------------------------------------------------------------------
