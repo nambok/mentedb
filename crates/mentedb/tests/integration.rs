@@ -1448,6 +1448,64 @@ fn test_archival_batch_evaluation() {
     }
 }
 
+/// End-to-end retention probe: the full lifecycle after the decay fix. Two
+/// memories are 40 days old; one keeps getting recalled, the other never is.
+/// Recall must keep the first alive (retrieval refreshes its decay clock) and
+/// leave it retrievable, while the never-recalled one is retired. This is the
+/// property "actively used memories persist, unused old ones are forgotten,"
+/// exercised through store -> recall -> reinforce -> archival -> recall.
+#[test]
+fn lifecycle_recalled_memories_survive_unused_are_retired() {
+    use mentedb_consolidation::archival::ArchivalDecision;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
+
+    let day = 24 * 3600 * 1_000_000u64;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros() as u64;
+    let long_ago = now - 40 * day;
+
+    let mut recalled = make_memory("user prefers dark mode", vec![1.0, 0.0, 0.0, 0.0]);
+    recalled.created_at = long_ago;
+    recalled.accessed_at = long_ago;
+    let rid = recalled.id;
+
+    let mut unused = make_memory("one-off trivia nobody revisits", vec![0.0, 1.0, 0.0, 0.0]);
+    unused.created_at = long_ago;
+    unused.accessed_at = long_ago;
+    let uid = unused.id;
+
+    db.store(recalled).unwrap();
+    db.store(unused).unwrap();
+
+    // The dark-mode fact is surfaced by recall again now; retrieval refreshes its
+    // decay clock even though the reply did not echo it.
+    let (touched, _) = db.record_injection_outcome(&[rid], None).unwrap();
+    assert_eq!(touched, 1);
+
+    // Lifecycle outcome: recall keeps its memory alive; the never-revisited one is retired.
+    assert_eq!(
+        db.evaluate_archival(&db.get_memory(rid).unwrap()),
+        ArchivalDecision::Keep,
+        "a memory kept warm by recall must survive"
+    );
+    assert_ne!(
+        db.evaluate_archival(&db.get_memory(uid).unwrap()),
+        ArchivalDecision::Keep,
+        "a 40-day memory never recalled must be retired"
+    );
+
+    // And the surviving memory is still retrievable.
+    let hits = db.recall_similar(&[1.0, 0.0, 0.0, 0.0], 5).unwrap();
+    assert!(
+        hits.iter().any(|(id, _)| *id == rid),
+        "the memory kept alive by recall is still retrievable"
+    );
+}
+
 // -----------------------------------------------------------------------
 // Persistence Tests: Cognitive State Survives Flush
 // -----------------------------------------------------------------------
