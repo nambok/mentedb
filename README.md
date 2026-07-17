@@ -194,14 +194,14 @@ The result: a clean, curated memory that actually helps the AI perform better.
 - **Hybrid Retrieval** Vector similarity (HNSW) fused with BM25 keyword search via reciprocal rank fusion, plus tag, temporal, and validity filtering
 - **Write Time Intelligence** Quality filter, deduplication, and contradiction detection at ingest
 - **LLM Powered Cognitive Inference** CognitiveLlmService judges whether new memories invalidate, update, or are compatible with existing ones (supports Anthropic, OpenAI, Ollama)
-- **Bi-Temporal Validity** Memories and edges carry `valid_from`/`valid_until` timestamps. Temporal invalidation instead of deletion. Point-in-time queries via `recall_similar_at(embedding, k, timestamp)`
+- **Bi-Temporal Validity** Memories and edges carry `valid_from`/`valid_until` timestamps. Temporal invalidation instead of deletion. Point-in-time queries via `recall_similar_at(embedding, k, timestamp)` or in MQL with `RECALL ... AS OF <timestamp>`
 - **Attention Optimized Context Assembly** Respects the U curve (critical data at start/end of context)
 - **Belief Propagation** When facts change, downstream beliefs are flagged for re evaluation
 - **Delta Aware Serving** Only sends what changed since last turn (90% reduction in memory retrieval tokens over 20 turns)
 - **Cognitive Memory Tiers** Working, Episodic, Semantic, Procedural, Archival
 - **Knowledge Graph** CSR/CSC graph with BFS/DFS traversal and contradiction detection
 - **Memory Spaces** Multi agent isolation with per space ACLs
-- **MQL** Mente Query Language with full boolean logic (AND, OR, NOT) and ordering (ASC/DESC)
+- **MQL** Mente Query Language with full boolean logic (AND, OR, NOT), ordering (ASC/DESC), and point-in-time recall (`AS OF <timestamp>`)
 - **Type Safe IDs** MemoryId, AgentId, SpaceId newtypes prevent accidental mixing
 - **Binary Embeddings** Base64 encoded storage, 65% smaller than JSON arrays
 - **Local Candle Embeddings** Zero config semantic search using all-MiniLM-L6-v2 (384 dims), no API key required (Docker image includes it; source builds need `--features local-embeddings`)
@@ -443,8 +443,11 @@ decayed = salience × 2^(-Δt / half_life) + boost × ln(1 + access_count)
 
 - **Half-life:** 7 days (configurable)
 - **Access boost:** Frequently accessed memories resist decay
+- **Reinforcement:** Recalling a memory refreshes its decay clock (it counts as an access), so memories you keep using stay healthy
+- **Derive-on-read:** The decayed score is computed from the last-access time on every read, never re-persisted, so a memory decays with real elapsed time regardless of how often the sweep runs
 - **Retrieval blending:** Final score = 70% similarity + 30% decayed salience
 - **Floor:** Memories never decay below 0.01
+- **Never destructive by decay:** Decay only reorders results. Curated (non-episodic) memories are demoted but never deleted; only stale, low-salience episodic memories are archived
 
 ### Memory Consolidation (on-demand)
 
@@ -647,6 +650,11 @@ RECALL memories WHERE NOT tag = "archived" ORDER BY salience DESC
 
 -- Content similarity
 RECALL memories WHERE content ~> "database migration strategies" LIMIT 10
+
+-- Point-in-time recall (bitemporal AS OF): only memories whose validity
+-- window contained the timestamp. A fact superseded after t is still
+-- returned when you ask "as of" a moment it was true.
+RECALL memories WHERE type = semantic AS OF 1700000000 LIMIT 10
 
 -- Graph traversal
 TRAVERSE 550e8400-e29b-41d4-a716-446655440000 DEPTH 3 WHERE edge_type = caused
