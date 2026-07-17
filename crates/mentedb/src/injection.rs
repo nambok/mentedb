@@ -334,13 +334,23 @@ impl MenteDb {
             };
             bump_attr(&mut node, ATTR_INJECTION_SHOWN);
 
+            // Retrieval reinforcement: being surfaced at all is an access. Refresh
+            // the decay clock and bump the access count for every shown memory, not
+            // only the ones the reply echoed, so anything that keeps getting
+            // recalled stays alive instead of decaying to the forget threshold while
+            // it is actively in use. Memories that are never recalled still get no
+            // touch here, so they decay and are forgotten as intended; only what
+            // retrieval keeps surfacing survives.
+            node.access_count = node.access_count.saturating_add(1);
+            node.accessed_at = now;
+
             let used = reply_embedding
                 .map(|re| cosine_similarity(&node.embedding, re) >= cfg.used_similarity)
                 .unwrap_or(false);
             if used {
+                // The reply actually drew on it: a stronger signal than mere
+                // exposure, so add a salience boost on top of the access refresh.
                 bump_attr(&mut node, ATTR_INJECTION_USED);
-                node.access_count = node.access_count.saturating_add(1);
-                node.accessed_at = now;
                 node.salience = (node.salience + cfg.use_reinforcement).min(1.0);
                 used_total += 1;
             }
