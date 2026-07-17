@@ -32,6 +32,7 @@ enrichment = ["dep:mentedb-extraction"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+mentedb-embedding = { workspace = true }
 criterion = { workspace = true }
 uuid = { workspace = true }
 serde_json = { workspace = true }
