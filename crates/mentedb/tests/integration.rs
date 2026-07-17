@@ -1552,6 +1552,70 @@ mod injection_attention {
     }
 
     #[test]
+    fn graph_expansion_surfaces_linked_neighbors() {
+        // A matches the query; B does not, but is linked to A by an edge. With a
+        // candidate pool of 1, only A is a direct hit, so B can appear ONLY via
+        // associative graph expansion. Disabled, B stays out; enabled, B rides in.
+        let a_emb = vec![1.0, 0.0, 0.0, 0.0];
+        let b_emb = vec![0.0, 1.0, 0.0, 0.0];
+
+        let build = |expansion: usize| {
+            let dir = tempfile::tempdir().unwrap();
+            let config = mentedb::CognitiveConfig {
+                write_inference: false,
+                injection_config: mentedb::injection::InjectionConfig {
+                    candidate_pool: 1,
+                    graph_expansion_max: expansion,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let db = MenteDb::open_with_config(dir.path(), config).unwrap();
+            let a = semantic(a_emb.clone(), "user prefers dark mode", vec![]);
+            let b = semantic(b_emb.clone(), "user is colorblind", vec![]);
+            let (aid, bid) = (a.id, b.id);
+            db.store(a).unwrap();
+            db.store(b).unwrap();
+            db.relate(MemoryEdge {
+                source: aid,
+                target: bid,
+                edge_type: EdgeType::Related,
+                weight: 0.9,
+                created_at: 0,
+                valid_from: None,
+                valid_until: None,
+                label: None,
+            })
+            .unwrap();
+            let query = InjectionQuery {
+                embedding: &a_emb,
+                query_text: None,
+                session_id: None,
+                exclude_ids: &[],
+                max_items: 5,
+                max_episodic: 0,
+                agent_id: None,
+                user_id: None,
+            };
+            let ids: Vec<_> = db
+                .recall_for_injection(&query)
+                .unwrap()
+                .iter()
+                .map(|c| c.node.id)
+                .collect();
+            (aid, bid, ids)
+        };
+
+        let (aid, bid, off) = build(0);
+        assert!(off.contains(&aid), "A is the direct hit");
+        assert!(!off.contains(&bid), "B stays out with expansion disabled");
+
+        let (aid, bid, on) = build(4);
+        assert!(on.contains(&aid), "A is still the direct hit");
+        assert!(on.contains(&bid), "B pulled in by graph expansion");
+    }
+
+    #[test]
     fn injection_excludes_session_actions_and_ledger_and_pins_always() {
         let dir = tempfile::tempdir().unwrap();
         let db = MenteDb::open(dir.path()).unwrap();

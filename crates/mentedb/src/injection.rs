@@ -54,6 +54,15 @@ pub struct InjectionConfig {
     pub used_similarity: f32,
     /// Salience reinforcement applied when a memory is actually used.
     pub use_reinforcement: f32,
+    /// Associative recall: how many 1-hop graph neighbors of the top vector hits
+    /// to fold into the candidate pool, so a memory linked to a strong hit can
+    /// surface even when it is not itself vector-similar to the query. 0 (the
+    /// default) disables expansion, leaving pure vector/hybrid recall unchanged.
+    pub graph_expansion_max: usize,
+    /// Score a neighbor inherits from the hit it was reached through, as a
+    /// fraction of that hit's score times the edge weight. Keeps neighbors below
+    /// direct hits so they only win a slot when there is room after them.
+    pub graph_expansion_decay: f32,
 }
 
 impl Default for InjectionConfig {
@@ -66,6 +75,8 @@ impl Default for InjectionConfig {
             demotion_factor: 0.5,
             used_similarity: 0.6,
             use_reinforcement: 0.05,
+            graph_expansion_max: 0,
+            graph_expansion_decay: 0.5,
         }
     }
 }
@@ -237,6 +248,59 @@ impl MenteDb {
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         let scores: Vec<f32> = scored.iter().map(|(_, s)| *s).collect();
         scored.truncate(knee_cutoff(&scores, cfg.knee_gap_ratio));
+
+        // Associative recall: after the vector-tail knee, fold in 1-hop graph
+        // neighbors of the surviving hits, so a memory linked to a relevant hit
+        // can surface even when it is not itself vector-similar to the query.
+        // Runs after the knee (which is for weak vector tails, a different signal
+        // than an explicit edge) so a neighbor's decayed score is not mistaken
+        // for a tail and cut. Disabled by default (graph_expansion_max == 0),
+        // leaving pure vector/hybrid recall intact. Neighbors inherit a decayed
+        // share of the hit's score so they never outrank direct hits, pass the
+        // same gates, and are bounded by graph_expansion_max; MMR then picks the
+        // final set within max_items.
+        if cfg.graph_expansion_max > 0 && !scored.is_empty() {
+            let now = now_us();
+            let mut present: HashSet<MemoryId> = scored.iter().map(|(n, _)| n.id).collect();
+            present.extend(excluded.iter().copied());
+            let seeds: Vec<(MemoryId, f32)> = scored.iter().map(|(n, s)| (n.id, *s)).collect();
+
+            let g = self.graph.graph();
+            let mut added = 0usize;
+            'seeds: for (seed_id, seed_score) in seeds {
+                let mut edges = g.outgoing(seed_id);
+                edges.extend(g.incoming(seed_id));
+                for (nbr_id, edge) in edges {
+                    if added >= cfg.graph_expansion_max {
+                        break 'seeds;
+                    }
+                    if present.contains(&nbr_id) {
+                        continue;
+                    }
+                    let Ok(node) = self.get_memory(nbr_id) else {
+                        continue;
+                    };
+                    if has_tag(&node, "action")
+                        || has_tag(&node, "scope:always")
+                        || has_tag(&node, "ghost-memory")
+                        || !node.is_valid_at(now)
+                        || !crate::agent_visible(node.agent_id, query.agent_id)
+                        || !crate::user_visible(node.user_id, query.user_id)
+                    {
+                        continue;
+                    }
+                    if let Some(ref st) = session_tag
+                        && has_tag(&node, st)
+                    {
+                        continue;
+                    }
+                    let score = seed_score * edge.weight * cfg.graph_expansion_decay;
+                    present.insert(nbr_id);
+                    scored.push((node, score));
+                    added += 1;
+                }
+            }
+        }
 
         // MMR selection with type quotas.
         let top_score = scored
