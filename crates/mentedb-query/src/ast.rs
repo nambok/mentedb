@@ -67,6 +67,10 @@ pub enum Field {
     Confidence,
     Created,
     Accessed,
+    /// Temporal validity at a point in time: `AS OF <t>` keeps only memories that
+    /// were valid at timestamp `t` (valid_from <= t < valid_until), so a query can
+    /// see what was true at a past moment, including facts later superseded.
+    ValidAt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

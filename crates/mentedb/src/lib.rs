@@ -1781,6 +1781,10 @@ impl MenteDb {
             (Field::Accessed, v) => {
                 Self::num_cmp(node.accessed_at as f64, f.op, Self::value_f64(v))
             }
+            // AS OF <t>: keep only memories whose validity window contains t.
+            (Field::ValidAt, v) => Self::value_f64(v)
+                .map(|t| node.is_valid_at(t as u64))
+                .unwrap_or(true),
             _ => true,
         }
     }
