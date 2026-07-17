@@ -77,7 +77,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
       - run: cd sdks/typescript && npm publish --access public --provenance
         env:
