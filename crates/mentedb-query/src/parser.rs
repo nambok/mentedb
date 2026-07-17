@@ -114,6 +114,22 @@ impl<'a> Parser<'a> {
             limit = Some(n);
         }
 
+        // AS OF <timestamp> — point-in-time temporal filter. Added as a ValidAt
+        // filter so it flows through the same pipeline as WHERE clauses.
+        if self.at(TokenKind::As) {
+            self.advance();
+            self.expect(TokenKind::Of)?;
+            let tok = self.advance();
+            let t: i64 = tok.lexeme.parse().map_err(|_| {
+                MenteError::Query(format!("invalid AS OF timestamp: {}", tok.lexeme))
+            })?;
+            filters.push(Filter {
+                field: Field::ValidAt,
+                op: Operator::Eq,
+                value: Value::Integer(t),
+            });
+        }
+
         Ok(Statement::Recall(RecallStatement {
             filters,
             near,
@@ -431,6 +447,42 @@ mod tests {
                 assert_eq!(r.filters[0].field, Field::Type);
                 assert_eq!(r.filters[0].value, Value::MemoryType(MemoryType::Episodic));
                 assert_eq!(r.limit, Some(5));
+            }
+            _ => panic!("expected Recall"),
+        }
+    }
+
+    #[test]
+    fn test_parse_recall_as_of() {
+        // AS OF <t> lowers to a ValidAt filter carrying the timestamp, on top of
+        // any WHERE filters, and coexists with LIMIT.
+        let tokens =
+            tokenize("RECALL memories WHERE type = semantic LIMIT 5 AS OF 1700000000").unwrap();
+        let stmt = Parser::parse(&tokens).unwrap();
+        match stmt {
+            Statement::Recall(r) => {
+                assert_eq!(r.limit, Some(5));
+                assert_eq!(r.filters.len(), 2);
+                let valid_at = r
+                    .filters
+                    .iter()
+                    .find(|f| f.field == Field::ValidAt)
+                    .expect("expected a ValidAt filter from AS OF");
+                assert_eq!(valid_at.value, Value::Integer(1_700_000_000));
+            }
+            _ => panic!("expected Recall"),
+        }
+    }
+
+    #[test]
+    fn test_parse_recall_as_of_without_where() {
+        let tokens = tokenize("RECALL memories AS OF 42").unwrap();
+        let stmt = Parser::parse(&tokens).unwrap();
+        match stmt {
+            Statement::Recall(r) => {
+                assert_eq!(r.filters.len(), 1);
+                assert_eq!(r.filters[0].field, Field::ValidAt);
+                assert_eq!(r.filters[0].value, Value::Integer(42));
             }
             _ => panic!("expected Recall"),
         }

@@ -1860,3 +1860,60 @@ fn test_store_user_profile_bumps_updated_timestamp() {
     );
     db.close().unwrap();
 }
+
+#[test]
+fn as_of_recalls_the_validity_window_including_superseded_facts() {
+    // Bitemporal AS OF: `RECALL ... AS OF <t>` returns exactly the memories whose
+    // validity window [valid_from, valid_until) contains t. A fact superseded
+    // after t is still visible when we ask "as of" a moment it was true, and a
+    // fact that only becomes valid later is hidden. This is the whole point of
+    // AS OF: currently-invalid memories are NOT globally dropped, they are judged
+    // against the requested instant.
+    let dir = tempfile::tempdir().unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
+
+    // Always valid (no window).
+    let stable = make_memory("stable fact", vec![1.0, 0.0, 0.0, 0.0]);
+
+    // Valid from the beginning, superseded at t=1000.
+    let mut superseded = make_memory("was true early then replaced", vec![0.0, 1.0, 0.0, 0.0]);
+    superseded.valid_until = Some(1000);
+
+    // Only becomes valid at t=2000.
+    let mut future = make_memory("becomes true later", vec![0.0, 0.0, 1.0, 0.0]);
+    future.valid_from = Some(2000);
+
+    db.store(stable).unwrap();
+    db.store(superseded).unwrap();
+    db.store(future).unwrap();
+
+    let contents = |q: &str| -> Vec<String> {
+        db.recall(q)
+            .unwrap()
+            .blocks
+            .iter()
+            .flat_map(|b| b.memories.iter().map(|sm| sm.memory.content.clone()))
+            .collect()
+    };
+    let has = |v: &[String], s: &str| v.iter().any(|c| c == s);
+
+    // AS OF 500: stable + superseded are valid; future is not yet valid.
+    let at_500 = contents("RECALL memories AS OF 500");
+    assert!(has(&at_500, "stable fact"));
+    assert!(has(&at_500, "was true early then replaced"));
+    assert!(!has(&at_500, "becomes true later"));
+
+    // AS OF 1500: superseded is now invalidated (valid_until=1000); future still not valid.
+    let at_1500 = contents("RECALL memories AS OF 1500");
+    assert!(has(&at_1500, "stable fact"));
+    assert!(!has(&at_1500, "was true early then replaced"));
+    assert!(!has(&at_1500, "becomes true later"));
+
+    // AS OF 3000: future is now valid; superseded still gone.
+    let at_3000 = contents("RECALL memories AS OF 3000");
+    assert!(has(&at_3000, "stable fact"));
+    assert!(!has(&at_3000, "was true early then replaced"));
+    assert!(has(&at_3000, "becomes true later"));
+
+    db.close().unwrap();
+}
