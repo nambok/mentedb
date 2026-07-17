@@ -1323,38 +1323,21 @@ impl MenteDb {
         )
     }
 
-    /// Apply decay globally: recompute salience for all memories and persist.
+    /// Retained for API compatibility. Does nothing and persists nothing.
     ///
-    /// This is an expensive operation intended for periodic maintenance.
-    /// For real-time use, prefer `apply_decay` on retrieved memories.
+    /// Salience decay is derived on read, not materialized. The stored
+    /// `salience` field is the base value as of a memory's last reinforcement
+    /// (`accessed_at`); the current, decayed strength is computed on demand via
+    /// `compute_decayed_salience` (used by recall scoring and archival).
+    ///
+    /// This method previously recomputed decay from the stored salience and
+    /// wrote the result back. That fed each pass's output in as the next pass's
+    /// input, so the effective decay rate scaled with how often maintenance ran
+    /// rather than with elapsed time: frequent passes aged and forgot memories
+    /// far faster than the configured half-life. Deriving on read removes that
+    /// coupling entirely, so it is safe to run maintenance at any cadence.
     pub fn apply_decay_global(&self) -> MenteResult<usize> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_micros() as u64;
-        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
-
-        let mut updated = 0;
-        for pid in &page_ids {
-            if let Ok(mut node) = self.storage.load_memory(*pid) {
-                let new_salience = self.decay.compute_decay(
-                    node.salience,
-                    node.created_at,
-                    node.accessed_at,
-                    node.access_count,
-                    now,
-                );
-                if (new_salience - node.salience).abs() > 0.001 {
-                    node.salience = new_salience;
-                    self.storage.update_memory(*pid, &node)?;
-                    updated += 1;
-                }
-            }
-        }
-        if updated > 0 {
-            info!("Decay pass updated {} memories", updated);
-        }
-        Ok(updated)
+        Ok(0)
     }
 
     // -----------------------------------------------------------------------
@@ -2145,7 +2128,18 @@ impl MenteDb {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_micros() as u64;
-        self.archival.evaluate(memory, now)
+        // Judge on the salience decayed to `now`, not the stored base. Stored
+        // salience only changes on reinforcement, so a never-reinforced memory
+        // keeps its base value and archival must derive the current strength.
+        let effective = self.decay.compute_decay(
+            memory.salience,
+            memory.created_at,
+            memory.accessed_at,
+            memory.access_count,
+            now,
+        );
+        self.archival
+            .evaluate_effective(effective, memory.created_at, memory.access_count, now)
     }
 
     /// Evaluate archival decisions for a batch of memories.
@@ -2163,7 +2157,23 @@ impl MenteDb {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_micros() as u64;
-        self.archival.evaluate_batch(memories, now)
+        memories
+            .iter()
+            .map(|m| {
+                let effective = self.decay.compute_decay(
+                    m.salience,
+                    m.created_at,
+                    m.accessed_at,
+                    m.access_count,
+                    now,
+                );
+                (
+                    m.id,
+                    self.archival
+                        .evaluate_effective(effective, m.created_at, m.access_count, now),
+                )
+            })
+            .collect()
     }
 
     /// Run archival evaluation on all memories in the database.
@@ -2171,17 +2181,15 @@ impl MenteDb {
     /// Returns decisions for each memory. Does NOT apply them — call
     /// `invalidate_memory` or `forget` to act on the decisions.
     pub fn evaluate_archival_global(&self) -> MenteResult<Vec<(MemoryId, ArchivalDecision)>> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_micros() as u64;
         let pm = self.page_map.read();
         let memories: Vec<MemoryNode> = pm
             .values()
             .filter_map(|pid| self.storage.load_memory(*pid).ok())
             .collect();
         drop(pm);
-        Ok(self.archival.evaluate_batch(&memories, now))
+        // Delegate so decisions use each memory's salience decayed to now, not
+        // its stored base (see evaluate_archival_batch).
+        Ok(self.evaluate_archival_batch(&memories))
     }
 
     // -----------------------------------------------------------------------

@@ -45,17 +45,36 @@ impl ArchivalPipeline {
         Self { config }
     }
 
-    /// Evaluate a single memory for archival.
+    /// Evaluate a single memory for archival using its stored salience.
+    ///
+    /// Prefer `evaluate_effective` from the facade, which passes the salience
+    /// decayed to `now`. The stored `salience` field is the base value as of the
+    /// last reinforcement, not the current one, so judging archival on it alone
+    /// is only correct when the caller has no decay engine.
     pub fn evaluate(&self, memory: &MemoryNode, now: Timestamp) -> ArchivalDecision {
-        let age = now.saturating_sub(memory.created_at);
+        self.evaluate_effective(memory.salience, memory.created_at, memory.access_count, now)
+    }
+
+    /// Evaluate archival against an externally computed effective (decayed)
+    /// salience, so lifecycle decisions reflect the memory's current strength
+    /// rather than a stored base that decay never re-reads. Takes only the three
+    /// fields the decision needs, so the caller need not clone the whole node.
+    pub fn evaluate_effective(
+        &self,
+        effective_salience: f32,
+        created_at: Timestamp,
+        access_count: u32,
+        now: Timestamp,
+    ) -> ArchivalDecision {
+        let age = now.saturating_sub(created_at);
 
         // Delete: very low salience, very old, rarely accessed
-        if memory.salience < 0.05 && age > THIRTY_DAYS_US && memory.access_count < 2 {
+        if effective_salience < 0.05 && age > THIRTY_DAYS_US && access_count < 2 {
             return ArchivalDecision::Delete;
         }
 
         // Archive: low salience and older than 7 days
-        if memory.salience < 0.1 && age > SEVEN_DAYS_US {
+        if effective_salience < 0.1 && age > SEVEN_DAYS_US {
             return ArchivalDecision::Archive;
         }
 
@@ -137,5 +156,45 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].1, ArchivalDecision::Keep);
         assert_eq!(results[1].1, ArchivalDecision::Archive);
+    }
+
+    // Regression: archival must judge on the salience decayed to `now`, not on a
+    // stored base that decay no longer materializes. A full-strength memory a
+    // week old is still strong (~0.45) and must be kept; a month-old one has
+    // decayed past the floor and should go. Before the fix, a compounding decay
+    // pass drove the stored base under 0.1 within a week and force-forgot it.
+    #[test]
+    fn effective_salience_governs_archival_not_stored_base() {
+        use crate::decay::DecayEngine;
+        let decay = DecayEngine::default();
+        let pipe = ArchivalPipeline::default();
+
+        // 8 days old, base 1.0, never reinforced. Derived ~0.45 > 0.1 archive
+        // threshold, so keep, even though it is older than the 7-day min age.
+        let now = 30 * DAY_US;
+        let created = now - 8 * DAY_US;
+        let eff = decay.compute_decay(1.0, created, created, 0, now);
+        assert!(
+            eff > 0.1,
+            "derived salience {eff} should clear archive threshold"
+        );
+        assert_eq!(
+            pipe.evaluate_effective(eff, created, 0, now),
+            ArchivalDecision::Keep,
+        );
+
+        // 40 days old, never reinforced: derived salience decays under the floor
+        // and, being 30d+ old and barely accessed, is deleted.
+        let now = 60 * DAY_US;
+        let created = now - 40 * DAY_US;
+        let eff = decay.compute_decay(1.0, created, created, 0, now);
+        assert!(
+            eff < 0.05,
+            "derived salience {eff} should fall under delete threshold"
+        );
+        assert_eq!(
+            pipe.evaluate_effective(eff, created, 0, now),
+            ArchivalDecision::Delete,
+        );
     }
 }
