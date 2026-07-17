@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.6](https://github.com/nambok/mentedb/compare/mentedb-v0.14.5...mentedb-v0.14.6) - 2026-07-17
+
+### Added
+
+- add reset_decay_state to repair salience corrupted by compounding decay ([#252](https://github.com/nambok/mentedb/pull/252))
+
 ## [0.14.5](https://github.com/nambok/mentedb/compare/mentedb-v0.14.4...mentedb-v0.14.5) - 2026-07-17
 
 ### Fixed
