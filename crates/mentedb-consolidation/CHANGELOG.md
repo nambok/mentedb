@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.15.1...mentedb-consolidation-v0.16.1) - 2026-07-17
+
+### Fixed
+
+- decay demotes but never deletes curated memories ([#260](https://github.com/nambok/mentedb/pull/260))
+
+### Other
+
+- release v0.16.0 ([#261](https://github.com/nambok/mentedb/pull/261))
+
 ## [0.16.0](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.15.1...mentedb-consolidation-v0.16.0) - 2026-07-17
 
 ### Fixed
