@@ -1340,6 +1340,39 @@ impl MenteDb {
         Ok(0)
     }
 
+    /// One-time repair for databases whose stored salience was corrupted by the
+    /// old compounding decay pass, which overwrote each memory's base salience
+    /// with a repeatedly re-decayed value. Reset every memory's salience to the
+    /// configured maximum and restart its decay clock (`accessed_at = now`), in
+    /// place, without re-running write inference, so every surviving memory gets
+    /// a fresh, correct decay lease from now. Access counts and every other field
+    /// are preserved. Returns the number of memories reset.
+    ///
+    /// This is idempotent in effect (running it twice just resets an already
+    /// healthy base again) and safe to gate behind a one-shot migration flag.
+    pub fn reset_decay_state(&self) -> MenteResult<usize> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        let max_salience = self.decay.config.max_salience;
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+
+        let mut reset = 0;
+        for pid in &page_ids {
+            if let Ok(mut node) = self.storage.load_memory(*pid) {
+                node.salience = max_salience;
+                node.accessed_at = now;
+                self.storage.update_memory(*pid, &node)?;
+                reset += 1;
+            }
+        }
+        if reset > 0 {
+            info!("Reset decay state for {} memories", reset);
+        }
+        Ok(reset)
+    }
+
     // -----------------------------------------------------------------------
     // Cognitive Engine: Consolidation
     // -----------------------------------------------------------------------
