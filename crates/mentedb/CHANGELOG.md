@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1](https://github.com/nambok/mentedb/compare/mentedb-v0.14.7...mentedb-v0.15.1) - 2026-07-17
+
+### Added
+
+- associative recall via graph expansion (gated, default off) ([#258](https://github.com/nambok/mentedb/pull/258))
+
+### Other
+
+- release v0.14.8 ([#256](https://github.com/nambok/mentedb/pull/256))
+- end-to-end retention probe for the memory lifecycle ([#257](https://github.com/nambok/mentedb/pull/257))
+
 ## [0.15.0](https://github.com/nambok/mentedb/compare/mentedb-v0.14.7...mentedb-v0.15.0) - 2026-07-17
 
 ### Added
