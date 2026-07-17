@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1](https://github.com/nambok/mentedb/compare/mentedb-core-v0.17.0...mentedb-core-v0.17.1) - 2026-07-17
+
+### Fixed
+
+- truncate text on char boundaries to avoid UTF-8 panics ([#268](https://github.com/nambok/mentedb/pull/268))
+
 ## [0.12.3](https://github.com/nambok/mentedb/compare/mentedb-core-v0.12.2...mentedb-core-v0.12.3) - 2026-07-15
 
 ### Other
