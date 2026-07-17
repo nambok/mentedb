@@ -780,8 +780,50 @@ fn test_decay_global_applies_to_all_memories() {
 
     // apply_decay_global should not error.
     let updated = db.apply_decay_global().unwrap();
-    // For fresh memories, salience won't change much so updated may be 0.
-    assert!(updated <= 10, "Should not update more memories than exist");
+    // Decay is derived on read now, so the global pass persists nothing.
+    assert_eq!(updated, 0, "apply_decay_global no longer persists decay");
+
+    db.close().unwrap();
+}
+
+#[test]
+fn test_reset_decay_state_repairs_corrupted_salience() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
+    let agent = AgentId::new();
+
+    // Simulate a memory whose base salience was cratered by the old compounding
+    // decay pass and whose decay clock is stale.
+    let mut m = MemoryNode::new(
+        agent,
+        MemoryType::Semantic,
+        "important but over-decayed".to_string(),
+        vec![1.0, 0.0, 0.0, 0.0],
+    );
+    m.salience = 0.02;
+    m.accessed_at = 1_000; // long ago
+    m.access_count = 1; // access bonus 0.1*ln(2) ~ 0.069, so derived stays under 0.1
+    db.store(m).unwrap();
+
+    let id = db.memory_ids()[0];
+    let before = db.get_memory(id).unwrap();
+    assert!(db.compute_decayed_salience(&before) < 0.1);
+
+    let reset = db.reset_decay_state().unwrap();
+    assert_eq!(reset, 1);
+
+    let after = db.get_memory(id).unwrap();
+    assert!(
+        after.salience > 0.99,
+        "salience should be reset to full, got {}",
+        after.salience
+    );
+    assert!(
+        db.compute_decayed_salience(&after) > 0.99,
+        "a just-reset memory should read as fully healthy"
+    );
+    // Access count is preserved, not wiped.
+    assert_eq!(after.access_count, 1);
 
     db.close().unwrap();
 }
