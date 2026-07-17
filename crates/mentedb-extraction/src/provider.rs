@@ -456,7 +456,8 @@ impl HttpExtractionProvider {
             None => {
                 tracing::warn!(
                     model = %self.config.model,
-                    response_preview = &text[..text.len().min(300)],
+                    response_preview =
+                        mentedb_core::text::truncate_on_char_boundary(&text, 300),
                     "No text block found in Anthropic response"
                 );
                 Ok("{\"memories\": []}".to_string())
@@ -555,7 +556,8 @@ impl HttpExtractionProvider {
         if content_text.trim().is_empty() {
             tracing::warn!(
                 model = %self.config.model,
-                response_preview = &text[..text.len().min(300)],
+                response_preview =
+                    mentedb_core::text::truncate_on_char_boundary(&text, 300),
                 "No text block found in Bedrock response"
             );
             return Ok("{\"memories\": []}".to_string());

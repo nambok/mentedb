@@ -206,7 +206,8 @@ impl<P: ExtractionProvider> ExtractionPipeline<P> {
         let value: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
             tracing::error!(
                 error = %e,
-                response_preview = &json_str[..json_str.len().min(200)],
+                response_preview =
+                    mentedb_core::text::truncate_on_char_boundary(json_str, 200),
                 "failed to parse LLM extraction response as JSON"
             );
             ExtractionError::ParseError(format!("Failed to parse extraction JSON: {e}"))

@@ -117,9 +117,9 @@ pub async fn run_enrichment<J: LlmJudge>(
                     // Get existing memories for dedup, scoped to this (user,
                     // agent) pair (plus global) so dedup never compares against
                     // another owner's data on either axis.
-                    let existing: Vec<MemoryNode> = if let Ok(Some(emb)) =
-                        db.embed_text(&conversation[..conversation.len().min(500)])
-                    {
+                    let existing: Vec<MemoryNode> = if let Ok(Some(emb)) = db.embed_text(
+                        mentedb_core::text::truncate_on_char_boundary(&conversation, 500),
+                    ) {
                         let now_us = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
