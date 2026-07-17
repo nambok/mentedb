@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0](https://github.com/nambok/mentedb/compare/mentedb-query-v0.16.1...mentedb-query-v0.17.0) - 2026-07-17
+
+### Added
+
+- MQL AS OF <t> for bitemporal point-in-time recall ([#264](https://github.com/nambok/mentedb/pull/264))
+
 ## [0.12.3](https://github.com/nambok/mentedb/compare/mentedb-query-v0.12.2...mentedb-query-v0.12.3) - 2026-07-15
 
 ### Other
