@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.2](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.17.1...mentedb-extraction-v0.17.2) - 2026-07-17
+
+### Other
+
+- document MQL AS OF and decay reinforcement/never-delete behavior ([#270](https://github.com/nambok/mentedb/pull/270))
+
 ## [0.17.1](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.17.0...mentedb-extraction-v0.17.1) - 2026-07-17
 
 ### Fixed
