@@ -29,6 +29,7 @@ fn test_state(
         extraction_config,
         auto_extract,
         extraction_tx: None,
+        cluster: None,
     });
     (state, tmp)
 }

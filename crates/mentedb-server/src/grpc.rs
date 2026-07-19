@@ -465,6 +465,7 @@ mod tests {
             extraction_config: None,
             auto_extract: false,
             extraction_tx: None,
+            cluster: None,
         });
         (state, tmp)
     }
@@ -776,6 +777,7 @@ mod tests {
                 extraction_config: None,
                 auto_extract: false,
                 extraction_tx: None,
+                cluster: None,
             }),
             tmp,
         )
