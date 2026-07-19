@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.4](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.17.3...mentedb-embedding-v0.17.4) - 2026-07-19
+
+### Other
+
+- README scaling now points at the engine mentedb::sharding primitives ([#277](https://github.com/nambok/mentedb/pull/277))
+
 ## [0.17.3](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.17.2...mentedb-embedding-v0.17.3) - 2026-07-19
 
 ### Other
