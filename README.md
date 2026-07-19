@@ -43,7 +43,7 @@ mentedb-server --data-dir ./data           # REST on :6677, nightly maintenance 
 docker run -p 6677:6677 \
   -e MENTEDB_LLM_PROVIDER=openai \
   -e MENTEDB_LLM_API_KEY=sk-... \
-  -v mentedb-data:/data \
+  -v mentedb-data:/var/mentedb/data \
   ghcr.io/nambok/mentedb:latest
 ```
 
@@ -172,6 +172,7 @@ let result = db.process_turn(&ProcessTurnInput {
     turn_id: 0,
     project_context: None,
     agent_id: None,
+    user_id: None,
     session_id: None,
 }, &mut delta)?;
 ```
@@ -223,7 +224,7 @@ The result: a clean, curated memory that actually helps the AI perform better.
 - **Cognitive Memory Tiers** Working, Episodic, Semantic, Procedural, Archival
 - **Knowledge Graph** CSR/CSC graph with BFS/DFS traversal and contradiction detection
 - **Memory Spaces** Multi agent isolation with per space ACLs
-- **MQL** Mente Query Language with full boolean logic (AND, OR, NOT), ordering (ASC/DESC), and point-in-time recall (`AS OF <timestamp>`)
+- **MQL** Mente Query Language with full boolean logic (AND, OR, NOT, and grouping) and point-in-time recall (`AS OF <timestamp>`)
 - **Type Safe IDs** MemoryId, AgentId, SpaceId newtypes prevent accidental mixing
 - **Binary Embeddings** Base64 encoded storage, 65% smaller than JSON arrays
 - **Local Candle Embeddings** Zero config semantic search using all-MiniLM-L6-v2 (384 dims), no API key required (Docker image includes it; source builds need `--features local-embeddings`)
@@ -304,7 +305,7 @@ curl -X POST http://localhost:6677/v1/memories \
   -d '{"agent_id": "...", "content": "User prefers dark mode", "memory_type": "semantic"}'
 
 # Recall memories
-curl -X POST http://localhost:6677/v1/query \
+curl -X POST http://localhost:6677/v1/recall \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"mql": "RECALL memories WHERE tag = \"preferences\" LIMIT 10"}'
 ```
@@ -647,9 +648,8 @@ A request that lands on a node that does not own the user is forwarded to the on
 that does, so any node can front the fleet. Zero-copy handoff assumes the fleet
 shares storage (each user's database on a shared volume); on purely local disks
 placement still routes correctly, but a rebalanced user's data does not follow it
-automatically yet. A single well-provisioned node already serves hundreds of users
-(raise `MENTEDB_MAX_OPEN_DBS` to hold more open at once); the fleet is for when one
-node's write throughput becomes the ceiling.
+automatically yet. A single well-provisioned node already serves hundreds of users;
+the fleet is for when one node's write throughput becomes the ceiling.
 
 ## Observability
 
@@ -681,7 +681,7 @@ MenteDB is organized as a Cargo workspace with 13 crates:
 | `mentedb-storage` | Page based storage engine with crash safe WAL, buffer pool, LZ4 |
 | `mentedb-index` | HNSW vector index (bounded, concurrent), roaring bitmaps, temporal index |
 | `mentedb-graph` | CSR/CSC knowledge graph with BFS/DFS and contradiction detection |
-| `mentedb-query` | MQL parser with AND/OR/NOT, ASC/DESC ordering |
+| `mentedb-query` | MQL parser with AND/OR/NOT and parenthesized grouping |
 | `mentedb-context` | Attention aware context assembly, U curve ordering, delta tracking |
 | `mentedb-cognitive` | Write inference, belief propagation, pain signals, phantom memories, speculative cache |
 | `mentedb-consolidation` | Temporal decay, memory consolidation, salience management, archival |
@@ -735,7 +735,7 @@ RECALL memories NEAR [0.12, 0.45, 0.78, 0.33] LIMIT 10
 
 -- Boolean filters with OR and NOT
 RECALL memories WHERE type = episodic AND (tag = "backend" OR tag = "frontend") LIMIT 5
-RECALL memories WHERE NOT tag = "archived" ORDER BY salience DESC
+RECALL memories WHERE NOT tag = "archived" LIMIT 20
 
 -- Content similarity
 RECALL memories WHERE content ~> "database migration strategies" LIMIT 10
@@ -760,14 +760,14 @@ docker run -p 6677:6677 \
   -e MENTEDB_JWT_SECRET=your-secret \
   -e MENTEDB_LLM_PROVIDER=openai \
   -e MENTEDB_LLM_API_KEY=sk-... \
-  -v mentedb-data:/data \
+  -v mentedb-data:/var/mentedb/data \
   ghcr.io/nambok/mentedb:latest
 
 # Or build from source
 docker build -t mentedb .
 docker run -p 6677:6677 \
   -e MENTEDB_JWT_SECRET=your-secret \
-  -v mentedb-data:/data \
+  -v mentedb-data:/var/mentedb/data \
   mentedb
 ```
 
