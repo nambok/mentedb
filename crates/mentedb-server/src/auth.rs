@@ -142,6 +142,7 @@ pub async fn auth_middleware(
     if path == "/v1/health"
         || path == "/v1/auth/token"
         || path == "/metrics"
+        || path == "/console"
         || path == crate::cluster::GOSSIP_PATH
     {
         return next.run(request).await;

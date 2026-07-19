@@ -2,6 +2,7 @@
 
 mod auth;
 mod cluster;
+mod console;
 mod error;
 mod extraction_queue;
 mod grpc;
