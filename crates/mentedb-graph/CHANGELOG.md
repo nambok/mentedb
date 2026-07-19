@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.3](https://github.com/nambok/mentedb/compare/mentedb-graph-v0.17.2...mentedb-graph-v0.17.3) - 2026-07-19
+
+### Other
+
+- frame README sharding as DIY-today with elastic auto-scaling as the direction ([#274](https://github.com/nambok/mentedb/pull/274))
+- reframe README Scaling as self-host guidance with a sharding example ([#273](https://github.com/nambok/mentedb/pull/273))
+- add Scaling section to README ([#271](https://github.com/nambok/mentedb/pull/271))
+
 ## [0.17.2](https://github.com/nambok/mentedb/compare/mentedb-graph-v0.17.1...mentedb-graph-v0.17.2) - 2026-07-17
 
 ### Other
