@@ -983,6 +983,47 @@ impl MenteDb {
         self.page_map.read().len()
     }
 
+    /// A bounded, paginated page of stored memories for admin browsing, ordered by
+    /// id so pagination is stable. Only `limit` nodes are loaded from storage per
+    /// call (paginate over the id set first, then load), so it stays cheap even on
+    /// a large store. Optional filters narrow the loaded page by owning agent,
+    /// memory type, and a case-insensitive content substring. Returns the total
+    /// memory count (for the pager) alongside the page.
+    pub fn list_memories(
+        &self,
+        limit: usize,
+        offset: usize,
+        agent: Option<AgentId>,
+        memory_type: Option<MemoryType>,
+        content_query: Option<&str>,
+    ) -> MenteResult<(usize, Vec<MemoryNode>)> {
+        let pm = self.page_map.read();
+        let total = pm.len();
+        let mut ids: Vec<MemoryId> = pm.keys().copied().collect();
+        ids.sort();
+        let needle = content_query.map(|q| q.to_lowercase());
+        let mut out = Vec::new();
+        for id in ids.into_iter().skip(offset).take(limit) {
+            if let Some(&page_id) = pm.get(&id)
+                && let Ok(node) = self.storage.load_memory(page_id)
+            {
+                if agent.is_some_and(|a| node.agent_id != a) {
+                    continue;
+                }
+                if memory_type.is_some_and(|t| node.memory_type != t) {
+                    continue;
+                }
+                if let Some(n) = &needle
+                    && !node.content.to_lowercase().contains(n)
+                {
+                    continue;
+                }
+                out.push(node);
+            }
+        }
+        Ok((total, out))
+    }
+
     /// Removes a memory from storage, indexes, and the graph.
     pub fn forget(&self, id: MemoryId) -> MenteResult<()> {
         debug!("Forgetting memory {}", id);

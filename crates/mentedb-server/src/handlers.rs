@@ -6,8 +6,8 @@ use std::sync::Arc;
 use crate::auth::AuthenticatedAgent;
 use axum::Extension;
 use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::{AttributeValue, MemoryType};
@@ -695,4 +695,89 @@ pub async fn grant_space_access(
     }
     spaces.grant_access(space_id, target_agent, perm);
     Ok(Json(json!({"status": "granted"})))
+}
+
+// ---------------------------------------------------------------------------
+// Admin endpoints (gated by the admin key, for the bundled /console).
+// ---------------------------------------------------------------------------
+
+/// Query params for GET /v1/admin/memories.
+#[derive(serde::Deserialize)]
+pub struct AdminListParams {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+    /// Filter by owning agent UUID.
+    pub agent: Option<String>,
+    /// Filter by memory type name.
+    #[serde(rename = "type")]
+    pub memory_type: Option<String>,
+    /// Case-insensitive content substring.
+    pub q: Option<String>,
+}
+
+fn memory_type_from_str(s: &str) -> Result<MemoryType, ApiError> {
+    match s.to_lowercase().as_str() {
+        "episodic" => Ok(MemoryType::Episodic),
+        "semantic" => Ok(MemoryType::Semantic),
+        "procedural" => Ok(MemoryType::Procedural),
+        "antipattern" | "anti_pattern" => Ok(MemoryType::AntiPattern),
+        "reasoning" => Ok(MemoryType::Reasoning),
+        "correction" => Ok(MemoryType::Correction),
+        other => Err(ApiError::BadRequest(format!(
+            "unknown memory type: {other}"
+        ))),
+    }
+}
+
+/// GET /v1/admin/memories: a bounded, paginated page of memories for the console.
+pub async fn admin_list_memories(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(p): Query<AdminListParams>,
+) -> Result<impl IntoResponse, ApiError> {
+    crate::auth::admin_authorized(&headers, &state.admin_key)?;
+    let limit = p.limit.unwrap_or(50).clamp(1, 200);
+    let offset = p.offset.unwrap_or(0);
+    let agent = match p.agent.as_deref().filter(|s| !s.is_empty()) {
+        Some(s) => {
+            Some(AgentId(s.parse().map_err(|_| {
+                ApiError::BadRequest("invalid agent UUID".into())
+            })?))
+        }
+        None => None,
+    };
+    let mtype = match p.memory_type.as_deref().filter(|s| !s.is_empty()) {
+        Some(s) => Some(memory_type_from_str(s)?),
+        None => None,
+    };
+    let q = p.q.as_deref().filter(|s| !s.is_empty());
+
+    let (total, nodes) = state
+        .db
+        .list_memories(limit, offset, agent, mtype, q)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let memories: Vec<_> = nodes.iter().map(memory_node_to_json).collect();
+    Ok(Json(json!({
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "memories": memories,
+    })))
+}
+
+/// DELETE /v1/admin/memories/{id}: forget a memory from the console.
+pub async fn admin_delete_memory(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id_str): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    crate::auth::admin_authorized(&headers, &state.admin_key)?;
+    let id: MemoryId = id_str
+        .parse()
+        .map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
+    state
+        .db
+        .forget(id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({ "status": "deleted", "id": id.to_string() })))
 }

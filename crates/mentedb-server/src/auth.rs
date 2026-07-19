@@ -92,6 +92,32 @@ fn extract_admin_key(request: &Request<Body>) -> Option<String> {
         .map(String::from)
 }
 
+/// Authorize an admin request from request headers against the configured admin
+/// key. Errors if no admin key is configured (admin endpoints are disabled) or the
+/// provided `x-api-key` / bearer does not match. Used by the /v1/admin endpoints.
+pub fn admin_authorized(
+    headers: &axum::http::HeaderMap,
+    admin_key: &Option<String>,
+) -> Result<(), ApiError> {
+    let expected = admin_key
+        .as_deref()
+        .ok_or_else(|| ApiError::Unauthorized("admin endpoints disabled: no admin key".into()))?;
+    let provided = headers
+        .get("x-api-key")
+        .and_then(|v| v.to_str().ok())
+        .or_else(|| {
+            headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+        })
+        .ok_or_else(|| ApiError::Unauthorized("admin key required".into()))?;
+    if provided != expected {
+        return Err(ApiError::Forbidden("invalid admin key".into()));
+    }
+    Ok(())
+}
+
 pub async fn generate_token(
     State(state): State<Arc<AppState>>,
     request: Request<Body>,
@@ -139,10 +165,13 @@ pub async fn auth_middleware(
 
     // Allow health, token, metrics, and peer-to-peer gossip endpoints without auth.
     let path = request.uri().path();
+    // Admin endpoints are gated by the admin key inside the handler, not the JWT,
+    // so the bundled console (which sends x-api-key) can reach them.
     if path == "/v1/health"
         || path == "/v1/auth/token"
         || path == "/metrics"
         || path == "/console"
+        || path.starts_with("/v1/admin")
         || path == crate::cluster::GOSSIP_PATH
     {
         return next.run(request).await;

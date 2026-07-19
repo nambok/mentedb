@@ -36,5 +36,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/metrics", get(crate::metrics::handler))
         .route("/console", get(crate::console::handler))
+        .route("/v1/admin/memories", get(handlers::admin_list_memories))
+        .route(
+            "/v1/admin/memories/{id}",
+            axum::routing::delete(handlers::admin_delete_memory),
+        )
         .with_state(state)
 }
