@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.10](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.17.9...mentedb-embedding-v0.17.10) - 2026-07-19
+
+### Added
+
+- one-command Prometheus + Grafana observability stack ([#291](https://github.com/nambok/mentedb/pull/291))
+
+### Other
+
+- update architecture diagram (hybrid retrieval + reranker, sharding fleet) ([#292](https://github.com/nambok/mentedb/pull/292))
+
 ## [0.17.5](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.17.4...mentedb-embedding-v0.17.5) - 2026-07-19
 
 ### Added

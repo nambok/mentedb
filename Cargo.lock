@@ -2242,7 +2242,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb"
-version = "0.17.9"
+version = "0.17.10"
 dependencies = [
  "criterion",
  "mentedb-cognitive",
@@ -2267,7 +2267,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-cognitive"
-version = "0.17.9"
+version = "0.17.10"
 dependencies = [
  "ahash 0.8.12",
  "criterion",
@@ -2285,7 +2285,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-consolidation"
-version = "0.17.9"
+version = "0.17.10"
 dependencies = [
  "ahash 0.8.12",
  "mentedb-core",
@@ -2297,7 +2297,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-context"
-version = "0.17.9"
+version = "0.17.10"
 dependencies = [
  "ahash 0.8.12",
  "mentedb-core",
@@ -2309,7 +2309,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-core"
-version = "0.17.9"
+version = "0.17.10"
 dependencies = [
  "ahash 0.8.12",
  "bytemuck",
@@ -2324,7 +2324,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-embedding"
-version = "0.17.9"
+version = "0.17.10"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -2347,7 +2347,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-extraction"
-version = "0.17.9"
+version = "0.17.10"
 dependencies = [
  "chrono",
  "hmac",
@@ -2366,7 +2366,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-graph"
-version = "0.17.9"
+version = "0.17.10"
 dependencies = [
  "ahash 0.8.12",
  "bincode",
@@ -2383,7 +2383,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-index"
-version = "0.17.9"
+version = "0.17.10"
 dependencies = [
  "ahash 0.8.12",
  "bincode",
@@ -2401,7 +2401,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-query"
-version = "0.17.9"
+version = "0.17.10"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -2413,7 +2413,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-replication"
-version = "0.17.9"
+version = "0.17.10"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -2434,7 +2434,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-server"
-version = "0.17.9"
+version = "0.17.10"
 dependencies = [
  "anyhow",
  "axum",
@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-storage"
-version = "0.17.9"
+version = "0.17.10"
 dependencies = [
  "ahash 0.8.12",
  "bincode",
