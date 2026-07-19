@@ -9,6 +9,7 @@ members = [
     "crates/mentedb-query",
     "crates/mentedb-context",
     "crates/mentedb-server",
+    "crates/mentedb-cli",
     "crates/mentedb-cognitive",
     "crates/mentedb-consolidation",
     "crates/mentedb-embedding",

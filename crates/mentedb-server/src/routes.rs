@@ -41,5 +41,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/v1/admin/memories/{id}",
             axum::routing::delete(handlers::admin_delete_memory),
         )
+        .route("/v1/admin/mql", post(handlers::admin_run_mql))
         .with_state(state)
 }

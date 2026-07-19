@@ -653,6 +653,15 @@ impl MenteDb {
         Ok(window)
     }
 
+    /// Run an MQL query and return the scored matches directly, without assembling
+    /// a context window. This is the raw query primitive behind `recall` (which
+    /// additionally packs the results into a token-budgeted context), and it powers
+    /// the `mentedb` CLI and the admin query endpoint.
+    pub fn query(&self, mql: &str) -> MenteResult<Vec<ScoredMemory>> {
+        let plan = Mql::parse(mql)?;
+        self.execute_plan(&plan)
+    }
+
     /// Like [`recall`](Self::recall), but runs an optional second pass through a
     /// [`Reranker`](crate::reranker::Reranker) before assembling the context
     /// window. The reranker reorders the first-pass candidates by `query_text`
