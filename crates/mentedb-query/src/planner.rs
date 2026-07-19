@@ -17,6 +17,9 @@ pub enum QueryPlan {
         /// the executor post-filters candidates by this instead of `filters`.
         #[serde(default)]
         condition: Option<Condition>,
+        /// ORDER BY clause; the executor sorts the result set by it before LIMIT.
+        #[serde(default)]
+        order_by: Option<OrderBy>,
     },
     TagScan {
         tags: Vec<String>,
@@ -26,11 +29,16 @@ pub enum QueryPlan {
         /// the executor post-filters candidates by this instead of `filters`.
         #[serde(default)]
         condition: Option<Condition>,
+        /// ORDER BY clause; the executor sorts the result set by it before LIMIT.
+        #[serde(default)]
+        order_by: Option<OrderBy>,
     },
     TemporalScan {
         start: Timestamp,
         end: Timestamp,
         filters: Vec<Filter>,
+        #[serde(default)]
+        order_by: Option<OrderBy>,
     },
     GraphTraversal {
         start: MemoryId,
@@ -79,6 +87,7 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
             k: limit,
             filters: recall.filters.clone(),
             condition: recall.condition.clone(),
+            order_by: recall.order_by.clone(),
         });
     }
 
@@ -91,6 +100,7 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
             filters: Vec::new(),
             limit: Some(limit),
             condition: recall.condition.clone(),
+            order_by: recall.order_by.clone(),
         });
     }
 
@@ -105,6 +115,7 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
                 k: limit,
                 filters: recall.filters.clone(),
                 condition: None,
+                order_by: recall.order_by.clone(),
             });
         }
         // SimilarTo with non-text value doesn't make sense
@@ -132,6 +143,7 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
             filters: Vec::new(),
             limit: Some(limit),
             condition: None,
+            order_by: recall.order_by.clone(),
         });
     }
 
@@ -184,6 +196,7 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
             start,
             end,
             filters: remaining,
+            order_by: recall.order_by.clone(),
         });
     }
 
@@ -193,6 +206,7 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
         filters: recall.filters.clone(),
         limit: Some(limit),
         condition: None,
+        order_by: recall.order_by.clone(),
     })
 }
 

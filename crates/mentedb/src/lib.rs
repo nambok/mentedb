@@ -68,7 +68,7 @@ use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
 use mentedb_embedding::provider::EmbeddingProvider;
 use mentedb_graph::GraphManager;
 use mentedb_index::IndexManager;
-use mentedb_query::{Condition, Field, Filter, Mql, Operator, QueryPlan, Value};
+use mentedb_query::{Condition, Field, Filter, Mql, Operator, OrderBy, QueryPlan, Value};
 use mentedb_storage::StorageEngine;
 use parking_lot::RwLock;
 use tracing::{debug, info, warn};
@@ -1939,6 +1939,7 @@ impl MenteDb {
                 k,
                 filters,
                 condition,
+                order_by,
             } => {
                 // `content ~> "text"` arrives with an empty vector and the
                 // SimilarTo filter left in place for us to embed now (no embedder
@@ -1996,6 +1997,9 @@ impl MenteDb {
                 {
                     self.apply_entity_boost(&mut scored, &qtext);
                 }
+                if let Some(ob) = order_by {
+                    Self::apply_order_by(&mut scored, ob);
+                }
                 Ok(scored)
             }
             QueryPlan::TagScan {
@@ -2003,6 +2007,7 @@ impl MenteDb {
                 filters,
                 limit,
                 condition,
+                order_by,
             } => {
                 let k = limit.unwrap_or(20);
                 let mut scored = if tags.is_empty() {
@@ -2032,14 +2037,28 @@ impl MenteDb {
                         });
                     }
                 }
+                // ORDER BY sorts before LIMIT so the top-k reflects the requested
+                // order, not relevance.
+                if let Some(ob) = order_by {
+                    Self::apply_order_by(&mut scored, ob);
+                }
                 scored.truncate(k);
                 Ok(scored)
             }
-            QueryPlan::TemporalScan { start, end, .. } => {
+            QueryPlan::TemporalScan {
+                start,
+                end,
+                order_by,
+                ..
+            } => {
                 let hits = self
                     .index
                     .hybrid_search(&[], None, Some((*start, *end)), 100);
-                self.load_scored_memories(&hits)
+                let mut scored = self.load_scored_memories(&hits)?;
+                if let Some(ob) = order_by {
+                    Self::apply_order_by(&mut scored, ob);
+                }
+                Ok(scored)
             }
             QueryPlan::GraphTraversal { start, depth, .. } => {
                 let (ids, _edges) = self.graph.get_context_subgraph(*start, *depth);
@@ -2120,6 +2139,28 @@ impl MenteDb {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
+    /// Sort recall results by an `ORDER BY` clause, applied before `LIMIT`. Only
+    /// the numeric and temporal fields (salience, confidence, created, accessed)
+    /// carry a meaningful order; ordering by any other field is a no-op that keeps
+    /// the existing (relevance) order.
+    fn apply_order_by(scored: &mut [ScoredMemory], ob: &OrderBy) {
+        fn key(n: &MemoryNode, field: Field) -> f64 {
+            match field {
+                Field::Salience => n.salience as f64,
+                Field::Confidence => n.confidence as f64,
+                Field::Created => n.created_at as f64,
+                Field::Accessed => n.access_count as f64,
+                _ => 0.0,
+            }
+        }
+        scored.sort_by(|a, b| {
+            let ord = key(&a.memory, ob.field)
+                .partial_cmp(&key(&b.memory, ob.field))
+                .unwrap_or(std::cmp::Ordering::Equal);
+            if ob.descending { ord.reverse() } else { ord }
         });
     }
 
@@ -3701,6 +3742,61 @@ mod mql_execution_tests {
             r#"RECALL WHERE type = semantic AND tag = "keep" LIMIT 50"#,
         );
         assert_eq!(got, vec!["semantic kept".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod order_by_tests {
+    use super::*;
+
+    fn contents(db: &MenteDb, mql: &str) -> Vec<String> {
+        db.query(mql)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.memory.content)
+            .collect()
+    }
+
+    /// ORDER BY sorts by the field and applies before LIMIT, both directions.
+    #[test]
+    fn order_by_salience_sorts_before_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+        for (content, sal) in [("low", 0.2_f32), ("high", 0.9), ("mid", 0.5)] {
+            let mut n = MemoryNode::new(
+                AgentId::nil(),
+                MemoryType::Semantic,
+                content.into(),
+                vec![0.1_f32; 8],
+            );
+            n.salience = sal;
+            db.store(n).unwrap();
+        }
+
+        // DESC: highest salience first, LIMIT keeps the top 2.
+        assert_eq!(
+            contents(
+                &db,
+                "RECALL WHERE type = semantic ORDER BY salience DESC LIMIT 2"
+            ),
+            vec!["high".to_string(), "mid".to_string()]
+        );
+        // ASC: lowest first.
+        assert_eq!(
+            contents(
+                &db,
+                "RECALL WHERE type = semantic ORDER BY salience ASC LIMIT 2"
+            ),
+            vec!["low".to_string(), "mid".to_string()]
+        );
+        // No direction defaults to ASC.
+        assert_eq!(
+            contents(
+                &db,
+                "RECALL WHERE type = semantic ORDER BY salience LIMIT 1"
+            ),
+            vec!["low".to_string()]
+        );
     }
 }
 
