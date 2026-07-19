@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1](https://github.com/nambok/mentedb/compare/mentedb-v0.19.0...mentedb-v0.20.1) - 2026-07-19
+
+### Fixed
+
+- scope standing-rule dedup to the same owner ([#303](https://github.com/nambok/mentedb/pull/303))
+- *(engine)* dedup standing rules on write and cap the always-list ([#302](https://github.com/nambok/mentedb/pull/302))
+
+### Other
+
+- release v0.20.0 ([#301](https://github.com/nambok/mentedb/pull/301))
+
 ## [0.20.0](https://github.com/nambok/mentedb/compare/mentedb-v0.19.0...mentedb-v0.20.0) - 2026-07-19
 
 ### Fixed
