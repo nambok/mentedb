@@ -112,6 +112,9 @@ pub mod enrichment;
 /// Optional second-pass reranking of recall results (off by default).
 pub mod reranker;
 
+/// Structured export: fill a JSON schema from memories via an embedder-supplied LLM.
+pub mod export;
+
 /// Lease-based elastic sharding: places each account on exactly one node and
 /// coordinates ownership so a fleet can scale horizontally. The engine owns the
 /// placement and coordination logic; the embedder supplies the lease and
