@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.3](https://github.com/nambok/mentedb/compare/mentedb-query-v0.20.1...mentedb-query-v0.20.3) - 2026-07-19
+
+### Added
+
+- *(query)* implement MQL ORDER BY (ASC/DESC) ([#310](https://github.com/nambok/mentedb/pull/310))
+
+### Other
+
+- *(readme)* fix inaccuracies found in the docs audit ([#309](https://github.com/nambok/mentedb/pull/309))
+
 ## [0.18.0](https://github.com/nambok/mentedb/compare/mentedb-query-v0.17.11...mentedb-query-v0.18.0) - 2026-07-19
 
 ### Added

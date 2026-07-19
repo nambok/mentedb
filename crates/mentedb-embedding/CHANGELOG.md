@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.3](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.20.1...mentedb-embedding-v0.20.3) - 2026-07-19
+
+### Other
+
+- *(readme)* fix inaccuracies found in the docs audit ([#309](https://github.com/nambok/mentedb/pull/309))
+
 ## [0.17.10](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.17.9...mentedb-embedding-v0.17.10) - 2026-07-19
 
 ### Added

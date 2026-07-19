@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.3](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.20.1...mentedb-storage-v0.20.3) - 2026-07-19
+
+### Other
+
+- release v0.20.2 ([#307](https://github.com/nambok/mentedb/pull/307))
+- *(readme)* fix inaccuracies found in the docs audit ([#309](https://github.com/nambok/mentedb/pull/309))
+- release v0.20.1 ([#306](https://github.com/nambok/mentedb/pull/306))
+
 ## [0.20.2](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.20.1...mentedb-storage-v0.20.2) - 2026-07-19
 
 ### Other
