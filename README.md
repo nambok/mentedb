@@ -583,23 +583,32 @@ println!("Stored {} memories, linked {} entities", result.memories_stored, resul
 
 ## Scaling
 
-Each user's memory is its own embedded database with exactly one writer. An
-exclusive cross-process lock (OFD locks, safe over NFSv4 and EFS) guarantees only
-one process ever holds a given database open, so there is no split-brain and no
-corruption: a second opener fails loudly with a "locked by another process" error
-rather than silently double-writing.
+MenteDB runs as a single process and scales vertically a long way before you need
+anything more. Each user's memory is an embedded database with exactly one writer:
+the engine takes an exclusive OS-level lock on the data directory, so a second
+process that tries to open the same user's database fails loudly with a "locked by
+another process" error instead of corrupting it. That lock is what makes
+horizontal scaling safe to add incrementally.
 
-- **Vertical first.** One node comfortably serves hundreds of users with tens
-  active at once. Reads and idle connections are effectively free; fsync-bound
-  writes (~30/s aggregate per node) are the ceiling. More CPU and memory extend
-  this several times before any architectural change is needed.
-- **Horizontal by sharding.** When a node's write ceiling is reached, shard users
-  across N nodes by a stable hash of the user id. Each user is owned by exactly
-  one node (enforced by the lock), so the write ceiling scales linearly with N,
-  bounded only by the filesystem's aggregate throughput. A routing mistake
-  produces the loud "locked" error, never corruption.
-- **Self-host and hosted both use this model:** one binary or container per node,
-  single-writer-per-user throughout.
+- **One node (start here).** Run a single `mentedb-server` (binary or the Docker
+  image). It comfortably serves hundreds of users with tens active at once; reads
+  and idle connections are effectively free, fsync-bound writes (~30/s aggregate
+  per node) are the ceiling. Add CPU and memory, and raise `MENTEDB_MAX_OPEN_DBS`,
+  to extend this several times over.
+- **Shard across nodes.** When one node's write throughput is the limit, run N
+  instances and route each user to a fixed one by a stable hash of the user id. A
+  user's directory is only ever opened by its own instance; the lock catches any
+  routing mistake before it can corrupt data. Write throughput then scales
+  linearly with N.
+
+```python
+# N MenteDB instances, each with its own data volume
+INSTANCES = ["mentedb-0:6677", "mentedb-1:6677", "mentedb-2:6677"]
+
+def instance_for(user_id: str) -> str:
+    # Stable hash: the same user always lands on the same instance
+    return INSTANCES[hash(user_id) % len(INSTANCES)]
+```
 
 ## Crates
 
