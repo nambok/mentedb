@@ -109,6 +109,15 @@ impl Cluster {
         })
     }
 
+    /// How many nodes the gossip layer currently considers live.
+    pub async fn live_node_count(&self) -> usize {
+        self.membership
+            .live_nodes()
+            .await
+            .map(|n| n.len())
+            .unwrap_or(0)
+    }
+
     /// Run the gossip loop in the background: one anti-entropy round per interval.
     pub fn spawn_gossip(&self) {
         let membership = self.membership.clone();

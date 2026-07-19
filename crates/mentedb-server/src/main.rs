@@ -7,6 +7,7 @@ mod extraction_queue;
 mod grpc;
 mod handlers;
 mod maintenance;
+mod metrics;
 mod rate_limit;
 mod routes;
 mod state;
@@ -473,6 +474,7 @@ async fn main() -> Result<()> {
             state.clone(),
             cluster::route,
         ))
+        .layer(middleware::from_fn(metrics::track))
         .layer(RateLimiter::default())
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
