@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.8](https://github.com/nambok/mentedb/compare/mentedb-server-v0.17.7...mentedb-server-v0.17.8) - 2026-07-19
+
+### Added
+
+- *(server)* bundled management console at /console ([#288](https://github.com/nambok/mentedb/pull/288))
+
 ## [0.17.7](https://github.com/nambok/mentedb/compare/mentedb-server-v0.17.6...mentedb-server-v0.17.7) - 2026-07-19
 
 ### Other
