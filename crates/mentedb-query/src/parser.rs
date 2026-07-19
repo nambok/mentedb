@@ -129,7 +129,16 @@ impl<'a> Parser<'a> {
                 self.advance();
             }
             let field = self.parse_field()?;
-            let descending = false; // default ascending
+            // Optional direction; ASC (the default) or DESC.
+            let descending = if self.at(TokenKind::Desc) {
+                self.advance();
+                true
+            } else {
+                if self.at(TokenKind::Asc) {
+                    self.advance();
+                }
+                false
+            };
             order_by = Some(OrderBy { field, descending });
         }
 
@@ -580,6 +589,35 @@ mod tests {
                 assert!(r.condition.is_none(), "pure AND must not build a tree");
             }
             _ => panic!("expected Recall"),
+        }
+    }
+
+    #[test]
+    fn test_order_by_direction() {
+        // DESC parses descending; ASC and no-direction parse ascending.
+        let cases = [
+            (
+                "RECALL WHERE type = semantic ORDER BY salience DESC LIMIT 5",
+                true,
+            ),
+            (
+                "RECALL WHERE type = semantic ORDER BY salience ASC LIMIT 5",
+                false,
+            ),
+            (
+                "RECALL WHERE type = semantic ORDER BY created LIMIT 5",
+                false,
+            ),
+        ];
+        for (q, descending) in cases {
+            let tokens = tokenize(q).unwrap();
+            match Parser::parse(&tokens).unwrap() {
+                Statement::Recall(r) => {
+                    let ob = r.order_by.expect("order_by present");
+                    assert_eq!(ob.descending, descending, "for query: {q}");
+                }
+                _ => panic!("expected Recall"),
+            }
         }
     }
 
