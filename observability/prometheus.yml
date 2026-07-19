@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # A self-hosted mentedb-server running on the host at :6677.
+  - job_name: mentedb-server
+    static_configs:
+      - targets: ["host.docker.internal:6677"]
+        labels:
+          instance: mentedb-server
+
+  # Add more nodes or the platform gateway here, for example:
+  # - job_name: mentedb-gateway
+  #   static_configs:
+  #     - targets: ["host.docker.internal:8080"]
+  #       labels:
+  #         instance: gateway

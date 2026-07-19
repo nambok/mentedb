@@ -613,18 +613,21 @@ node's write throughput becomes the ceiling.
 ## Observability
 
 `mentedb-server` exposes Prometheus metrics at `GET /metrics` (no auth, aggregate
-only, no per-account labels). It reports process CPU and memory, uptime, memories
-stored, live cluster nodes, and HTTP request rate and latency. Point Prometheus at
-it and import [`crates/mentedb-server/grafana-dashboard.json`](crates/mentedb-server/grafana-dashboard.json)
-for an overview dashboard.
+only, no per-account labels): process CPU and memory, uptime, memories stored, live
+cluster nodes, and HTTP request rate and latency. It also serves a bundled console
+at `GET /console` (live health, plus a memory browser gated by `--admin-key`).
 
-```yaml
-# prometheus.yml
-scrape_configs:
-  - job_name: mentedb
-    static_configs:
-      - targets: ["mentedb-0:6677", "mentedb-1:6677"]
+For a full stack, [`observability/`](observability/) has a one-command Prometheus +
+Grafana setup with the dashboard already provisioned:
+
+```bash
+docker compose -f observability/docker-compose.yml up -d
+open http://localhost:3000   # Grafana, "MenteDB" dashboard, live
 ```
+
+Point [`observability/prometheus.yml`](observability/prometheus.yml) at your nodes,
+or import [`crates/mentedb-server/grafana-dashboard.json`](crates/mentedb-server/grafana-dashboard.json)
+into an existing Grafana.
 
 ## Crates
 
