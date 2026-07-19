@@ -1,6 +1,7 @@
 //! MenteDB Server: axum based REST API with WebSocket, JWT auth, and observability.
 
 mod auth;
+mod cluster;
 mod error;
 mod extraction_queue;
 mod grpc;
@@ -443,6 +444,14 @@ async fn main() -> Result<()> {
         (None, None)
     };
 
+    // Self-organizing sharding: off unless MENTEDB_SHARDING is set. When on, the
+    // fleet gossips membership and forwards each request to the node that owns the
+    // agent, so N nodes shard themselves with no external coordinator.
+    let cluster = cluster::Cluster::from_env();
+    if let Some(c) = &cluster {
+        c.spawn_gossip();
+    }
+
     let state = Arc::new(AppState {
         db: db.clone(),
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
@@ -452,12 +461,17 @@ async fn main() -> Result<()> {
         extraction_config,
         auto_extract,
         extraction_tx,
+        cluster,
     });
 
     let app = routes::build_router(state.clone())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            cluster::route,
         ))
         .layer(RateLimiter::default())
         .layer(CompressionLayer::new())

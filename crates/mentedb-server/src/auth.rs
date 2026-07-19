@@ -137,9 +137,9 @@ pub async fn auth_middleware(
         None => return next.run(request).await,
     };
 
-    // Allow health and token endpoints without auth.
+    // Allow health, token, and peer-to-peer gossip endpoints without auth.
     let path = request.uri().path();
-    if path == "/v1/health" || path == "/v1/auth/token" {
+    if path == "/v1/health" || path == "/v1/auth/token" || path == crate::cluster::GOSSIP_PATH {
         return next.run(request).await;
     }
 

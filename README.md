@@ -583,55 +583,32 @@ println!("Stored {} memories, linked {} entities", result.memories_stored, resul
 
 ## Scaling
 
-MenteDB runs as a single process and scales vertically a long way before you need
-anything more. Each user's memory is an embedded database with exactly one writer:
-the engine takes an exclusive OS-level lock on the data directory, so a second
-process that tries to open the same user's database fails loudly with a "locked by
-another process" error instead of corrupting it. That lock is what makes
-horizontal scaling safe to add incrementally.
+MenteDB shards itself across a fleet and coordinates it on its own: no router to
+run, no hash ring to maintain, no external coordination service. Each user's memory
+is an embedded database with exactly one writer, guarded by an exclusive OS-level
+lock (a second process that opens the same user's database fails loudly with a
+"locked by another process" error instead of corrupting it), and that lock is what
+the engine passes between nodes to move ownership safely. Three pieces make it work:
 
-- **One node (start here).** Run a single `mentedb-server` (binary or the Docker
-  image). It comfortably serves hundreds of users with tens active at once; reads
-  and idle connections are effectively free, fsync-bound writes (~30/s aggregate
-  per node) are the ceiling. Add CPU and memory, and raise `MENTEDB_MAX_OPEN_DBS`,
-  to extend this several times over.
-- **Shard across nodes.** When one node's write throughput is the limit, run N
-  instances and place each user on exactly one of them. A user's directory is only
-  ever opened by its owning node; the exclusive lock catches any routing mistake
-  before it can corrupt data. Write throughput then scales linearly with N. The
-  simplest option is a fixed hash of the user id:
+- **Membership (gossip).** Each node gossips with a few peers to converge on the
+  live set, with no external store and no coordinator process. A node that stops
+  heartbeating drops out; a new one is picked up from a seed address or a headless
+  service DNS name. This is the Cassandra/Dynamo model, not a consensus leader.
+- **Placement (rendezvous).** Every node maps a user to its owner by rendezvous
+  (highest-random-weight) hashing, computed identically everywhere, so a request
+  reaches the same owner from any node. Adding or removing a node re-homes only
+  about 1/N of users, not the full reshuffle a `hash % N` ring forces.
+- **Handoff (the lock).** Ownership is the single-writer lock: when a user re-homes,
+  the old owner releases the lock and the new owner takes it, so a user's database
+  is only ever written by one node and handoff moves the lock, not the data.
 
-```python
-# N MenteDB instances, each with its own data volume
-INSTANCES = ["mentedb-0:6677", "mentedb-1:6677", "mentedb-2:6677"]
-
-def instance_for(user_id: str) -> str:
-    # Stable hash: the same user always lands on the same instance
-    return INSTANCES[hash(user_id) % len(INSTANCES)]
-```
-
-For elastic placement, the engine ships `mentedb::sharding`: rendezvous
-(highest-random-weight) placement plus a lease-fenced `Coordinator` that moves
-only about 1/N of users when the fleet changes, instead of reshuffling everyone
-like `hash % N`. You supply two small backends over whatever coordination store
-you already run (Redis, Postgres, DynamoDB): a `LeaseStore` (exactly-one-owner
-leases, fenced by an epoch token) and a `NodeRegistry` (the live node set). The
-`Coordinator` resolves each request to its owner, so users are placed and moved
-for you instead of routed by hand:
-
-```rust
-use mentedb::sharding::{Coordinator, Resolution};
-
-// Your LeaseStore + NodeRegistry back onto Redis, Postgres, DynamoDB, ...
-let coordinator = Coordinator::new(/* enabled */ true, node_id, lease_store, node_registry);
-
-match coordinator.resolve(user_id).await? {
-    Resolution::Local { epoch } => serve_locally(user_id, epoch), // we own it; epoch fences writes
-    Resolution::Remote { addr } => forward_to(&addr),             // another node owns it
-}
-```
-
-For most self-hosted deployments a single well-provisioned node is already plenty.
+A request that lands on a node that does not own the user is forwarded to the one
+that does, so any node can front the fleet. Zero-copy handoff assumes the fleet
+shares storage (each user's database on a shared volume); on purely local disks
+placement still routes correctly, but a rebalanced user's data does not follow it
+automatically yet. A single well-provisioned node already serves hundreds of users
+(raise `MENTEDB_MAX_OPEN_DBS` to hold more open at once); the fleet is for when one
+node's write throughput becomes the ceiling.
 
 ## Crates
 
