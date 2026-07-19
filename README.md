@@ -595,11 +595,11 @@ horizontal scaling safe to add incrementally.
   and idle connections are effectively free, fsync-bound writes (~30/s aggregate
   per node) are the ceiling. Add CPU and memory, and raise `MENTEDB_MAX_OPEN_DBS`,
   to extend this several times over.
-- **Shard across nodes (DIY today).** When one node's write throughput is the
-  limit, you can run N instances and route each user to a fixed one by a stable
-  hash of the user id. A user's directory is only ever opened by its own instance;
-  the lock catches any routing mistake before it can corrupt data. Write
-  throughput then scales linearly with N.
+- **Shard across nodes.** When one node's write throughput is the limit, run N
+  instances and place each user on exactly one of them. A user's directory is only
+  ever opened by its owning node; the exclusive lock catches any routing mistake
+  before it can corrupt data. Write throughput then scales linearly with N. The
+  simplest option is a fixed hash of the user id:
 
 ```python
 # N MenteDB instances, each with its own data volume
@@ -610,11 +610,28 @@ def instance_for(user_id: str) -> str:
     return INSTANCES[hash(user_id) % len(INSTANCES)]
 ```
 
-The fixed hash above is a deliberate DIY option, not the ceiling. Automatic,
-elastic placement, consistent-hash rebalancing behind a lease coordinator so
-capacity scales 1->N and users are placed and moved for you, is the direction; you
-should not have to route by hand. For most self-hosted deployments a single
-well-provisioned node is already plenty.
+For elastic placement, the engine ships `mentedb::sharding`: rendezvous
+(highest-random-weight) placement plus a lease-fenced `Coordinator` that moves
+only about 1/N of users when the fleet changes, instead of reshuffling everyone
+like `hash % N`. You supply two small backends over whatever coordination store
+you already run (Redis, Postgres, DynamoDB): a `LeaseStore` (exactly-one-owner
+leases, fenced by an epoch token) and a `NodeRegistry` (the live node set). The
+`Coordinator` resolves each request to its owner, so users are placed and moved
+for you instead of routed by hand:
+
+```rust
+use mentedb::sharding::{Coordinator, Resolution};
+
+// Your LeaseStore + NodeRegistry back onto Redis, Postgres, DynamoDB, ...
+let coordinator = Coordinator::new(/* enabled */ true, node_id, lease_store, node_registry);
+
+match coordinator.resolve(user_id).await? {
+    Resolution::Local { epoch } => serve_locally(user_id, epoch), // we own it; epoch fences writes
+    Resolution::Remote { addr } => forward_to(&addr),             // another node owns it
+}
+```
+
+For most self-hosted deployments a single well-provisioned node is already plenty.
 
 ## Crates
 
