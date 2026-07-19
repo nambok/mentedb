@@ -224,7 +224,7 @@ The result: a clean, curated memory that actually helps the AI perform better.
 - **Cognitive Memory Tiers** Working, Episodic, Semantic, Procedural, Archival
 - **Knowledge Graph** CSR/CSC graph with BFS/DFS traversal and contradiction detection
 - **Memory Spaces** Multi agent isolation with per space ACLs
-- **MQL** Mente Query Language with full boolean logic (AND, OR, NOT, and grouping) and point-in-time recall (`AS OF <timestamp>`)
+- **MQL** Mente Query Language with full boolean logic (AND, OR, NOT, and grouping), ordering (`ORDER BY salience DESC`), and point-in-time recall (`AS OF <timestamp>`)
 - **Type Safe IDs** MemoryId, AgentId, SpaceId newtypes prevent accidental mixing
 - **Binary Embeddings** Base64 encoded storage, 65% smaller than JSON arrays
 - **Local Candle Embeddings** Zero config semantic search using all-MiniLM-L6-v2 (384 dims), no API key required (Docker image includes it; source builds need `--features local-embeddings`)
@@ -681,7 +681,7 @@ MenteDB is organized as a Cargo workspace with 13 crates:
 | `mentedb-storage` | Page based storage engine with crash safe WAL, buffer pool, LZ4 |
 | `mentedb-index` | HNSW vector index (bounded, concurrent), roaring bitmaps, temporal index |
 | `mentedb-graph` | CSR/CSC knowledge graph with BFS/DFS and contradiction detection |
-| `mentedb-query` | MQL parser with AND/OR/NOT and parenthesized grouping |
+| `mentedb-query` | MQL parser with AND/OR/NOT, grouping, and ORDER BY |
 | `mentedb-context` | Attention aware context assembly, U curve ordering, delta tracking |
 | `mentedb-cognitive` | Write inference, belief propagation, pain signals, phantom memories, speculative cache |
 | `mentedb-consolidation` | Temporal decay, memory consolidation, salience management, archival |
