@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/nambok/mentedb/compare/mentedb-v0.18.0...mentedb-v0.19.0) - 2026-07-19
+
+### Added
+
+- *(recall)* optional entity-boost leg in hybrid retrieval ([#300](https://github.com/nambok/mentedb/pull/300))
+
 ## [0.18.0](https://github.com/nambok/mentedb/compare/mentedb-v0.17.11...mentedb-v0.18.0) - 2026-07-19
 
 ### Added
