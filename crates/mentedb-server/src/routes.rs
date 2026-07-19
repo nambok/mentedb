@@ -30,5 +30,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/v1/spaces/{id}/grant", post(handlers::grant_space_access))
         .route("/v1/ws/stream", get(websocket::ws_handler))
+        .route(
+            crate::cluster::GOSSIP_PATH,
+            post(crate::cluster::gossip_handler),
+        )
         .with_state(state)
 }

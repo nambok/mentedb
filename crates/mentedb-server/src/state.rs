@@ -19,4 +19,6 @@ pub struct AppState {
     pub auto_extract: bool,
     /// Bounded channel sender for the background extraction worker.
     pub extraction_tx: Option<ExtractionSender>,
+    /// Self-organizing sharding handle. `None` unless `MENTEDB_SHARDING` is set.
+    pub cluster: Option<crate::cluster::Cluster>,
 }

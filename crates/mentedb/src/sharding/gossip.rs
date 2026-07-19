@@ -28,7 +28,7 @@ use super::{Node, NodeRegistry};
 const FANOUT: usize = 3;
 
 /// One node's advertised state, as gossiped.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Member {
     pub id: String,
     pub addr: String,
