@@ -56,6 +56,7 @@ const PAGE: &str = r##"<!doctype html>
 <nav>
   <button id="tab-health" class="active" onclick="showTab('health')">Health</button>
   <button id="tab-memories" onclick="showTab('memories')">Memories</button>
+  <button id="tab-query" onclick="showTab('query')">Query</button>
 </nav>
 <main>
   <section id="health">
@@ -83,10 +84,23 @@ const PAGE: &str = r##"<!doctype html>
       <span id="pager" class="sub"></span>
     </div>
   </section>
+  <section id="query" class="hidden">
+    <div class="row">
+      <input id="qkey" type="password" placeholder="admin key (x-api-key)" style="width:220px" />
+      <button class="act" onclick="runMql()">Run</button>
+      <span id="qmsg" class="sub"></span>
+    </div>
+    <textarea id="mql" spellcheck="false"
+      style="width:100%;height:110px;margin-top:10px;box-sizing:border-box;background:#0b0b0d;color:#e4e4e7;border:1px solid #1f1f23;border-radius:8px;padding:10px;font-family:ui-monospace,SFMono-Regular,monospace;font-size:13px"
+      placeholder="RECALL WHERE memory_type = &quot;semantic&quot; LIMIT 20"></textarea>
+    <p class="muted" style="margin-top:6px">Runs raw MQL through the engine. Read only browsing, no context assembly. Results ordered by score.</p>
+    <table><thead><tr><th>Content</th><th>Type</th><th>Agent</th><th>Score</th></tr></thead>
+    <tbody id="qrows"></tbody></table>
+  </section>
 </main>
 <script>
 function showTab(t) {
-  for (const n of ["health","memories"]) {
+  for (const n of ["health","memories","query"]) {
     document.getElementById(n).classList.toggle("hidden", n !== t);
     document.getElementById("tab-"+n).classList.toggle("active", n === t);
   }
@@ -168,7 +182,37 @@ async function del(id) {
   const r = await fetch("/v1/admin/memories/"+id, { method:"DELETE", headers: { "x-api-key": key() } });
   if (r.ok) loadMem(offset); else alert("delete failed: "+r.status);
 }
-window.addEventListener("load", () => { const s = sessionStorage.getItem("mdb_key"); if (s) document.getElementById("key").value = s; });
+// ---- Query ----
+async function runMql() {
+  const k = document.getElementById("qkey").value.trim();
+  if (!k) { document.getElementById("qmsg").textContent = "enter the admin key"; return; }
+  sessionStorage.setItem("mdb_key", k);
+  const mql = document.getElementById("mql").value.trim();
+  if (!mql) { document.getElementById("qmsg").textContent = "enter a query"; return; }
+  document.getElementById("qmsg").textContent = "running…";
+  let r;
+  try {
+    r = await fetch("/v1/admin/mql", { method:"POST",
+      headers: { "x-api-key": k, "content-type": "application/json" },
+      body: JSON.stringify({ mql }) });
+  } catch { document.getElementById("qmsg").textContent = "request failed"; return; }
+  if (!r.ok) {
+    const e = await r.json().catch(()=>null);
+    document.getElementById("qmsg").textContent = (e && e.error) ? e.error : ("error "+r.status);
+    return;
+  }
+  const d = await r.json();
+  document.getElementById("qrows").innerHTML = (d.memories||[]).map(mem => {
+    const ag = (mem.agent_id||"").slice(0,8);
+    const sc = typeof mem.score === "number" ? mem.score.toFixed(3) : "";
+    return `<tr><td class="content">${esc(mem.content)}</td><td><span class="pill">${esc(mem.memory_type)}</span></td><td class="mono">${ag}</td><td class="mono">${sc}</td></tr>`;
+  }).join("");
+  document.getElementById("qmsg").textContent = (d.count||0)+" result"+((d.count===1)?"":"s");
+}
+window.addEventListener("load", () => {
+  const s = sessionStorage.getItem("mdb_key");
+  if (s) { document.getElementById("key").value = s; document.getElementById("qkey").value = s; }
+});
 </script>
 </body>
 </html>
