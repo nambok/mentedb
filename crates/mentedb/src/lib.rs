@@ -109,6 +109,9 @@ pub use llm_consolidation::ConsolidationParams;
 #[cfg(feature = "enrichment")]
 pub mod enrichment;
 
+/// Optional second-pass reranking of recall results (off by default).
+pub mod reranker;
+
 /// Lease-based elastic sharding: places each account on exactly one node and
 /// coordinates ownership so a fleet can scale horizontally. The engine owns the
 /// placement and coordination logic; the embedder supplies the lease and
@@ -645,6 +648,45 @@ impl MenteDb {
         let config = AssemblyConfig::default();
         let window = ContextAssembler::assemble(scored, vec![], &config);
         Ok(window)
+    }
+
+    /// Like [`recall`](Self::recall), but runs an optional second pass through a
+    /// [`Reranker`](crate::reranker::Reranker) before assembling the context
+    /// window. The reranker reorders the first-pass candidates by `query_text`
+    /// (typically the natural-language query behind the MQL), so exact-term or
+    /// model-scored relevance can lift results that pure vector/BM25 ranking
+    /// buried. Reranking is entirely opt-in: plain `recall` never invokes it.
+    pub fn recall_reranked(
+        &self,
+        query: &str,
+        query_text: &str,
+        reranker: &dyn crate::reranker::Reranker,
+    ) -> MenteResult<ContextWindow> {
+        use crate::reranker::RerankCandidate;
+        let plan = Mql::parse(query)?;
+        let mut scored = self.execute_plan(&plan)?;
+
+        let candidates: Vec<RerankCandidate<'_>> = scored
+            .iter()
+            .map(|s| RerankCandidate {
+                id: s.memory.id,
+                content: &s.memory.content,
+                score: s.score,
+            })
+            .collect();
+        let new_scores: std::collections::HashMap<MemoryId, f32> = reranker
+            .rerank(query_text, &candidates)
+            .into_iter()
+            .collect();
+        for s in &mut scored {
+            if let Some(&ns) = new_scores.get(&s.memory.id) {
+                s.score = ns;
+            }
+        }
+        scored.sort_by(|a, b| b.score.total_cmp(&a.score));
+
+        let config = AssemblyConfig::default();
+        Ok(ContextAssembler::assemble(scored, vec![], &config))
     }
 
     /// Shortcut for vector similarity search.
