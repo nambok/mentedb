@@ -583,59 +583,32 @@ println!("Stored {} memories, linked {} entities", result.memories_stored, resul
 
 ## Scaling
 
-MenteDB runs as a single process and scales vertically a long way before you need
-anything more. Each user's memory is an embedded database with exactly one writer:
-the engine takes an exclusive OS-level lock on the data directory, so a second
-process that tries to open the same user's database fails loudly with a "locked by
-another process" error instead of corrupting it. That lock is what makes
-horizontal scaling safe to add incrementally.
+MenteDB shards itself across a fleet and coordinates it on its own: no router to
+run, no hash ring to maintain, no external coordination service. Each user's memory
+is an embedded database with exactly one writer, guarded by an exclusive OS-level
+lock (a second process that opens the same user's database fails loudly with a
+"locked by another process" error instead of corrupting it), and that lock is what
+the engine passes between nodes to move ownership safely. Three pieces make it work:
 
-- **One node (start here).** Run a single `mentedb-server` (binary or the Docker
-  image). It comfortably serves hundreds of users with tens active at once; reads
-  and idle connections are effectively free, fsync-bound writes (~30/s aggregate
-  per node) are the ceiling. Add CPU and memory, and raise `MENTEDB_MAX_OPEN_DBS`,
-  to extend this several times over.
-- **Shard across nodes (self-organizing).** When one node's write throughput is
-  the limit, run N instances and let them shard themselves. Point each node at a
-  seed or two (a static list, or a headless service DNS name) and the fleet does
-  the rest: nodes gossip to converge on the live set with no external store and no
-  coordinator process, deterministic rendezvous placement means every node computes
-  the same owner for a user, and ownership hands off by moving the single-writer
-  lock rather than by copying data. There is no routing table and no `hash % N` to
-  maintain by hand.
+- **Membership (gossip).** Each node gossips with a few peers to converge on the
+  live set, with no external store and no coordinator process. A node that stops
+  heartbeating drops out; a new one is picked up from a seed address or a headless
+  service DNS name. This is the Cassandra/Dynamo model, not a consensus leader.
+- **Placement (rendezvous).** Every node maps a user to its owner by rendezvous
+  (highest-random-weight) hashing, computed identically everywhere, so a request
+  reaches the same owner from any node. Adding or removing a node re-homes only
+  about 1/N of users, not the full reshuffle a `hash % N` ring forces.
+- **Handoff (the lock).** Ownership is the single-writer lock: when a user re-homes,
+  the old owner releases the lock and the new owner takes it, so a user's database
+  is only ever written by one node and handoff moves the lock, not the data.
 
-```rust
-use mentedb::sharding::{gossip::GossipMembership, Coordinator, NoCoordLease, Resolution};
-
-// Nodes discover each other from a seed list (resolve a headless DNS name to it).
-let members = GossipMembership::new(node_id, my_addr, seeds, timeout, http_transport);
-let coordinator = Coordinator::new(true, node_id, NoCoordLease::new(node_id), members);
-
-// Per request: serve locally if we own this user, otherwise forward to the owner.
-match coordinator.resolve(user_id).await? {
-    Resolution::Local { .. } => serve_locally(user_id),
-    Resolution::Remote { addr } => forward_to(&addr),
-}
-```
-
-  This is the Cassandra/Dynamo model, gossip membership plus consistent placement,
-  so adding or removing a node re-homes only about 1/N of users instead of
-  reshuffling everyone. Zero-copy handoff assumes the fleet shares storage (each
-  user's database on a shared volume, ownership is just who holds the lock); on
-  purely local disks the placement still routes correctly, but a rebalanced user's
-  data does not follow it automatically yet.
-
-If you would rather not run a fleet at all, a fixed hash you own is the dead simple
-fallback, no gossip and no shared storage, at the cost of reshuffling on every
-membership change:
-
-```python
-INSTANCES = ["mentedb-0:6677", "mentedb-1:6677", "mentedb-2:6677"]
-def instance_for(user_id: str) -> str:
-    return INSTANCES[hash(user_id) % len(INSTANCES)]
-```
-
-For most self-hosted deployments a single well-provisioned node is already plenty.
+A request that lands on a node that does not own the user is forwarded to the one
+that does, so any node can front the fleet. Zero-copy handoff assumes the fleet
+shares storage (each user's database on a shared volume); on purely local disks
+placement still routes correctly, but a rebalanced user's data does not follow it
+automatically yet. A single well-provisioned node already serves hundreds of users
+(raise `MENTEDB_MAX_OPEN_DBS` to hold more open at once); the fleet is for when one
+node's write throughput becomes the ceiling.
 
 ## Crates
 
