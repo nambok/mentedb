@@ -13,11 +13,19 @@ pub enum QueryPlan {
         query: Vec<f32>,
         k: usize,
         filters: Vec<Filter>,
+        /// Full boolean WHERE tree, when the clause used OR/NOT/grouping. When set,
+        /// the executor post-filters candidates by this instead of `filters`.
+        #[serde(default)]
+        condition: Option<Condition>,
     },
     TagScan {
         tags: Vec<String>,
         filters: Vec<Filter>,
         limit: Option<usize>,
+        /// Full boolean WHERE tree, when the clause used OR/NOT/grouping. When set,
+        /// the executor post-filters candidates by this instead of `filters`.
+        #[serde(default)]
+        condition: Option<Condition>,
     },
     TemporalScan {
         start: Timestamp,
@@ -70,6 +78,19 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
             query: vec.clone(),
             k: limit,
             filters: recall.filters.clone(),
+            condition: recall.condition.clone(),
+        });
+    }
+
+    // OR/NOT/grouped WHERE: none of the leaf-based index optimizations below are
+    // safe (they assume every filter must hold), so full-scan and let the executor
+    // evaluate the boolean tree. Correct, if less selective, for these rarer queries.
+    if recall.condition.is_some() {
+        return Ok(QueryPlan::TagScan {
+            tags: Vec::new(),
+            filters: Vec::new(),
+            limit: Some(limit),
+            condition: recall.condition.clone(),
         });
     }
 
@@ -83,6 +104,7 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
                 query: Vec::new(), // placeholder — executor embeds the SimilarTo text
                 k: limit,
                 filters: recall.filters.clone(),
+                condition: None,
             });
         }
         // SimilarTo with non-text value doesn't make sense
@@ -109,6 +131,7 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
             tags,
             filters: Vec::new(),
             limit: Some(limit),
+            condition: None,
         });
     }
 
@@ -169,6 +192,7 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
         tags: Vec::new(),
         filters: recall.filters.clone(),
         limit: Some(limit),
+        condition: None,
     })
 }
 

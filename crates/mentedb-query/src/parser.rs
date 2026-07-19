@@ -9,6 +9,29 @@ use crate::ast::*;
 use crate::lexer::{Token, TokenKind};
 use mentedb_core::types::MemoryId;
 
+/// If `cond` is a pure AND of leaf filters (a single leaf, or ANDs nesting only
+/// leaves and further ANDs), return those leaves flattened. Otherwise return
+/// `None`: the tree has an OR or NOT and must be evaluated as a tree. This keeps
+/// the common `a AND b AND c` clause on the flat-filter fast path.
+fn flatten_pure_and(cond: &Condition) -> Option<Vec<Filter>> {
+    fn collect(c: &Condition, out: &mut Vec<Filter>) -> bool {
+        match c {
+            Condition::Leaf(f) => {
+                out.push(f.clone());
+                true
+            }
+            Condition::And(children) => children.iter().all(|ch| collect(ch, out)),
+            _ => false,
+        }
+    }
+    let mut out = Vec::new();
+    if collect(cond, &mut out) {
+        Some(out)
+    } else {
+        None
+    }
+}
+
 pub struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
@@ -76,6 +99,7 @@ impl<'a> Parser<'a> {
 
         let mut near = None;
         let mut filters = Vec::new();
+        let mut condition: Option<Condition> = None;
         let mut limit = None;
         let mut order_by = None;
 
@@ -85,10 +109,16 @@ impl<'a> Parser<'a> {
             near = Some(self.parse_vector()?);
         }
 
-        // WHERE clause
+        // WHERE clause. Parse the full boolean expression, then keep the common
+        // pure-AND case as a flat filter list (so the planner's index selection is
+        // unchanged); only fall back to the tree when OR, NOT, or grouping appears.
         if self.at(TokenKind::Where) {
             self.advance();
-            filters = self.parse_filters()?;
+            let cond = self.parse_condition()?;
+            match flatten_pure_and(&cond) {
+                Some(leaves) => filters = leaves,
+                None => condition = Some(cond),
+            }
         }
 
         // ORDER BY field
@@ -123,15 +153,24 @@ impl<'a> Parser<'a> {
             let t: i64 = tok.lexeme.parse().map_err(|_| {
                 MenteError::Query(format!("invalid AS OF timestamp: {}", tok.lexeme))
             })?;
-            filters.push(Filter {
+            let valid_at = Filter {
                 field: Field::ValidAt,
                 op: Operator::Eq,
                 value: Value::Integer(t),
-            });
+            };
+            // AS OF must AND with whatever WHERE produced. In the tree case, wrap
+            // it in; otherwise it is just another top-level AND leaf.
+            match condition.take() {
+                Some(c) => {
+                    condition = Some(Condition::And(vec![c, Condition::Leaf(valid_at)]));
+                }
+                None => filters.push(valid_at),
+            }
         }
 
         Ok(Statement::Recall(RecallStatement {
             filters,
+            condition,
             near,
             limit,
             order_by,
@@ -220,6 +259,60 @@ impl<'a> Parser<'a> {
             filters.push(self.parse_filter()?);
         }
         Ok(filters)
+    }
+
+    /// Parse a boolean WHERE expression with standard precedence:
+    /// OR binds loosest, then AND, then NOT, then a parenthesized group or a leaf
+    /// comparison. `a AND b OR c` parses as `(a AND b) OR c`.
+    fn parse_condition(&mut self) -> MenteResult<Condition> {
+        let mut node = self.parse_and_condition()?;
+        while self.at(TokenKind::Or) {
+            self.advance();
+            let rhs = self.parse_and_condition()?;
+            node = match node {
+                Condition::Or(mut v) => {
+                    v.push(rhs);
+                    Condition::Or(v)
+                }
+                other => Condition::Or(vec![other, rhs]),
+            };
+        }
+        Ok(node)
+    }
+
+    fn parse_and_condition(&mut self) -> MenteResult<Condition> {
+        let mut node = self.parse_not_condition()?;
+        while self.at(TokenKind::And) {
+            self.advance();
+            let rhs = self.parse_not_condition()?;
+            node = match node {
+                Condition::And(mut v) => {
+                    v.push(rhs);
+                    Condition::And(v)
+                }
+                other => Condition::And(vec![other, rhs]),
+            };
+        }
+        Ok(node)
+    }
+
+    fn parse_not_condition(&mut self) -> MenteResult<Condition> {
+        if self.at(TokenKind::Not) {
+            self.advance();
+            let inner = self.parse_not_condition()?;
+            return Ok(Condition::Not(Box::new(inner)));
+        }
+        self.parse_primary_condition()
+    }
+
+    fn parse_primary_condition(&mut self) -> MenteResult<Condition> {
+        if self.at(TokenKind::LParen) {
+            self.advance();
+            let inner = self.parse_condition()?;
+            self.expect(TokenKind::RParen)?;
+            return Ok(inner);
+        }
+        Ok(Condition::Leaf(self.parse_filter()?))
     }
 
     fn parse_filter(&mut self) -> MenteResult<Filter> {
@@ -472,6 +565,55 @@ mod tests {
                 assert_eq!(r.filters[0].value, Value::MemoryType(MemoryType::Episodic));
                 assert_eq!(r.limit, Some(5));
             }
+            _ => panic!("expected Recall"),
+        }
+    }
+
+    #[test]
+    fn test_pure_and_stays_on_flat_fast_path() {
+        // A pure AND clause must flatten to `filters` with `condition == None`, so
+        // the planner keeps its leaf-based index optimizations.
+        let tokens = tokenize("RECALL WHERE type = semantic AND tag = \"x\" LIMIT 5").unwrap();
+        match Parser::parse(&tokens).unwrap() {
+            Statement::Recall(r) => {
+                assert_eq!(r.filters.len(), 2, "both leaves flattened");
+                assert!(r.condition.is_none(), "pure AND must not build a tree");
+            }
+            _ => panic!("expected Recall"),
+        }
+    }
+
+    #[test]
+    fn test_or_builds_condition_tree() {
+        let tokens = tokenize("RECALL WHERE type = semantic OR type = procedural LIMIT 5").unwrap();
+        match Parser::parse(&tokens).unwrap() {
+            Statement::Recall(r) => {
+                assert!(r.filters.is_empty(), "OR clause is carried by the tree");
+                match r.condition {
+                    Some(Condition::Or(branches)) => assert_eq!(branches.len(), 2),
+                    other => panic!("expected Or condition, got {other:?}"),
+                }
+            }
+            _ => panic!("expected Recall"),
+        }
+    }
+
+    #[test]
+    fn test_grouping_and_not_precedence() {
+        // (a OR b) AND NOT c  =>  And[ Or[a, b], Not(c) ]
+        let tokens = tokenize(
+            "RECALL WHERE (type = semantic OR type = procedural) AND NOT tag = \"x\" LIMIT 5",
+        )
+        .unwrap();
+        match Parser::parse(&tokens).unwrap() {
+            Statement::Recall(r) => match r.condition {
+                Some(Condition::And(parts)) => {
+                    assert_eq!(parts.len(), 2);
+                    assert!(matches!(parts[0], Condition::Or(_)), "left is the OR group");
+                    assert!(matches!(parts[1], Condition::Not(_)), "right is the NOT");
+                }
+                other => panic!("expected And condition, got {other:?}"),
+            },
             _ => panic!("expected Recall"),
         }
     }
