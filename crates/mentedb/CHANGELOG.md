@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0](https://github.com/nambok/mentedb/compare/mentedb-v0.17.11...mentedb-v0.18.0) - 2026-07-19
+
+### Added
+
+- *(query)* MQL boolean WHERE with OR, NOT, and grouping ([#297](https://github.com/nambok/mentedb/pull/297))
+
 ## [0.17.10](https://github.com/nambok/mentedb/compare/mentedb-v0.17.9...mentedb-v0.17.10) - 2026-07-19
 
 ### Added
