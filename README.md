@@ -610,6 +610,22 @@ automatically yet. A single well-provisioned node already serves hundreds of use
 (raise `MENTEDB_MAX_OPEN_DBS` to hold more open at once); the fleet is for when one
 node's write throughput becomes the ceiling.
 
+## Observability
+
+`mentedb-server` exposes Prometheus metrics at `GET /metrics` (no auth, aggregate
+only, no per-account labels). It reports process CPU and memory, uptime, memories
+stored, live cluster nodes, and HTTP request rate and latency. Point Prometheus at
+it and import [`crates/mentedb-server/grafana-dashboard.json`](crates/mentedb-server/grafana-dashboard.json)
+for an overview dashboard.
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: mentedb
+    static_configs:
+      - targets: ["mentedb-0:6677", "mentedb-1:6677"]
+```
+
 ## Crates
 
 MenteDB is organized as a Cargo workspace with 13 crates:

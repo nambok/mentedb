@@ -23,6 +23,7 @@ pub mod extraction_queue;
 pub mod grpc;
 /// HTTP request handlers for the REST API.
 pub mod handlers;
+pub mod metrics;
 /// Token bucket rate limiting middleware.
 pub mod rate_limit;
 /// Axum router construction.

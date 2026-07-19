@@ -34,5 +34,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             crate::cluster::GOSSIP_PATH,
             post(crate::cluster::gossip_handler),
         )
+        .route("/metrics", get(crate::metrics::handler))
         .with_state(state)
 }
