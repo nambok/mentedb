@@ -15,6 +15,8 @@
 /// JWT authentication and authorization.
 pub mod auth;
 pub mod cluster;
+/// Bundled management console served at /console.
+pub mod console;
 /// Unified API error type.
 pub mod error;
 /// Background extraction queue with bounded concurrency.
