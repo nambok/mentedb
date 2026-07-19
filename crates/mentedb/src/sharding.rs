@@ -1,11 +1,11 @@
 //! Lease-based elastic sharding.
 //!
-//! A different scaling model from the Raft cluster in this crate: instead of
-//! replicating one dataset, it shards accounts across nodes so each account's
-//! single-writer database lives on exactly one node. This module owns the
-//! placement math and the coordination logic; the concrete lease and membership
-//! backends are provided by the embedder (the engine takes no external database
-//! dependency), via the [`LeaseStore`] and [`NodeRegistry`] traits.
+//! A different scaling model from the Raft cluster in `mentedb-replication`:
+//! instead of replicating one dataset, it shards accounts across nodes so each
+//! account's single-writer database lives on exactly one node. This module owns
+//! the placement math and the coordination logic; the concrete lease and
+//! membership backends are provided by the embedder (the engine takes no external
+//! database dependency), via the [`LeaseStore`] and [`NodeRegistry`] traits.
 
 use std::collections::HashMap;
 use std::future::Future;
