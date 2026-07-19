@@ -650,6 +650,12 @@ impl MenteDb {
             let Ok(existing) = self.get_memory(id) else {
                 continue;
             };
+            // Dedup only within the same owner: another user or agent pinning the
+            // same rule is a separate standing rule, and collapsing across owners
+            // would break isolation.
+            if existing.user_id != node.user_id || existing.agent_id != node.agent_id {
+                continue;
+            }
             if existing.content.trim() == node.content.trim() {
                 return true;
             }
