@@ -80,6 +80,28 @@ pip install mentedb-langchain  # LangChain memory provider
 pip install mentedb-crewai     # CrewAI memory provider
 ```
 
+### Command-line client
+
+`mentedb` runs MQL from the shell, against a local data directory (opened
+in-process, like `sqlite3`) or a running server (over HTTP). `cargo install
+mentedb-cli` installs the `mentedb` binary.
+
+With no flags it just works: it defaults to a local `./mentedb-data` (the server's
+default directory), so run it where you ran the server. Set `MENTEDB_URL` (and
+`MENTEDB_ADMIN_KEY`) or `MENTEDB_DATA_DIR` to point it elsewhere without repeating
+flags; explicit flags always win.
+
+```bash
+mentedb query 'RECALL memories WHERE type = semantic LIMIT 10'   # local ./mentedb-data
+mentedb query --data-dir ./data 'RECALL memories LIMIT 5'        # a specific directory
+
+# a running server (or export the vars once)
+export MENTEDB_URL=http://localhost:6677 MENTEDB_ADMIN_KEY="$KEY"
+mentedb query 'RECALL memories LIMIT 5'
+
+mentedb repl                                                     # interactive; --format json | csv
+```
+
 ## Quick start: an agent that remembers
 
 Memory is one call. `process_turn` embeds the user message, recalls what is

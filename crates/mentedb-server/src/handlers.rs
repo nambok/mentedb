@@ -781,3 +781,34 @@ pub async fn admin_delete_memory(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(json!({ "status": "deleted", "id": id.to_string() })))
 }
+
+/// POST /v1/admin/mql: run an MQL query, return the scored matches. Powers the
+/// console query box and the `mentedb` CLI's remote mode.
+pub async fn admin_run_mql(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    crate::auth::admin_authorized(&headers, &state.admin_key)?;
+    let mql = body
+        .get("mql")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError::BadRequest("missing 'mql'".into()))?;
+    let scored = state
+        .db
+        .query(mql)
+        .map_err(|e| ApiError::BadRequest(format!("query error: {e}")))?;
+    let memories: Vec<Value> = scored
+        .iter()
+        .map(|s| {
+            let mut j = memory_node_to_json(&s.memory);
+            if let Value::Object(ref mut m) = j {
+                m.insert("score".into(), json!(s.score));
+            }
+            j
+        })
+        .collect();
+    Ok(Json(
+        json!({ "count": memories.len(), "memories": memories }),
+    ))
+}

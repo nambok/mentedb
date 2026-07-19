@@ -2266,6 +2266,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mentedb-cli"
+version = "0.17.9"
+dependencies = [
+ "mentedb",
+ "reqwest",
+ "serde_json",
+]
+
+[[package]]
 name = "mentedb-cognitive"
 version = "0.17.9"
 dependencies = [
@@ -3525,6 +3534,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",

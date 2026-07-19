@@ -1,0 +1,17 @@
+[package]
+name = "mentedb-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line client for MenteDB: run MQL against a local data dir or a remote server."
+
+[[bin]]
+name = "mentedb"
+path = "src/main.rs"
+
+[dependencies]
+mentedb = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
