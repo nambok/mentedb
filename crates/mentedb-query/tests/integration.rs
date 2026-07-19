@@ -49,7 +49,9 @@ fn test_recall_near_vector() {
     )
     .unwrap();
     match plan {
-        QueryPlan::VectorSearch { query, k, filters } => {
+        QueryPlan::VectorSearch {
+            query, k, filters, ..
+        } => {
             assert_eq!(query, vec![0.1, 0.2, 0.3]);
             assert_eq!(k, 10);
             assert_eq!(filters.len(), 1);

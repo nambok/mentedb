@@ -68,7 +68,7 @@ use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
 use mentedb_embedding::provider::EmbeddingProvider;
 use mentedb_graph::GraphManager;
 use mentedb_index::IndexManager;
-use mentedb_query::{Field, Filter, Mql, Operator, QueryPlan, Value};
+use mentedb_query::{Condition, Field, Filter, Mql, Operator, QueryPlan, Value};
 use mentedb_storage::StorageEngine;
 use parking_lot::RwLock;
 use tracing::{debug, info, warn};
@@ -1753,7 +1753,12 @@ impl MenteDb {
     /// Executes a query plan against the indexes and graph, returning scored memories.
     fn execute_plan(&self, plan: &QueryPlan) -> MenteResult<Vec<ScoredMemory>> {
         match plan {
-            QueryPlan::VectorSearch { query, k, filters } => {
+            QueryPlan::VectorSearch {
+                query,
+                k,
+                filters,
+                condition,
+            } => {
                 // `content ~> "text"` arrives with an empty vector and the
                 // SimilarTo filter left in place for us to embed now (no embedder
                 // at plan time). NEAR arrives with the vector already filled in.
@@ -1781,19 +1786,29 @@ impl MenteDb {
                 };
                 let hits = self.index.hybrid_search(qvec, None, None, *k);
                 let mut scored = self.load_scored_memories(&hits)?;
-                // The SimilarTo filter is the query itself; apply any others.
-                scored.retain(|sm| {
-                    filters
-                        .iter()
-                        .filter(|f| f.op != Operator::SimilarTo)
-                        .all(|f| Self::filter_matches(f, &sm.memory))
-                });
+                // The SimilarTo filter is the query itself; apply any others. A
+                // boolean tree (NEAR combined with OR/NOT) takes over the whole
+                // post-filter when present.
+                match condition {
+                    Some(cond) => {
+                        scored.retain(|sm| Self::condition_matches(cond, &sm.memory));
+                    }
+                    None => {
+                        scored.retain(|sm| {
+                            filters
+                                .iter()
+                                .filter(|f| f.op != Operator::SimilarTo)
+                                .all(|f| Self::filter_matches(f, &sm.memory))
+                        });
+                    }
+                }
                 Ok(scored)
             }
             QueryPlan::TagScan {
                 tags,
                 filters,
                 limit,
+                condition,
             } => {
                 let k = limit.unwrap_or(20);
                 let mut scored = if tags.is_empty() {
@@ -1811,8 +1826,18 @@ impl MenteDb {
                     let hits = self.index.hybrid_search(&[], Some(&tag_refs), None, k);
                     self.load_scored_memories(&hits)?
                 };
-                // Apply the metadata filters the planner attached (type, etc.).
-                scored.retain(|sm| filters.iter().all(|f| Self::filter_matches(f, &sm.memory)));
+                // Apply the WHERE clause: a boolean tree when present (OR/NOT/
+                // grouping), otherwise the flat AND of metadata filters.
+                match condition {
+                    Some(cond) => {
+                        scored.retain(|sm| Self::condition_matches(cond, &sm.memory));
+                    }
+                    None => {
+                        scored.retain(|sm| {
+                            filters.iter().all(|f| Self::filter_matches(f, &sm.memory))
+                        });
+                    }
+                }
                 scored.truncate(k);
                 Ok(scored)
             }
@@ -1852,6 +1877,18 @@ impl MenteDb {
                 }])
             }
             _ => Ok(vec![]),
+        }
+    }
+
+    /// Whether a memory satisfies a boolean WHERE tree (OR/NOT/grouping). Leaves
+    /// defer to `filter_matches`, so a leaf that `filter_matches` treats as
+    /// permissive stays permissive; `And`/`Or`/`Not` compose those results.
+    fn condition_matches(c: &Condition, node: &MemoryNode) -> bool {
+        match c {
+            Condition::Leaf(f) => Self::filter_matches(f, node),
+            Condition::And(children) => children.iter().all(|ch| Self::condition_matches(ch, node)),
+            Condition::Or(children) => children.iter().any(|ch| Self::condition_matches(ch, node)),
+            Condition::Not(inner) => !Self::condition_matches(inner, node),
         }
     }
 
@@ -3292,6 +3329,135 @@ mod mql_execution_tests {
                 .all(|sm| sm.memory.memory_type == MemoryType::Semantic),
             "only semantic memories should come back"
         );
+    }
+
+    /// Build a small fixture: three types, two of them tagged "keep", so boolean
+    /// WHERE clauses have something to include and exclude.
+    fn boolean_fixture() -> (tempfile::TempDir, MenteDb) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+        let mut sem_keep = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            "semantic kept".into(),
+            vec![0.1_f32; 8],
+        );
+        sem_keep.tags = vec!["keep".into()];
+        let sem_plain = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            "semantic plain".into(),
+            vec![0.2_f32; 8],
+        );
+        let mut proc_keep = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Procedural,
+            "procedural kept".into(),
+            vec![0.3_f32; 8],
+        );
+        proc_keep.tags = vec!["keep".into()];
+        let anti = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::AntiPattern,
+            "antipattern plain".into(),
+            vec![0.4_f32; 8],
+        );
+        for n in [sem_keep, sem_plain, proc_keep, anti] {
+            db.store(n).unwrap();
+        }
+        (dir, db)
+    }
+
+    fn contents(db: &MenteDb, mql: &str) -> Vec<String> {
+        let mut v: Vec<String> = db
+            .query(mql)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.memory.content)
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// OR must union the branches: `type = semantic OR type = procedural` returns
+    /// exactly the semantic and procedural rows, never the antipattern.
+    #[test]
+    fn or_unions_branches() {
+        let (_d, db) = boolean_fixture();
+        let got = contents(
+            &db,
+            "RECALL WHERE type = semantic OR type = procedural LIMIT 50",
+        );
+        assert_eq!(
+            got,
+            vec![
+                "procedural kept".to_string(),
+                "semantic kept".to_string(),
+                "semantic plain".to_string()
+            ],
+            "OR should return semantic and procedural, excluding antipattern"
+        );
+    }
+
+    /// NOT must exclude: `NOT type = semantic` returns everything that is not
+    /// semantic.
+    #[test]
+    fn not_excludes() {
+        let (_d, db) = boolean_fixture();
+        let got = contents(&db, "RECALL WHERE NOT type = semantic LIMIT 50");
+        assert_eq!(
+            got,
+            vec![
+                "antipattern plain".to_string(),
+                "procedural kept".to_string()
+            ],
+            "NOT type = semantic should drop both semantic rows"
+        );
+    }
+
+    /// AND with NOT: `type = semantic AND NOT tag = keep` isolates the untagged
+    /// semantic row, proving NOT composes under AND.
+    #[test]
+    fn and_not_composes() {
+        let (_d, db) = boolean_fixture();
+        let got = contents(
+            &db,
+            r#"RECALL WHERE type = semantic AND NOT tag = "keep" LIMIT 50"#,
+        );
+        assert_eq!(
+            got,
+            vec!["semantic plain".to_string()],
+            "only the untagged semantic row should remain"
+        );
+    }
+
+    /// Grouping changes meaning: `(type = semantic OR type = procedural) AND tag =
+    /// keep` must return only the kept rows of those two types, not the plain
+    /// semantic one. This is the precedence case a flat AND list cannot express.
+    #[test]
+    fn grouping_binds_before_and() {
+        let (_d, db) = boolean_fixture();
+        let got = contents(
+            &db,
+            r#"RECALL WHERE (type = semantic OR type = procedural) AND tag = "keep" LIMIT 50"#,
+        );
+        assert_eq!(
+            got,
+            vec!["procedural kept".to_string(), "semantic kept".to_string()],
+            "grouping must apply the tag filter to both OR branches"
+        );
+    }
+
+    /// Regression: a pure AND clause still returns the intersection (and stays on
+    /// the flat-filter fast path, which this exercises end to end).
+    #[test]
+    fn pure_and_still_intersects() {
+        let (_d, db) = boolean_fixture();
+        let got = contents(
+            &db,
+            r#"RECALL WHERE type = semantic AND tag = "keep" LIMIT 50"#,
+        );
+        assert_eq!(got, vec!["semantic kept".to_string()]);
     }
 }
 
