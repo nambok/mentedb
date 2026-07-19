@@ -581,6 +581,26 @@ let result = run_enrichment(&db, config, &embedder, Some(&cognitive_llm), turn_i
 println!("Stored {} memories, linked {} entities", result.memories_stored, result.sync_linked + result.llm_linked);
 ```
 
+## Scaling
+
+Each user's memory is its own embedded database with exactly one writer. An
+exclusive cross-process lock (OFD locks, safe over NFSv4 and EFS) guarantees only
+one process ever holds a given database open, so there is no split-brain and no
+corruption: a second opener fails loudly with a "locked by another process" error
+rather than silently double-writing.
+
+- **Vertical first.** One node comfortably serves hundreds of users with tens
+  active at once. Reads and idle connections are effectively free; fsync-bound
+  writes (~30/s aggregate per node) are the ceiling. More CPU and memory extend
+  this several times before any architectural change is needed.
+- **Horizontal by sharding.** When a node's write ceiling is reached, shard users
+  across N nodes by a stable hash of the user id. Each user is owned by exactly
+  one node (enforced by the lock), so the write ceiling scales linearly with N,
+  bounded only by the filesystem's aggregate throughput. A routing mistake
+  produces the loud "locked" error, never corruption.
+- **Self-host and hosted both use this model:** one binary or container per node,
+  single-writer-per-user throughout.
+
 ## Crates
 
 MenteDB is organized as a Cargo workspace with 13 crates:
