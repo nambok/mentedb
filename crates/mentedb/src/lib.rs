@@ -1767,6 +1767,20 @@ impl MenteDb {
     /// permissive (they do not exclude), so a supported query is never dropped
     /// by a clause this does not understand.
     fn filter_matches(f: &Filter, node: &MemoryNode) -> bool {
+        // IN: the field matches any element of the list (reusing per-field
+        // equality, so `type IN [...]`, `tag IN [...]`, `content IN [...]` all work).
+        if let Value::List(items) = &f.value {
+            return items.iter().any(|v| {
+                Self::filter_matches(
+                    &Filter {
+                        field: f.field,
+                        op: Operator::Eq,
+                        value: v.clone(),
+                    },
+                    node,
+                )
+            });
+        }
         match (&f.field, &f.value) {
             (Field::Type, Value::MemoryType(t)) => {
                 if f.op == Operator::Neq {
@@ -1813,6 +1827,9 @@ impl MenteDb {
             Operator::Eq => (a - b).abs() < f64::EPSILON,
             Operator::Neq => (a - b).abs() >= f64::EPSILON,
             Operator::SimilarTo => true,
+            // Set/substring operators do not apply to a numeric comparison; the
+            // `IN` list case is handled before num_cmp is ever reached.
+            Operator::In | Operator::Contains => false,
         }
     }
 

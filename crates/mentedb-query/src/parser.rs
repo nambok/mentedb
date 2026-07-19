@@ -225,7 +225,11 @@ impl<'a> Parser<'a> {
     fn parse_filter(&mut self) -> MenteResult<Filter> {
         let field = self.parse_field()?;
         let op = self.parse_operator()?;
-        let value = self.parse_value(&field)?;
+        let value = if op == Operator::In {
+            self.parse_list_value(&field)?
+        } else {
+            self.parse_value(&field)?
+        };
         Ok(Filter { field, op, value })
     }
 
@@ -260,11 +264,31 @@ impl<'a> Parser<'a> {
             TokenKind::Gte => Ok(Operator::Gte),
             TokenKind::Lte => Ok(Operator::Lte),
             TokenKind::SimilarTo => Ok(Operator::SimilarTo),
+            TokenKind::In => Ok(Operator::In),
+            TokenKind::Contains => Ok(Operator::Contains),
             _ => Err(MenteError::Query(format!(
                 "expected operator, found '{}' at position {}",
                 tok.lexeme, tok.position
             ))),
         }
+    }
+
+    /// Parse a bracketed, comma-separated list of scalar values for `IN`.
+    fn parse_list_value(&mut self, field: &Field) -> MenteResult<Value> {
+        self.expect(TokenKind::LBracket)?;
+        let mut items = Vec::new();
+        if !self.at(TokenKind::RBracket) {
+            loop {
+                items.push(self.parse_value(field)?);
+                if self.at(TokenKind::Comma) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect(TokenKind::RBracket)?;
+        Ok(Value::List(items))
     }
 
     fn parse_value(&mut self, field: &Field) -> MenteResult<Value> {
@@ -447,6 +471,55 @@ mod tests {
                 assert_eq!(r.filters[0].field, Field::Type);
                 assert_eq!(r.filters[0].value, Value::MemoryType(MemoryType::Episodic));
                 assert_eq!(r.limit, Some(5));
+            }
+            _ => panic!("expected Recall"),
+        }
+    }
+
+    #[test]
+    fn test_parse_in_operator() {
+        let tokens =
+            tokenize("RECALL memories WHERE type IN [episodic, semantic] LIMIT 5").unwrap();
+        match Parser::parse(&tokens).unwrap() {
+            Statement::Recall(r) => {
+                assert_eq!(r.filters.len(), 1);
+                assert_eq!(r.filters[0].op, Operator::In);
+                assert_eq!(
+                    r.filters[0].value,
+                    Value::List(vec![
+                        Value::MemoryType(MemoryType::Episodic),
+                        Value::MemoryType(MemoryType::Semantic),
+                    ])
+                );
+            }
+            _ => panic!("expected Recall"),
+        }
+    }
+
+    #[test]
+    fn test_parse_in_operator_text_list() {
+        let tokens = tokenize("RECALL memories WHERE tag IN [\"work\", \"home\"]").unwrap();
+        match Parser::parse(&tokens).unwrap() {
+            Statement::Recall(r) => {
+                assert_eq!(r.filters[0].field, Field::Tag);
+                assert_eq!(r.filters[0].op, Operator::In);
+                assert_eq!(
+                    r.filters[0].value,
+                    Value::List(vec![Value::Text("work".into()), Value::Text("home".into()),])
+                );
+            }
+            _ => panic!("expected Recall"),
+        }
+    }
+
+    #[test]
+    fn test_parse_contains_operator() {
+        let tokens = tokenize("RECALL memories WHERE content CONTAINS \"coffee\"").unwrap();
+        match Parser::parse(&tokens).unwrap() {
+            Statement::Recall(r) => {
+                assert_eq!(r.filters[0].field, Field::Content);
+                assert_eq!(r.filters[0].op, Operator::Contains);
+                assert_eq!(r.filters[0].value, Value::Text("coffee".into()));
             }
             _ => panic!("expected Recall"),
         }

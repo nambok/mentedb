@@ -82,6 +82,10 @@ pub enum Operator {
     Gte,
     Lte,
     SimilarTo,
+    /// Set membership: the field equals any element of a list value.
+    In,
+    /// Substring (content) or membership (tag) test against a text value.
+    Contains,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -94,6 +98,8 @@ pub enum Value {
     Vector(Vec<f32>),
     MemoryType(MemoryType),
     EdgeType(EdgeType),
+    /// A list of values, for the `IN` operator.
+    List(Vec<Value>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
