@@ -284,6 +284,14 @@ pub struct CognitiveConfig {
     /// snapshots only accelerate reopen, and open reconciles stale ones, so
     /// rewriting them per flush just multiplies fsync cost.
     pub flush_snapshot_interval: u32,
+    /// Whether recall boosts memories linked (in the graph) to an entity named in
+    /// the query. Off by default: it only helps corpora that have run enrichment
+    /// (so entity nodes and their `Derived` edges exist), and its ranking effect
+    /// should be A/B measured before it is turned on broadly.
+    pub entity_boost_enabled: bool,
+    /// Score added to a candidate that a query-named entity links to. Applied on
+    /// top of the fused recall score, so it is calibrated against that scale.
+    pub entity_boost_weight: f32,
 }
 
 impl Default for CognitiveConfig {
@@ -308,6 +316,8 @@ impl Default for CognitiveConfig {
             pain_max_warnings: 5,
             injection_config: injection::InjectionConfig::default(),
             flush_snapshot_interval: 8,
+            entity_boost_enabled: false,
+            entity_boost_weight: 0.15,
         }
     }
 }
@@ -1802,6 +1812,19 @@ impl MenteDb {
                         });
                     }
                 }
+                // Optional entity leg: boost candidates linked to an entity the
+                // query names. The SimilarTo filter carries the query text.
+                if self.cognitive_config.entity_boost_enabled
+                    && let Some(qtext) = filters
+                        .iter()
+                        .find(|f| f.op == Operator::SimilarTo)
+                        .and_then(|f| match &f.value {
+                            Value::Text(t) => Some(t.clone()),
+                            _ => None,
+                        })
+                {
+                    self.apply_entity_boost(&mut scored, &qtext);
+                }
                 Ok(scored)
             }
             QueryPlan::TagScan {
@@ -1878,6 +1901,55 @@ impl MenteDb {
             }
             _ => Ok(vec![]),
         }
+    }
+
+    /// Memory ids that an entity named in the query links to. Tokenizes the query,
+    /// looks up each token as an `entity:<name>` node in the tag index, and
+    /// collects the memories those entity nodes were derived from (their outgoing
+    /// `Derived` neighbors). Cheap: a bitmap lookup per token plus one graph
+    /// adjacency read per hit, no LLM. Only non-empty once enrichment has created
+    /// entity nodes and linked them, so a raw store simply gets no boost.
+    fn entity_boost_ids(&self, query_text: &str) -> std::collections::HashSet<MemoryId> {
+        let mut ids = std::collections::HashSet::new();
+        let graph = self.graph.graph();
+        let mut seen_tokens = std::collections::HashSet::new();
+        for token in query_text
+            .split(|c: char| !c.is_alphanumeric())
+            .map(|w| w.to_lowercase())
+            .filter(|w| w.len() >= 2)
+        {
+            if !seen_tokens.insert(token.clone()) {
+                continue;
+            }
+            for entity_id in self.index.bitmap.query_tag(&format!("entity:{token}")) {
+                for (mid, edge) in graph.outgoing(entity_id) {
+                    if edge.edge_type == EdgeType::Derived {
+                        ids.insert(mid);
+                    }
+                }
+            }
+        }
+        ids
+    }
+
+    /// Add `entity_boost_weight` to any candidate a query-named entity links to,
+    /// then re-sort. A no-op when nothing in the query resolves to an entity.
+    fn apply_entity_boost(&self, scored: &mut [ScoredMemory], query_text: &str) {
+        let ids = self.entity_boost_ids(query_text);
+        if ids.is_empty() {
+            return;
+        }
+        let w = self.cognitive_config.entity_boost_weight;
+        for sm in scored.iter_mut() {
+            if ids.contains(&sm.memory.id) {
+                sm.score += w;
+            }
+        }
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     /// Whether a memory satisfies a boolean WHERE tree (OR/NOT/grouping). Leaves
@@ -3458,6 +3530,121 @@ mod mql_execution_tests {
             r#"RECALL WHERE type = semantic AND tag = "keep" LIMIT 50"#,
         );
         assert_eq!(got, vec!["semantic kept".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod entity_boost_tests {
+    use super::*;
+
+    /// With a query-named entity linked (via a `Derived` edge) to a lower-ranked
+    /// memory, the boost lifts that memory above an unrelated higher-scored one.
+    /// This exercises the whole leg: `entity:<name>` tag lookup, graph adjacency,
+    /// score bump, and re-sort, on a synthetic corpus with no LLM.
+    #[test]
+    fn boost_lifts_entity_linked_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+
+        let kafka_mem = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Episodic,
+            "we chose kafka for the pipeline".into(),
+            vec![0.1_f32; 8],
+        );
+        let kafka_id = kafka_mem.id;
+        let other_mem = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Episodic,
+            "the sky is blue".into(),
+            vec![0.2_f32; 8],
+        );
+        let other_id = other_mem.id;
+        let mut entity = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            "Kafka, a message broker".into(),
+            vec![0.3_f32; 8],
+        );
+        entity.tags.push("entity:kafka".into());
+        let entity_id = entity.id;
+
+        db.store(kafka_mem.clone()).unwrap();
+        db.store(other_mem.clone()).unwrap();
+        db.store(entity).unwrap();
+        // Entity node -> Derived -> the episodic it was extracted from, exactly as
+        // enrichment records it.
+        db.relate(MemoryEdge {
+            source: entity_id,
+            target: kafka_id,
+            edge_type: EdgeType::Derived,
+            weight: 1.0,
+            created_at: 0,
+            valid_from: None,
+            valid_until: None,
+            label: Some("enrichment".into()),
+        })
+        .unwrap();
+
+        // Baseline ranking puts the unrelated memory ahead.
+        let mut scored = vec![
+            ScoredMemory {
+                memory: other_mem,
+                score: 0.50,
+            },
+            ScoredMemory {
+                memory: kafka_mem,
+                score: 0.40,
+            },
+        ];
+        db.apply_entity_boost(&mut scored, "did we pick kafka");
+
+        assert_eq!(
+            scored[0].memory.id, kafka_id,
+            "the kafka-linked memory should rank first after the entity boost"
+        );
+        let boosted = scored.iter().find(|s| s.memory.id == kafka_id).unwrap();
+        assert!(
+            (boosted.score - 0.55).abs() < 1e-6,
+            "the linked memory should gain exactly the boost weight"
+        );
+        assert!(
+            scored.iter().any(|s| s.memory.id == other_id),
+            "the unrelated memory is kept, just reordered"
+        );
+    }
+
+    /// A query that names no known entity leaves ranking untouched.
+    #[test]
+    fn no_entity_in_query_is_a_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+        let a = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Episodic,
+            "alpha".into(),
+            vec![0.1_f32; 8],
+        );
+        let b = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Episodic,
+            "beta".into(),
+            vec![0.2_f32; 8],
+        );
+        let (aid, bid) = (a.id, b.id);
+        let mut scored = vec![
+            ScoredMemory {
+                memory: a,
+                score: 0.50,
+            },
+            ScoredMemory {
+                memory: b,
+                score: 0.40,
+            },
+        ];
+        db.apply_entity_boost(&mut scored, "nothing here resolves to an entity");
+        assert_eq!(scored[0].memory.id, aid);
+        assert_eq!(scored[1].memory.id, bid);
     }
 }
 
