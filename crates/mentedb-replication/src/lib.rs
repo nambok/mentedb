@@ -21,6 +21,7 @@ pub mod network;
 /// Raft node wrapper with MenteDB specific types.
 pub mod raft_node;
 /// Log store and state machine backed by MenteDB storage.
+pub mod sharding;
 pub mod store;
 
 pub use cluster::MenteCluster;
