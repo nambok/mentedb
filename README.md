@@ -595,11 +595,11 @@ horizontal scaling safe to add incrementally.
   and idle connections are effectively free, fsync-bound writes (~30/s aggregate
   per node) are the ceiling. Add CPU and memory, and raise `MENTEDB_MAX_OPEN_DBS`,
   to extend this several times over.
-- **Shard across nodes.** When one node's write throughput is the limit, run N
-  instances and route each user to a fixed one by a stable hash of the user id. A
-  user's directory is only ever opened by its own instance; the lock catches any
-  routing mistake before it can corrupt data. Write throughput then scales
-  linearly with N.
+- **Shard across nodes (DIY today).** When one node's write throughput is the
+  limit, you can run N instances and route each user to a fixed one by a stable
+  hash of the user id. A user's directory is only ever opened by its own instance;
+  the lock catches any routing mistake before it can corrupt data. Write
+  throughput then scales linearly with N.
 
 ```python
 # N MenteDB instances, each with its own data volume
@@ -609,6 +609,12 @@ def instance_for(user_id: str) -> str:
     # Stable hash: the same user always lands on the same instance
     return INSTANCES[hash(user_id) % len(INSTANCES)]
 ```
+
+The fixed hash above is a deliberate DIY option, not the ceiling. Automatic,
+elastic placement, consistent-hash rebalancing behind a lease coordinator so
+capacity scales 1->N and users are placed and moved for you, is the direction; you
+should not have to route by hand. For most self-hosted deployments a single
+well-provisioned node is already plenty.
 
 ## Crates
 
