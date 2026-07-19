@@ -595,40 +595,44 @@ horizontal scaling safe to add incrementally.
   and idle connections are effectively free, fsync-bound writes (~30/s aggregate
   per node) are the ceiling. Add CPU and memory, and raise `MENTEDB_MAX_OPEN_DBS`,
   to extend this several times over.
-- **Shard across nodes.** When one node's write throughput is the limit, run N
-  instances and place each user on exactly one of them. A user's directory is only
-  ever opened by its owning node; the exclusive lock catches any routing mistake
-  before it can corrupt data. Write throughput then scales linearly with N. The
-  simplest option is a fixed hash of the user id:
-
-```python
-# N MenteDB instances, each with its own data volume
-INSTANCES = ["mentedb-0:6677", "mentedb-1:6677", "mentedb-2:6677"]
-
-def instance_for(user_id: str) -> str:
-    # Stable hash: the same user always lands on the same instance
-    return INSTANCES[hash(user_id) % len(INSTANCES)]
-```
-
-For elastic placement, the engine ships `mentedb::sharding`: rendezvous
-(highest-random-weight) placement plus a lease-fenced `Coordinator` that moves
-only about 1/N of users when the fleet changes, instead of reshuffling everyone
-like `hash % N`. You supply two small backends over whatever coordination store
-you already run (Redis, Postgres, DynamoDB): a `LeaseStore` (exactly-one-owner
-leases, fenced by an epoch token) and a `NodeRegistry` (the live node set). The
-`Coordinator` resolves each request to its owner, so users are placed and moved
-for you instead of routed by hand:
+- **Shard across nodes (self-organizing).** When one node's write throughput is
+  the limit, run N instances and let them shard themselves. Point each node at a
+  seed or two (a static list, or a headless service DNS name) and the fleet does
+  the rest: nodes gossip to converge on the live set with no external store and no
+  coordinator process, deterministic rendezvous placement means every node computes
+  the same owner for a user, and ownership hands off by moving the single-writer
+  lock rather than by copying data. There is no routing table and no `hash % N` to
+  maintain by hand.
 
 ```rust
-use mentedb::sharding::{Coordinator, Resolution};
+use mentedb::sharding::{gossip::GossipMembership, Coordinator, NoCoordLease, Resolution};
 
-// Your LeaseStore + NodeRegistry back onto Redis, Postgres, DynamoDB, ...
-let coordinator = Coordinator::new(/* enabled */ true, node_id, lease_store, node_registry);
+// Nodes discover each other from a seed list (resolve a headless DNS name to it).
+let members = GossipMembership::new(node_id, my_addr, seeds, timeout, http_transport);
+let coordinator = Coordinator::new(true, node_id, NoCoordLease::new(node_id), members);
 
+// Per request: serve locally if we own this user, otherwise forward to the owner.
 match coordinator.resolve(user_id).await? {
-    Resolution::Local { epoch } => serve_locally(user_id, epoch), // we own it; epoch fences writes
-    Resolution::Remote { addr } => forward_to(&addr),             // another node owns it
+    Resolution::Local { .. } => serve_locally(user_id),
+    Resolution::Remote { addr } => forward_to(&addr),
 }
+```
+
+  This is the Cassandra/Dynamo model, gossip membership plus consistent placement,
+  so adding or removing a node re-homes only about 1/N of users instead of
+  reshuffling everyone. Zero-copy handoff assumes the fleet shares storage (each
+  user's database on a shared volume, ownership is just who holds the lock); on
+  purely local disks the placement still routes correctly, but a rebalanced user's
+  data does not follow it automatically yet.
+
+If you would rather not run a fleet at all, a fixed hash you own is the dead simple
+fallback, no gossip and no shared storage, at the cost of reshuffling on every
+membership change:
+
+```python
+INSTANCES = ["mentedb-0:6677", "mentedb-1:6677", "mentedb-2:6677"]
+def instance_for(user_id: str) -> str:
+    return INSTANCES[hash(user_id) % len(INSTANCES)]
 ```
 
 For most self-hosted deployments a single well-provisioned node is already plenty.
