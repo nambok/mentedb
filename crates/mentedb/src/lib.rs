@@ -109,6 +109,12 @@ pub use llm_consolidation::ConsolidationParams;
 #[cfg(feature = "enrichment")]
 pub mod enrichment;
 
+/// Lease-based elastic sharding: places each account on exactly one node and
+/// coordinates ownership so a fleet can scale horizontally. The engine owns the
+/// placement and coordination logic; the embedder supplies the lease and
+/// membership storage via the `LeaseStore` and `NodeRegistry` traits.
+pub mod sharding;
+
 /// Commonly used types, re-exported for convenience.
 pub mod prelude {
     pub use mentedb_core::edge::EdgeType;
