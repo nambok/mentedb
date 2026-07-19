@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 
+pub mod gossip;
 pub mod placement;
 
 /// A held ownership lease. `epoch` is the fence token that must accompany writes,
@@ -77,6 +78,56 @@ pub trait LeaseStore: Send + Sync {
     fn release(&self, lease: &Lease) -> impl Future<Output = Result<(), LeaseError>> + Send;
     /// The current live lease for a key, if any.
     fn current(&self, key: &str) -> impl Future<Output = Result<Option<Lease>, LeaseError>> + Send;
+}
+
+/// A no-op lease store for self-coordinated fleets (gossip membership plus
+/// deterministic placement). When every node agrees on the live set, they also
+/// agree on the owner of each key with no shared lease, and the single-writer file
+/// lock is the hard safety net during a handoff. `acquire` therefore grants a
+/// local, monotonically increasing epoch without any cross-node round trip, so a
+/// [`Coordinator`] can run without an external lease backend.
+pub struct NoCoordLease {
+    node: String,
+    epochs: Mutex<HashMap<String, u64>>,
+}
+
+impl NoCoordLease {
+    pub fn new(node: impl Into<String>) -> Self {
+        Self {
+            node: node.into(),
+            epochs: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn lease(&self, key: &str, epoch: u64) -> Lease {
+        Lease {
+            key: key.to_string(),
+            node: self.node.clone(),
+            epoch,
+            expiry: u64::MAX,
+        }
+    }
+}
+
+impl LeaseStore for NoCoordLease {
+    async fn acquire(&self, key: &str) -> Result<Lease, LeaseError> {
+        let mut epochs = self.epochs.lock();
+        let epoch = epochs.entry(key.to_string()).or_insert(0);
+        *epoch += 1;
+        Ok(self.lease(key, *epoch))
+    }
+
+    async fn renew(&self, lease: &Lease) -> Result<Lease, LeaseError> {
+        Ok(lease.clone())
+    }
+
+    async fn release(&self, _lease: &Lease) -> Result<(), LeaseError> {
+        Ok(())
+    }
+
+    async fn current(&self, key: &str) -> Result<Option<Lease>, LeaseError> {
+        Ok(self.epochs.lock().get(key).map(|e| self.lease(key, *e)))
+    }
 }
 
 /// A backend that tracks the live node set. Implemented by the embedder.
