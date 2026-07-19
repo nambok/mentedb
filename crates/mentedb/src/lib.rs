@@ -217,6 +217,9 @@ pub struct PruneReport {
     /// Auto-pinned always-rules un-pinned (the `scope:always` tag removed, the
     /// memory kept so it is still recalled by relevance).
     pub unpinned: Vec<MemoryId>,
+    /// Standing rules demoted because the list exceeded `always_max` (lowest
+    /// salience first). Included in `unpinned`; counted separately for visibility.
+    pub capped: usize,
 }
 
 /// A confirmed entity resolution from an external resolver (LLM).
@@ -292,6 +295,19 @@ pub struct CognitiveConfig {
     /// Score added to a candidate that a query-named entity links to. Applied on
     /// top of the fused recall score, so it is calibrated against that scale.
     pub entity_boost_weight: f32,
+    /// Whether storing a `scope:always` (standing rule) memory that is near
+    /// identical to an existing standing rule is skipped instead of inserted, so
+    /// re-pinning the same rule can never grow the always-list.
+    pub always_dedup: bool,
+    /// Cosine similarity at or above which a new standing rule counts as a
+    /// duplicate of an existing one.
+    pub always_dedup_threshold: f32,
+    /// Maximum standing rules (`scope:always`) to keep pinned. `prune_standing_rules`
+    /// demotes the excess (lowest salience first) to ordinary memories, and
+    /// injection never force-injects more than this, so the always-list, and the
+    /// prompt budget it consumes, stay bounded. The `user_profile` rule is always
+    /// kept and does not count against this.
+    pub always_max: usize,
 }
 
 impl Default for CognitiveConfig {
@@ -318,6 +334,9 @@ impl Default for CognitiveConfig {
             flush_snapshot_interval: 8,
             entity_boost_enabled: false,
             entity_boost_weight: 0.15,
+            always_dedup: true,
+            always_dedup_threshold: 0.95,
+            always_max: 30,
         }
     }
 }
@@ -593,6 +612,17 @@ impl MenteDb {
             });
         }
 
+        // Standing-rule dedup: re-pinning a rule that already exists must not grow
+        // the always-list. Only the rare scope:always write pays for the lookup.
+        if self.cognitive_config.always_dedup
+            && !node.embedding.is_empty()
+            && node.tags.iter().any(|t| t == "scope:always")
+            && self.is_duplicate_standing_rule(&node)
+        {
+            debug!("scope:always dedup: {id} matches an existing standing rule, skipping insert");
+            return Ok(());
+        }
+
         let page_id = self.storage.store_memory(&node)?;
         self.page_map.write().insert(id, page_id);
         self.index.index_memory(&node);
@@ -604,6 +634,51 @@ impl MenteDb {
         }
 
         Ok(())
+    }
+
+    /// Whether `node` (a `scope:always` memory) duplicates an existing standing
+    /// rule, by exact content or embedding cosine at/above the dedup threshold.
+    /// Compared only against the standing-rule set (fetched directly from the tag
+    /// index), which the cap keeps small, so this stays cheap and exact rather
+    /// than relying on approximate recall ranking.
+    fn is_duplicate_standing_rule(&self, node: &MemoryNode) -> bool {
+        let threshold = self.cognitive_config.always_dedup_threshold;
+        for id in self.index.bitmap.query_tag("scope:always") {
+            if id == node.id {
+                continue;
+            }
+            let Ok(existing) = self.get_memory(id) else {
+                continue;
+            };
+            if existing.content.trim() == node.content.trim() {
+                return true;
+            }
+            if !existing.embedding.is_empty()
+                && Self::cosine(&node.embedding, &existing.embedding) >= threshold
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Cosine similarity of two equal-length vectors; 0 for mismatched or zero
+    /// vectors. Used for standing-rule dedup where a true similarity (not the
+    /// fused recall score) is needed.
+    fn cosine(a: &[f32], b: &[f32]) -> f32 {
+        if a.len() != b.len() || a.is_empty() {
+            return 0.0;
+        }
+        let (mut dot, mut na, mut nb) = (0.0f32, 0.0f32, 0.0f32);
+        for i in 0..a.len() {
+            dot += a[i] * b[i];
+            na += a[i] * a[i];
+            nb += b[i] * b[i];
+        }
+        if na == 0.0 || nb == 0.0 {
+            return 0.0;
+        }
+        dot / (na.sqrt() * nb.sqrt())
     }
 
     /// Store multiple memories in a single batch transaction.
@@ -1118,6 +1193,29 @@ impl MenteDb {
             let is_manual = n.tags.iter().any(|t| t == "source:manual");
             let is_profile = n.tags.iter().any(|t| t == "user_profile");
             if !is_manual && !is_profile {
+                to_unpin.push(n.clone());
+            }
+        }
+
+        // Cap the count. Whatever survives dedup and un-pinning is manual pins
+        // plus the profile; the profile is always kept and does not count. If the
+        // remaining manual pins exceed always_max, demote the lowest-salience
+        // excess to ordinary memories so the always-list stays bounded even when a
+        // user has pinned hundreds of rules by hand.
+        let unpin_ids: HashSet<MemoryId> = to_unpin.iter().map(|n| n.id).collect();
+        let mut survivors: Vec<&MemoryNode> = always
+            .iter()
+            .filter(|n| !prune_ids.contains(&n.id) && !unpin_ids.contains(&n.id))
+            .filter(|n| !n.tags.iter().any(|t| t == "user_profile"))
+            .collect();
+        if survivors.len() > self.cognitive_config.always_max {
+            survivors.sort_by(|a, b| {
+                b.salience
+                    .partial_cmp(&a.salience)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for n in survivors.into_iter().skip(self.cognitive_config.always_max) {
+                report.capped += 1;
                 to_unpin.push(n.clone());
             }
         }
@@ -3645,6 +3743,90 @@ mod entity_boost_tests {
         db.apply_entity_boost(&mut scored, "nothing here resolves to an entity");
         assert_eq!(scored[0].memory.id, aid);
         assert_eq!(scored[1].memory.id, bid);
+    }
+}
+
+#[cfg(test)]
+mod standing_rule_policy_tests {
+    use super::*;
+
+    fn always_rule(content: &str, emb: Vec<f32>, manual: bool) -> MemoryNode {
+        let mut n = MemoryNode::new(AgentId::nil(), MemoryType::Semantic, content.into(), emb);
+        n.tags.push("scope:always".into());
+        if manual {
+            n.tags.push("source:manual".into());
+        }
+        n
+    }
+
+    fn always_count(db: &MenteDb) -> usize {
+        db.memory_ids()
+            .iter()
+            .filter_map(|id| db.get_memory(*id).ok())
+            .filter(|n| n.tags.iter().any(|t| t == "scope:always"))
+            .count()
+    }
+
+    /// Re-pinning a rule that already exists (same embedding, reworded) does not
+    /// grow the always-list.
+    #[test]
+    fn dedup_skips_near_identical_standing_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+        db.store(always_rule("always use tabs", vec![0.5_f32; 8], true))
+            .unwrap();
+        db.store(always_rule("tabs, always", vec![0.5_f32; 8], true))
+            .unwrap();
+        assert_eq!(
+            always_count(&db),
+            1,
+            "a near-identical standing rule must not be inserted twice"
+        );
+    }
+
+    /// A genuinely different standing rule is still pinned.
+    #[test]
+    fn dedup_allows_a_distinct_standing_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+        let mut e1 = vec![0.0_f32; 8];
+        e1[0] = 1.0;
+        let mut e2 = vec![0.0_f32; 8];
+        e2[1] = 1.0;
+        db.store(always_rule("always use tabs", e1, true)).unwrap();
+        db.store(always_rule("never deploy on friday", e2, true))
+            .unwrap();
+        assert_eq!(
+            always_count(&db),
+            2,
+            "a distinct standing rule is still stored"
+        );
+    }
+
+    /// A hand-pinned always-list beyond the cap is demoted down to always_max.
+    #[test]
+    fn prune_caps_the_always_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = CognitiveConfig {
+            always_max: 3,
+            always_dedup: false, // isolate the cap from dedup
+            ..Default::default()
+        };
+        let db = MenteDb::open_with_config(dir.path(), cfg).unwrap();
+        for i in 0..5 {
+            let mut e = vec![0.0_f32; 8];
+            e[i] = 1.0;
+            db.store(always_rule(&format!("manual rule {i}"), e, true))
+                .unwrap();
+        }
+        assert_eq!(always_count(&db), 5);
+        let report = db.prune_standing_rules().unwrap();
+        assert_eq!(report.capped, 2, "two rules over the cap are demoted");
+        assert_eq!(
+            always_count(&db),
+            3,
+            "the always-list is bounded at always_max"
+        );
     }
 }
 
