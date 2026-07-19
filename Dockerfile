@@ -24,6 +24,8 @@ COPY --from=builder /build/target/release/mentedb-server /usr/local/bin/mentedb-
 
 RUN mkdir -p /var/mentedb/data
 
-EXPOSE 8080
+# 6677 = REST API, /metrics, and /console; 6678 = gRPC (both start by default).
+# This is the default port the CLI, docs, and the observability compose all assume.
+EXPOSE 6677 6678
 
-CMD ["mentedb-server", "--port", "8080", "--data-dir", "/var/mentedb/data"]
+CMD ["mentedb-server", "--port", "6677", "--data-dir", "/var/mentedb/data"]

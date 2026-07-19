@@ -2,9 +2,12 @@ services:
   mentedb:
     build: .
     ports:
-      - "8080:8080"
+      - "6677:6677" # REST API, /metrics, /console
+      - "6678:6678" # gRPC
     volumes:
       - mentedb-data:/var/mentedb/data
+    # Uncomment to enable the console's admin browse/query tabs:
+    # command: ["mentedb-server", "--port", "6677", "--data-dir", "/var/mentedb/data", "--admin-key", "change-me"]
 
 volumes:
   mentedb-data:
