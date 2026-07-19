@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.6](https://github.com/nambok/mentedb/compare/mentedb-v0.17.5...mentedb-v0.17.6) - 2026-07-19
+
+### Added
+
+- structured export (fill a JSON schema from memories via a pluggable LLM) ([#284](https://github.com/nambok/mentedb/pull/284))
+- pluggable reranker stage (opt-in second-pass recall reorder) ([#282](https://github.com/nambok/mentedb/pull/282))
+
 ## [0.17.5](https://github.com/nambok/mentedb/compare/mentedb-v0.17.4...mentedb-v0.17.5) - 2026-07-19
 
 ### Added
