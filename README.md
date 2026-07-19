@@ -335,6 +335,12 @@ memory = MenteDBCrewMemory(data_dir="./memory")
 
 ```mermaid
 graph TD
+    subgraph Fleet["Fleet (optional sharding)"]
+        ROUTE["Request Routing<br/>forward to owner"]
+        GOSSIP["Gossip Membership"]
+        PLACE["Rendezvous Placement"]
+    end
+
     subgraph API["API Layer"]
         MQL["MQL Parser"]
         QE["Query Planner"]
@@ -342,7 +348,7 @@ graph TD
     end
 
     subgraph Extraction["Memory Extraction"]
-        LLM["LLM Provider<br/>OpenAI / Anthropic / Ollama"]
+        LLM["LLM Provider<br/>OpenAI / Anthropic / AWS Bedrock / Ollama"]
         ENT["Entity Extraction<br/>typed attributes, resolution"]
         QF["Quality Filter"]
         DEDUP["Deduplication"]
@@ -351,6 +357,11 @@ graph TD
 
     subgraph Embeddings["Embedding Providers"]
         EMB["Candle local / OpenAI / Cohere / AWS Bedrock Titan / hash"]
+    end
+
+    subgraph Retrieval["Retrieval"]
+        HYB["Hybrid Fusion<br/>BM25 + vector, RRF"]
+        RERANK["Optional Reranker"]
     end
 
     subgraph Cognitive["Cognitive Engine"]
@@ -371,6 +382,7 @@ graph TD
 
     subgraph Index["Index Layer"]
         HNSW["HNSW Vector Index"]
+        BM25["BM25 Keyword Index"]
         ROAR["Roaring Bitmap Tags"]
         TEMP["Temporal / Bi-temporal Index"]
     end
@@ -393,15 +405,22 @@ graph TD
         PAGE["Page Manager<br/>64KB pages"]
     end
 
+    GRPC --> ROUTE
+    ROUTE --> GOSSIP
+    ROUTE --> PLACE
+    ROUTE --> QE
+
     LLM --> ENT --> QF --> DEDUP --> CONTRA_EX --> WI
     EMB --> HNSW
 
     MQL --> QE
-    GRPC --> QE
-    QE --> CTX
-    CTX --> INJ
     QE --> Index
     QE --> Graph
+    HNSW --> HYB
+    BM25 --> HYB
+    HYB --> RERANK
+    RERANK --> CTX
+    CTX --> INJ
 
     WI --> Graph
     WI --> Index
