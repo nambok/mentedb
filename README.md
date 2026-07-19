@@ -86,15 +86,20 @@ pip install mentedb-crewai     # CrewAI memory provider
 in-process, like `sqlite3`) or a running server (over HTTP). `cargo install
 mentedb-cli` installs the `mentedb` binary.
 
+With no flags it just works: it defaults to a local `./mentedb-data` (the server's
+default directory), so run it where you ran the server. Set `MENTEDB_URL` (and
+`MENTEDB_ADMIN_KEY`) or `MENTEDB_DATA_DIR` to point it elsewhere without repeating
+flags; explicit flags always win.
+
 ```bash
-# local: query a data directory directly (must not be open by a server)
-mentedb query --data-dir ./data 'RECALL memories WHERE type = semantic LIMIT 10'
+mentedb query 'RECALL memories WHERE type = semantic LIMIT 10'   # local ./mentedb-data
+mentedb query --data-dir ./data 'RECALL memories LIMIT 5'        # a specific directory
 
-# remote: query a running server
-mentedb query --url http://localhost:6677 --admin-key "$KEY" 'RECALL memories LIMIT 5'
+# a running server (or export the vars once)
+export MENTEDB_URL=http://localhost:6677 MENTEDB_ADMIN_KEY="$KEY"
+mentedb query 'RECALL memories LIMIT 5'
 
-# interactive REPL, or --format json | csv
-mentedb repl --data-dir ./data
+mentedb repl                                                     # interactive; --format json | csv
 ```
 
 ## Quick start: an agent that remembers

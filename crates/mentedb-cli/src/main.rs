@@ -13,15 +13,17 @@ USAGE:
     mentedb query [connection] [--format table|json|csv] <MQL>
     mentedb repl  [connection] [--format table|json|csv]
 
-CONNECTION (pick one):
-    --data-dir <DIR>                 open a local data directory (no server; the
-                                     directory must not be open by a server)
-    --url <URL> --admin-key <KEY>    connect to a running server
+CONNECTION (flags override env; defaults to a local ./mentedb-data):
+    --data-dir <DIR>    or  MENTEDB_DATA_DIR    local directory (default ./mentedb-data)
+    --url <URL>         or  MENTEDB_URL         a running server (over HTTP)
+    --admin-key <KEY>   or  MENTEDB_ADMIN_KEY   admin key, required for a server
 
 EXAMPLES:
-    mentedb query --data-dir ./data 'RECALL memories WHERE type = semantic LIMIT 10'
-    mentedb query --url http://localhost:6677 --admin-key \"$KEY\" 'RECALL memories LIMIT 5'
-    mentedb repl --data-dir ./data
+    mentedb query 'RECALL memories LIMIT 10'                       # local ./mentedb-data
+    mentedb query --data-dir ./data 'RECALL memories LIMIT 5'
+    MENTEDB_URL=http://localhost:6677 MENTEDB_ADMIN_KEY=\"$KEY\" \\
+        mentedb query 'RECALL memories WHERE type = semantic LIMIT 5'
+    mentedb repl
 ";
 
 enum Conn {
@@ -71,12 +73,33 @@ fn main() {
         }
     }
 
-    let conn = match (data_dir, url, key) {
-        (Some(d), _, _) => Conn::Local(d),
-        (None, Some(u), Some(k)) => Conn::Remote { url: u, key: k },
-        _ => {
-            eprintln!("error: specify either --data-dir, or --url with --admin-key\n\n{USAGE}");
-            std::process::exit(2);
+    // Resolve the target with no flags required: flags win, then env vars, then a
+    // local ./mentedb-data (the server's default), so `mentedb query '...'` in the
+    // directory you ran the server from just works.
+    let data_dir = data_dir.or_else(|| std::env::var("MENTEDB_DATA_DIR").ok());
+    let url = url.or_else(|| std::env::var("MENTEDB_URL").ok());
+    let key = key.or_else(|| std::env::var("MENTEDB_ADMIN_KEY").ok());
+
+    let conn = match url {
+        Some(u) => match key {
+            Some(k) => Conn::Remote { url: u, key: k },
+            None => {
+                eprintln!(
+                    "error: a server URL needs an admin key (--admin-key or MENTEDB_ADMIN_KEY)"
+                );
+                std::process::exit(2);
+            }
+        },
+        None => {
+            let dir = data_dir.unwrap_or_else(|| "./mentedb-data".to_string());
+            if !std::path::Path::new(&dir).exists() {
+                eprintln!(
+                    "error: no data directory at '{dir}'. Pass --data-dir <DIR>, or set \
+                     MENTEDB_URL (+ MENTEDB_ADMIN_KEY) to query a running server.\n\n{USAGE}"
+                );
+                std::process::exit(2);
+            }
+            Conn::Local(dir)
         }
     };
     let opts = Opts { conn, format };
