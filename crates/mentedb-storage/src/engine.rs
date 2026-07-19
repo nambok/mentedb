@@ -259,6 +259,16 @@ impl StorageEngine {
             .fetch_page(page_id, &mut self.page_manager.lock())
     }
 
+    /// Buffer-pool cache activity, for metrics (hit ratio, evictions, residency).
+    pub fn buffer_stats(&self) -> crate::buffer::BufferStats {
+        self.buffer_pool.stats()
+    }
+
+    /// Total pages in the store; multiply by `PAGE_SIZE` for on-disk bytes.
+    pub fn page_count(&self) -> u64 {
+        self.page_manager.lock().page_count()
+    }
+
     /// Write data into an already-allocated page with WAL protection.
     ///
     /// Acquires the WAL flock for the duration of the write transaction.
