@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.20.0...mentedb-storage-v0.20.1) - 2026-07-19
+
+### Added
+
+- *(metrics)* expose write, read, cache, storage, index, and graph metrics ([#305](https://github.com/nambok/mentedb/pull/305))
+
 ## [0.17.10](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.17.9...mentedb-storage-v0.17.10) - 2026-07-19
 
 ### Added
