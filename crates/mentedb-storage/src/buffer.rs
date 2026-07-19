@@ -4,6 +4,8 @@
 //! prevent eviction of pages currently in use. The CLOCK algorithm sweeps
 //! frames looking for an unpinned, unreferenced victim when the pool is full.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use ahash::AHashMap;
 use parking_lot::Mutex;
 
@@ -12,6 +14,17 @@ use mentedb_core::error::{MenteError, MenteResult};
 use tracing::{debug, trace};
 
 type FrameId = usize;
+
+/// A snapshot of buffer-pool cache activity, for metrics. `hits / (hits + misses)`
+/// is the page cache hit ratio, the primary read-performance signal.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BufferStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub evictions: u64,
+    /// Frames currently holding a page.
+    pub resident_pages: u64,
+}
 
 /// A single frame in the buffer pool.
 struct Frame {
@@ -45,6 +58,9 @@ struct BufferPoolInner {
 /// Thread-safe buffer pool with CLOCK eviction.
 pub struct BufferPool {
     inner: Mutex<BufferPoolInner>,
+    hits: AtomicU64,
+    misses: AtomicU64,
+    evictions: AtomicU64,
 }
 
 impl BufferPool {
@@ -64,6 +80,20 @@ impl BufferPool {
                 clock_hand: 0,
                 capacity,
             }),
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+            evictions: AtomicU64::new(0),
+        }
+    }
+
+    /// Cache-activity counters for metrics. Lock-free reads.
+    pub fn stats(&self) -> BufferStats {
+        let resident_pages = self.inner.lock().page_table.len() as u64;
+        BufferStats {
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            evictions: self.evictions.load(Ordering::Relaxed),
+            resident_pages,
         }
     }
 
@@ -79,11 +109,13 @@ impl BufferPool {
             let frame = &mut inner.frames[frame_id];
             frame.pin_count += 1;
             frame.reference = true;
+            self.hits.fetch_add(1, Ordering::Relaxed);
             trace!(page_id = page_id.0, frame_id, "buffer pool hit");
             return Ok(frame.page.clone());
         }
 
         // Cache miss — find a victim frame.
+        self.misses.fetch_add(1, Ordering::Relaxed);
         let frame_id = Self::find_victim(&mut inner)?;
 
         // Flush dirty victim if needed.
@@ -94,9 +126,11 @@ impl BufferPool {
             debug!(page_id = old_pid.0, frame_id, "flushed dirty victim");
         }
 
-        // Remove old mapping.
+        // Remove old mapping. A displaced page is a real eviction (the reuse and
+        // grow paths in find_victim leave page_id None, so they are not counted).
         if let Some(old_pid) = inner.frames[frame_id].page_id {
             inner.page_table.remove(&old_pid);
+            self.evictions.fetch_add(1, Ordering::Relaxed);
         }
 
         // Load the requested page from disk.

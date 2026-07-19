@@ -31,6 +31,19 @@ pub struct Metrics {
     live_nodes: IntGauge,
     http_requests: IntCounterVec,
     http_duration: HistogramVec,
+    // Engine metrics, refreshed from `db.metrics()` on each scrape. Cumulative
+    // totals are exposed as gauges set to the running total (rate() still works).
+    stores: IntGauge,
+    recalls: IntGauge,
+    bp_hits: IntGauge,
+    bp_misses: IntGauge,
+    bp_evictions: IntGauge,
+    bp_pages: IntGauge,
+    storage_bytes: IntGauge,
+    pages: IntGauge,
+    vector_index_size: IntGauge,
+    graph_nodes: IntGauge,
+    standing_rules: IntGauge,
 }
 
 static METRICS: OnceLock<Metrics> = OnceLock::new();
@@ -81,6 +94,30 @@ impl Metrics {
         )
         .unwrap();
 
+        // Engine gauges: create, register, and return in one step.
+        let gauge = |name: &str, help: &str| {
+            let g = IntGauge::new(name, help).unwrap();
+            registry.register(Box::new(g.clone())).ok();
+            g
+        };
+        let stores = gauge("mentedb_stores_total", "Memories written (writes)");
+        let recalls = gauge("mentedb_recalls_total", "Recall/query operations (reads)");
+        let bp_hits = gauge("mentedb_buffer_pool_hits_total", "Page cache hits");
+        let bp_misses = gauge("mentedb_buffer_pool_misses_total", "Page cache misses");
+        let bp_evictions = gauge(
+            "mentedb_buffer_pool_evictions_total",
+            "Page cache evictions",
+        );
+        let bp_pages = gauge("mentedb_buffer_pool_pages", "Frames holding a page");
+        let storage_bytes = gauge("mentedb_storage_bytes", "On-disk data size in bytes");
+        let pages = gauge("mentedb_pages_total", "Pages in the store");
+        let vector_index_size = gauge("mentedb_vector_index_size", "Vectors in the HNSW index");
+        let graph_nodes = gauge("mentedb_graph_nodes", "Nodes in the memory graph");
+        let standing_rules = gauge(
+            "mentedb_standing_rules",
+            "Pinned standing rules (scope:always)",
+        );
+
         for g in [&uptime, &memory_count, &live_nodes] {
             registry.register(Box::new(g.clone())).ok();
         }
@@ -94,6 +131,17 @@ impl Metrics {
             live_nodes,
             http_requests,
             http_duration,
+            stores,
+            recalls,
+            bp_hits,
+            bp_misses,
+            bp_evictions,
+            bp_pages,
+            storage_bytes,
+            pages,
+            vector_index_size,
+            graph_nodes,
+            standing_rules,
         }
     }
 }
@@ -116,7 +164,19 @@ pub async fn track(req: Request, next: Next) -> Response {
 pub async fn handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let m = metrics();
     m.uptime.set(state.start_time.elapsed().as_secs() as i64);
-    m.memory_count.set(state.db.memory_count() as i64);
+    let dm = state.db.metrics();
+    m.memory_count.set(dm.memory_count as i64);
+    m.stores.set(dm.stores as i64);
+    m.recalls.set(dm.recalls as i64);
+    m.bp_hits.set(dm.buffer_pool_hits as i64);
+    m.bp_misses.set(dm.buffer_pool_misses as i64);
+    m.bp_evictions.set(dm.buffer_pool_evictions as i64);
+    m.bp_pages.set(dm.buffer_pool_pages as i64);
+    m.storage_bytes.set(dm.storage_bytes as i64);
+    m.pages.set(dm.page_count as i64);
+    m.vector_index_size.set(dm.vector_index_size as i64);
+    m.graph_nodes.set(dm.graph_nodes as i64);
+    m.standing_rules.set(dm.standing_rules as i64);
     let live = match &state.cluster {
         Some(c) => c.live_node_count().await as i64,
         None => 1,

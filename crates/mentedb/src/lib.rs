@@ -222,6 +222,37 @@ pub struct PruneReport {
     pub capped: usize,
 }
 
+/// A point-in-time snapshot of engine metrics for a `/metrics` exporter. Cheap to
+/// take: counters are atomic loads and sizes are O(1) index/graph/page lookups, so
+/// a scrape does not scan the corpus.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DbMetrics {
+    /// Memories stored on this node.
+    pub memory_count: u64,
+    /// Lifetime store operations (writes).
+    pub stores: u64,
+    /// Lifetime recall/query operations (reads).
+    pub recalls: u64,
+    /// Buffer-pool page cache hits.
+    pub buffer_pool_hits: u64,
+    /// Buffer-pool page cache misses (disk reads).
+    pub buffer_pool_misses: u64,
+    /// Buffer-pool CLOCK evictions.
+    pub buffer_pool_evictions: u64,
+    /// Frames currently holding a page.
+    pub buffer_pool_pages: u64,
+    /// On-disk data size in bytes (page_count * page size).
+    pub storage_bytes: u64,
+    /// Pages in the store.
+    pub page_count: u64,
+    /// Vectors in the HNSW index.
+    pub vector_index_size: u64,
+    /// Nodes in the memory graph.
+    pub graph_nodes: u64,
+    /// Pinned standing rules (scope:always).
+    pub standing_rules: u64,
+}
+
 /// A confirmed entity resolution from an external resolver (LLM).
 ///
 /// Used to feed LLM entity resolution results back into the engine
@@ -357,6 +388,10 @@ pub struct MenteDb {
     page_map: RwLock<HashMap<MemoryId, PageId>>,
     /// Hot flushes since the last snapshot write; see flush_snapshot_interval.
     flushes_since_snapshot: std::sync::atomic::AtomicU32,
+    /// Lifetime count of store operations (metrics).
+    stores: std::sync::atomic::AtomicU64,
+    /// Lifetime count of recall/query operations (metrics).
+    recalls: std::sync::atomic::AtomicU64,
     /// Expected embedding dimension (0 = no validation).
     embedding_dim: usize,
     /// Database directory path for persistence.
@@ -527,6 +562,8 @@ impl MenteDb {
             graph,
             page_map: RwLock::new(page_map),
             flushes_since_snapshot: std::sync::atomic::AtomicU32::new(0),
+            stores: std::sync::atomic::AtomicU64::new(0),
+            recalls: std::sync::atomic::AtomicU64::new(0),
             embedding_dim: 0,
             path: path.to_path_buf(),
             embedder: None,
@@ -627,6 +664,8 @@ impl MenteDb {
         self.page_map.write().insert(id, page_id);
         self.index.index_memory(&node);
         self.graph.add_memory(id);
+        self.stores
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // Run write inference to auto-create edges and detect contradictions.
         if self.cognitive_config.write_inference {
@@ -717,6 +756,8 @@ impl MenteDb {
             ids.push(node.id);
         }
         drop(page_map);
+        self.stores
+            .fetch_add(ids.len() as u64, std::sync::atomic::Ordering::Relaxed);
 
         // Batch inserts get the same auto-linking, contradiction detection,
         // and invalidation as single stores.
@@ -736,6 +777,8 @@ impl MenteDb {
     /// token-budget-aware context window.
     pub fn recall(&self, query: &str) -> MenteResult<ContextWindow> {
         debug!("Recalling with query: {}", query);
+        self.recalls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let plan = Mql::parse(query)?;
 
         let scored = self.execute_plan(&plan)?;
@@ -749,6 +792,8 @@ impl MenteDb {
     /// additionally packs the results into a token-budgeted context), and it powers
     /// the `mentedb` CLI and the admin query endpoint.
     pub fn query(&self, mql: &str) -> MenteResult<Vec<ScoredMemory>> {
+        self.recalls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let plan = Mql::parse(mql)?;
         self.execute_plan(&plan)
     }
@@ -1081,6 +1126,28 @@ impl MenteDb {
     /// Returns the number of memories currently stored.
     pub fn memory_count(&self) -> usize {
         self.page_map.read().len()
+    }
+
+    /// Snapshot the engine's operational metrics (writes, reads, cache, storage,
+    /// index, graph, standing rules) for a `/metrics` exporter. O(1), no scan.
+    pub fn metrics(&self) -> DbMetrics {
+        use std::sync::atomic::Ordering::Relaxed;
+        let bp = self.storage.buffer_stats();
+        let page_count = self.storage.page_count();
+        DbMetrics {
+            memory_count: self.memory_count() as u64,
+            stores: self.stores.load(Relaxed),
+            recalls: self.recalls.load(Relaxed),
+            buffer_pool_hits: bp.hits,
+            buffer_pool_misses: bp.misses,
+            buffer_pool_evictions: bp.evictions,
+            buffer_pool_pages: bp.resident_pages,
+            storage_bytes: page_count * mentedb_storage::PAGE_SIZE as u64,
+            page_count,
+            vector_index_size: self.index.hnsw.len() as u64,
+            graph_nodes: self.graph.graph().node_count() as u64,
+            standing_rules: self.index.bitmap.query_tag("scope:always").len() as u64,
+        }
     }
 
     /// A bounded, paginated page of stored memories for admin browsing, ordered by
@@ -3634,6 +3701,44 @@ mod mql_execution_tests {
             r#"RECALL WHERE type = semantic AND tag = "keep" LIMIT 50"#,
         );
         assert_eq!(got, vec!["semantic kept".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod metrics_snapshot_tests {
+    use super::*;
+
+    /// The metrics snapshot counts writes and reads, sizes the store and index,
+    /// and reflects buffer-pool activity.
+    #[test]
+    fn metrics_track_writes_reads_and_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+        for i in 0..3 {
+            db.store(MemoryNode::new(
+                AgentId::nil(),
+                MemoryType::Semantic,
+                format!("fact {i}"),
+                vec![0.1_f32 + i as f32 * 0.1; 8],
+            ))
+            .unwrap();
+        }
+        // Read paths: recall (assembles a window) and query (raw).
+        let _ = db.recall("RECALL memories LIMIT 10").unwrap();
+        let _ = db.query("RECALL LIMIT 10").unwrap();
+
+        let m = db.metrics();
+        assert_eq!(m.stores, 3, "three writes counted");
+        assert_eq!(m.recalls, 2, "recall + query counted as reads");
+        assert_eq!(m.memory_count, 3);
+        assert_eq!(m.vector_index_size, 3, "three vectors indexed");
+        assert_eq!(m.graph_nodes, 3, "three graph nodes");
+        assert!(m.storage_bytes > 0, "pages written to disk");
+        assert!(
+            m.buffer_pool_hits + m.buffer_pool_misses > 0,
+            "reads exercised the buffer pool"
+        );
+        assert_eq!(m.standing_rules, 0, "no pins yet");
     }
 }
 
