@@ -1146,8 +1146,25 @@ impl MenteDb {
             page_count,
             vector_index_size: self.index.hnsw.len() as u64,
             graph_nodes: self.graph.graph().node_count() as u64,
-            standing_rules: self.index.bitmap.query_tag("scope:always").len() as u64,
+            standing_rules: self.count_standing_rules() as u64,
         }
+    }
+
+    /// Accurate count of pinned standing rules. The tag index can over-count after
+    /// an un-pin re-indexed on an older engine (the tag was removed from the node
+    /// but lingered in the bitmap), so verify each candidate still carries the tag.
+    /// Cheap: it loads only the (few, capped) candidates, not the whole corpus.
+    fn count_standing_rules(&self) -> usize {
+        self.index
+            .bitmap
+            .query_tag("scope:always")
+            .into_iter()
+            .filter(|id| {
+                self.get_memory(*id)
+                    .map(|n| n.tags.iter().any(|t| t == "scope:always"))
+                    .unwrap_or(false)
+            })
+            .count()
     }
 
     /// A bounded, paginated page of stored memories for admin browsing, ordered by
@@ -3972,6 +3989,35 @@ mod standing_rule_policy_tests {
             .filter_map(|id| db.get_memory(*id).ok())
             .filter(|n| n.tags.iter().any(|t| t == "scope:always"))
             .count()
+    }
+
+    /// Regression: un-pinning a rule (removing scope:always and re-storing) must
+    /// drop the standing-rule count. The tag index used to only add tags, so the
+    /// count stayed stale (the admin dashboard showed 261 when the account had 0).
+    #[test]
+    fn standing_rule_count_drops_after_unpin() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+        let rule = always_rule("always use tabs", vec![0.2_f32; 8], false);
+        let id = rule.id;
+        db.store(rule).unwrap();
+        assert_eq!(db.metrics().standing_rules, 1);
+
+        // Un-pin exactly as the prune does: strip the tag, re-store the same id.
+        let mut m = db.get_memory(id).unwrap();
+        m.tags.retain(|t| t != "scope:always");
+        db.store(m).unwrap();
+
+        assert_eq!(
+            db.metrics().standing_rules,
+            0,
+            "un-pinned rule must not be counted"
+        );
+        assert_eq!(
+            always_count(&db),
+            0,
+            "the node itself no longer carries the tag"
+        );
     }
 
     /// Re-pinning a rule that already exists (same embedding, reworded) does not
