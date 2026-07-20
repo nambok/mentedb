@@ -106,7 +106,12 @@ impl IndexManager {
             self.bm25.insert(node.id, &node.content);
         }
 
-        // Tag bitmap index
+        // Tag bitmap index. Clear this id's existing tags first, so a re-index
+        // after an edit (e.g. un-pinning, which removes scope:always and re-stores
+        // the node) reflects the node's CURRENT tags exactly, not the union across
+        // every stored version. Without this, a removed tag lingers in the index
+        // and over-counts on query_tag. Harmless no-op on a first insert.
+        self.bitmap.remove_all(node.id);
         for tag in &node.tags {
             self.bitmap.add_tag(node.id, tag);
         }
