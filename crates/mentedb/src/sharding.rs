@@ -236,6 +236,29 @@ impl<L: LeaseStore, R: NodeRegistry> Coordinator<L, R> {
         }
     }
 
+    /// Whether this node is the placement owner of `key` under the current live
+    /// node set, WITHOUT acquiring a lease. A cheap, read-only check for
+    /// background work (maintenance sweeps) that should run only on the node
+    /// already serving an account, so a non-owner never opens it and contends for
+    /// its single-writer lock. Unlike [`resolve`](Self::resolve) it has no lease
+    /// side effect, so a sweep can test every account without pinning leases it
+    /// would then have to renew. Returns true when sharding is disabled or the
+    /// node set is not yet known (a lone or just-started node still does the
+    /// work), so a single-node fleet sweeps everything exactly as before.
+    pub fn owns(&self, key: &str) -> bool {
+        if !self.enabled {
+            return true;
+        }
+        let nodes = self.nodes.lock();
+        if nodes.is_empty() {
+            return true;
+        }
+        let ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
+        placement::owner(key, &ids)
+            .map(|owner| owner == self.node)
+            .unwrap_or(true)
+    }
+
     /// Renew interval, comfortably shorter than the lease TTL.
     pub fn maintain_interval() -> Duration {
         Duration::from_secs(5)
@@ -401,5 +424,59 @@ mod tests {
             c.resolve(&remote).await.unwrap(),
             Resolution::Remote { addr: want_addr }
         );
+    }
+
+    #[tokio::test]
+    async fn owns_partitions_keys_across_the_fleet_without_leasing() {
+        let ns = nodes(); // node-0..2, same live set for every coordinator
+        let ids: Vec<String> = ns.iter().map(|n| n.id.clone()).collect();
+
+        let mut coords = Vec::new();
+        for n in &ns {
+            let c = Coordinator::new(
+                true,
+                n.id.clone(),
+                MemLeases::new(&n.id),
+                MemRegistry {
+                    node: n.id.clone(),
+                    nodes: ns.clone(),
+                },
+            );
+            c.maintain().await; // load the node set
+            coords.push((n.id.clone(), c));
+        }
+
+        for i in 0..500 {
+            let key = format!("acct-{i}");
+            let placement_owner = placement::owner(&key, &ids).unwrap();
+            let owners: Vec<&String> = coords
+                .iter()
+                .filter(|(_, c)| c.owns(&key))
+                .map(|(id, _)| id)
+                .collect();
+            // Exactly one node owns each key, and it is the placement owner: the
+            // sweep on every other node skips it, so no two nodes open it at once.
+            assert_eq!(owners.len(), 1, "key {key} owned by {owners:?}");
+            assert_eq!(owners[0], placement_owner);
+        }
+
+        // owns() must not acquire a lease (that is resolve's job): no held leases.
+        for (_, c) in &coords {
+            assert!(c.held.lock().is_empty(), "owns() must not take a lease");
+        }
+    }
+
+    #[tokio::test]
+    async fn disabled_owns_everything() {
+        let c = Coordinator::new(
+            false,
+            "node-0",
+            MemLeases::new("node-0"),
+            MemRegistry {
+                node: "node-0".into(),
+                nodes: vec![],
+            },
+        );
+        assert!(c.owns("anything"));
     }
 }
