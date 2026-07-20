@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.4](https://github.com/nambok/mentedb/compare/mentedb-v0.20.3...mentedb-v0.20.4) - 2026-07-20
+
+### Added
+
+- *(sharding)* add Coordinator::owns for lease-free ownership checks ([#315](https://github.com/nambok/mentedb/pull/315))
+
 ## [0.20.3](https://github.com/nambok/mentedb/compare/mentedb-v0.20.1...mentedb-v0.20.3) - 2026-07-19
 
 ### Added
