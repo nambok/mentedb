@@ -49,10 +49,37 @@ struct Bm25Inner {
     inverted: HashMap<String, PostingList>,
     /// doc_id → document length in tokens
     doc_lengths: HashMap<MemoryId, u32>,
+    /// doc_id → the distinct terms it contributes. Lets removal touch only this
+    /// document's posting lists instead of scanning every term, and lets insert
+    /// be a safe upsert (drop the prior version first) rather than double count.
+    doc_terms: HashMap<MemoryId, Vec<String>>,
     /// total number of indexed documents
     doc_count: u32,
     /// sum of all document lengths (for computing avgdl)
     total_length: u64,
+}
+
+impl Bm25Inner {
+    /// Remove a document's entire contribution from the index. Cheap: visits only
+    /// the terms this document actually contains, via the forward index. A no-op
+    /// if the document is not indexed.
+    fn remove_doc(&mut self, id: MemoryId) {
+        let Some(doc_len) = self.doc_lengths.remove(&id) else {
+            return;
+        };
+        self.doc_count = self.doc_count.saturating_sub(1);
+        self.total_length = self.total_length.saturating_sub(doc_len as u64);
+        if let Some(terms) = self.doc_terms.remove(&id) {
+            for term in terms {
+                if let Some(posting) = self.inverted.get_mut(&term) {
+                    posting.entries.retain(|(did, _)| *did != id);
+                    if posting.entries.is_empty() {
+                        self.inverted.remove(&term);
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Bm25Index {
@@ -61,6 +88,7 @@ impl Bm25Index {
             inner: RwLock::new(Bm25Inner {
                 inverted: HashMap::new(),
                 doc_lengths: HashMap::new(),
+                doc_terms: HashMap::new(),
                 doc_count: 0,
                 total_length: 0,
             }),
@@ -75,12 +103,12 @@ impl Bm25Index {
             .collect()
     }
 
-    /// Index a document (memory content) for BM25 search.
+    /// Index a document (memory content) for BM25 search. Idempotent per id: a
+    /// second call for the same id replaces the prior version rather than adding
+    /// to it, so re-indexing after an edit (which the engine does routinely, e.g.
+    /// on un-pinning) cannot double count the document and corrupt IDF/avgdl.
     pub fn insert(&self, id: MemoryId, content: &str) {
         let tokens = Self::tokenize(content);
-        if tokens.is_empty() {
-            return;
-        }
 
         // Count term frequencies
         let mut tf: HashMap<&str, u32> = HashMap::new();
@@ -92,39 +120,42 @@ impl Bm25Index {
 
         let mut inner = self.inner.write();
 
+        // Upsert: drop any prior version of this document first. Without this,
+        // a re-index pushes a second posting entry per term and increments
+        // doc_count/total_length again, inflating N and avgdl for every query.
+        inner.remove_doc(id);
+
+        // Indexing empty (or all stop-word) content just removes the document.
+        if tokens.is_empty() {
+            return;
+        }
+
         // Update doc metadata
         inner.doc_lengths.insert(id, doc_len);
         inner.doc_count += 1;
         inner.total_length += doc_len as u64;
 
-        // Update inverted index
+        // Update the inverted index and record this document's terms so it can be
+        // removed cheaply later.
+        let mut terms: Vec<String> = Vec::with_capacity(tf.len());
         for (term, freq) in tf {
+            let term = term.to_string();
             inner
                 .inverted
-                .entry(term.to_string())
+                .entry(term.clone())
                 .or_insert_with(|| PostingList {
                     entries: Vec::new(),
                 })
                 .entries
                 .push((id, freq));
+            terms.push(term);
         }
+        inner.doc_terms.insert(id, terms);
     }
 
     /// Remove a document from the index.
     pub fn remove(&self, id: MemoryId) {
-        let mut inner = self.inner.write();
-
-        if let Some(doc_len) = inner.doc_lengths.remove(&id) {
-            inner.doc_count = inner.doc_count.saturating_sub(1);
-            inner.total_length = inner.total_length.saturating_sub(doc_len as u64);
-
-            // Remove from all posting lists
-            for posting in inner.inverted.values_mut() {
-                posting.entries.retain(|(did, _)| *did != id);
-            }
-            // Clean up empty posting lists
-            inner.inverted.retain(|_, pl| !pl.entries.is_empty());
-        }
+        self.inner.write().remove_doc(id);
     }
 
     /// Search for documents matching the query, returning top-k by BM25 score.
@@ -248,20 +279,44 @@ impl Bm25Index {
             .or_else(|_| serde_json::from_slice(&data))
             .map_err(|e| MenteError::Serialization(e.to_string()))?;
 
-        let inverted = snapshot
-            .inverted
-            .into_iter()
-            .map(|(k, entries)| (k, PostingList { entries }))
-            .collect();
+        // Rebuild the forward index (doc_id -> terms) from the posting lists, and
+        // self-heal any duplicate posting entries left by indexes written before
+        // upsert-safe insert existed. Duplicates are collapsed to the highest term
+        // frequency, and the document counts are recomputed from the authoritative
+        // doc_lengths so a previously inflated doc_count/avgdl is corrected on load.
+        let mut inverted: HashMap<String, PostingList> = HashMap::new();
+        let mut doc_terms: HashMap<MemoryId, Vec<String>> = HashMap::new();
+        for (term, entries) in snapshot.inverted {
+            let mut best: HashMap<MemoryId, u32> = HashMap::new();
+            for (id, tf) in entries {
+                let slot = best.entry(id).or_insert(0);
+                *slot = (*slot).max(tf);
+            }
+            if best.is_empty() {
+                continue;
+            }
+            for &id in best.keys() {
+                doc_terms.entry(id).or_default().push(term.clone());
+            }
+            inverted.insert(
+                term,
+                PostingList {
+                    entries: best.into_iter().collect(),
+                },
+            );
+        }
 
-        let doc_lengths = snapshot.doc_lengths.into_iter().collect();
+        let doc_lengths: HashMap<MemoryId, u32> = snapshot.doc_lengths.into_iter().collect();
+        let doc_count = doc_lengths.len() as u32;
+        let total_length: u64 = doc_lengths.values().map(|&v| v as u64).sum();
 
         Ok(Self {
             inner: RwLock::new(Bm25Inner {
                 inverted,
                 doc_lengths,
-                doc_count: snapshot.doc_count,
-                total_length: snapshot.total_length,
+                doc_terms,
+                doc_count,
+                total_length,
             }),
         })
     }
@@ -336,6 +391,71 @@ mod tests {
 
         assert!(idx.search("", 10).is_empty());
         assert!(idx.search("the", 10).is_empty()); // stop word only
+    }
+
+    #[test]
+    fn reindex_does_not_double_count() {
+        // Re-indexing the same id (as happens after an edit) must replace, not
+        // accumulate: the doc is counted once and its old terms disappear.
+        let idx = Bm25Index::new();
+        let a = MemoryId::new();
+        idx.insert(a, "espresso machine grinder beans");
+        idx.insert(a, "gardening tools soil trowel");
+        idx.insert(a, "gardening tools soil trowel");
+
+        assert_eq!(
+            idx.len(),
+            1,
+            "same id must count once no matter how often re-indexed"
+        );
+        // Stale terms from the first version are gone.
+        assert!(idx.search("espresso", 10).is_empty());
+        // Current terms resolve, and to exactly one hit.
+        let hits = idx.search("gardening trowel", 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, a);
+    }
+
+    #[test]
+    fn reindex_keeps_scoring_uncorrupted() {
+        // A neighbor doc's IDF/avgdl must not drift because another doc was
+        // re-indexed several times: the winner for a shared term stays stable.
+        let idx = Bm25Index::new();
+        let a = MemoryId::new();
+        let b = MemoryId::new();
+        idx.insert(a, "the postgres database migration plan");
+        idx.insert(b, "database backup schedule");
+        for _ in 0..5 {
+            idx.insert(a, "the postgres database migration plan");
+        }
+        assert_eq!(idx.len(), 2);
+        let hits = idx.search("postgres migration", 10);
+        assert_eq!(hits[0].0, a, "re-indexing a must not corrupt ranking");
+    }
+
+    #[test]
+    fn load_self_heals_duplicate_postings() {
+        // Simulate a pre-fix snapshot: duplicate posting entries for one id plus
+        // an inflated doc_count/total_length. Load must collapse and recompute.
+        let a = MemoryId::new();
+        let legacy = Bm25Snapshot {
+            inverted: vec![
+                ("postgres".to_string(), vec![(a, 1), (a, 1)]),
+                ("migration".to_string(), vec![(a, 1), (a, 1)]),
+            ],
+            doc_lengths: vec![(a, 2)],
+            doc_count: 2,
+            total_length: 4,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.bin");
+        std::fs::write(&path, bincode::serialize(&legacy).unwrap()).unwrap();
+
+        let idx = Bm25Index::load(&path).unwrap();
+        assert_eq!(idx.len(), 1, "doc_count recomputed from doc_lengths");
+        let hits = idx.search("postgres", 10);
+        assert_eq!(hits.len(), 1, "duplicate posting entries collapsed to one");
+        assert_eq!(hits[0].0, a);
     }
 
     #[test]
