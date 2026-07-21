@@ -331,6 +331,12 @@ pub struct CognitiveConfig {
     /// same-project memories are never penalized. Applied only when the caller
     /// passes a current project (None = search across all projects).
     pub project_scope_penalty: f32,
+    /// Candidate-pool multiplier for the optional hybrid-recall reranker: when a
+    /// reranker is installed, recall fetches `rerank_pool_factor * k` candidates
+    /// before reranking and truncating to k, so the reranker can promote a
+    /// relevant hit that the first pass ranked outside the top k. Ignored when no
+    /// reranker is installed. Minimum effective value is 1.
+    pub rerank_pool_factor: usize,
     /// Maximum pain signals to retain.
     pub pain_max_warnings: usize,
     /// Configuration for injection attention selection.
@@ -385,6 +391,7 @@ impl Default for CognitiveConfig {
             speculative_embedding_threshold: 0.5,
             speculative_keyword_threshold: 0.4,
             project_scope_penalty: 0.5,
+            rerank_pool_factor: 4,
             pain_max_warnings: 5,
             injection_config: injection::InjectionConfig::default(),
             flush_snapshot_interval: 8,
@@ -428,6 +435,11 @@ pub struct MenteDb {
     path: PathBuf,
     /// Optional embedding provider for auto-embedding on store and search.
     embedder: Option<Box<dyn EmbeddingProvider>>,
+    /// Optional second-pass reranker applied to the fused candidate pool on the
+    /// hybrid recall path. None (the default) leaves recall a pure vector/BM25 +
+    /// decay ranking; when set, a larger pool is fetched and reordered by this
+    /// reranker before truncating to k. See [`reranker`](crate::reranker).
+    reranker: Option<Box<dyn crate::reranker::Reranker>>,
     /// Cognitive engine configuration.
     cognitive_config: CognitiveConfig,
     /// Write inference engine for auto-edge creation and contradiction detection.
@@ -599,6 +611,7 @@ impl MenteDb {
             embedding_dim: 0,
             path: path.to_path_buf(),
             embedder: None,
+            reranker: None,
             cognitive_config,
             write_inference,
             decay,
@@ -644,6 +657,28 @@ impl MenteDb {
     pub fn set_embedder(&mut self, embedder: Box<dyn EmbeddingProvider>) {
         self.embedding_dim = embedder.dimensions();
         self.embedder = Some(embedder);
+    }
+
+    /// Install a second-pass [`Reranker`](crate::reranker::Reranker) applied to
+    /// the fused candidate pool on the hybrid recall path. Once set, hybrid recall
+    /// over-fetches `rerank_pool_factor * k` candidates, reorders them by the
+    /// reranker over the query text, then truncates to k, so exact-term or
+    /// model-scored relevance can lift results that vector/BM25 ranking buried.
+    /// The engine ships a dependency-free [`LexicalReranker`](crate::reranker::LexicalReranker);
+    /// an embedder can supply a stronger model without the engine taking the dependency.
+    pub fn set_reranker(&mut self, reranker: Box<dyn crate::reranker::Reranker>) {
+        self.reranker = Some(reranker);
+    }
+
+    /// Remove any installed reranker, returning hybrid recall to its first-pass
+    /// vector/BM25 + decay ranking.
+    pub fn clear_reranker(&mut self) {
+        self.reranker = None;
+    }
+
+    /// Whether a second-pass reranker is currently installed.
+    pub fn has_reranker(&self) -> bool {
+        self.reranker.is_some()
     }
 
     /// Generate an embedding for the given text using the configured provider.
@@ -1016,18 +1051,22 @@ impl MenteDb {
             .filter(|p| !p.is_empty())
             .map(|p| format!("scope:project:{p}"));
         let cross_project_keep = 1.0 - self.cognitive_config.project_scope_penalty;
-        // Over-fetch to account for filtered-out results
+        // When a reranker is installed, over-fetch a larger candidate pool so it
+        // can promote a relevant hit the first pass ranked outside the top k;
+        // otherwise the usual 3x over-fetch covers results filtered out below.
+        let want_rerank =
+            self.reranker.is_some() && query_text.map(|q| !q.is_empty()).unwrap_or(false);
+        let fetch_k = if want_rerank {
+            k.saturating_mul(self.cognitive_config.rerank_pool_factor.max(1))
+        } else {
+            k * 3
+        };
         let results = self.index.hybrid_search_with_query_mode(
-            embedding,
-            query_text,
-            tags,
-            tags_or,
-            time_range,
-            k * 3,
+            embedding, query_text, tags, tags_or, time_range, fetch_k,
         );
         let graph = self.graph.graph();
         let pm = self.page_map.read();
-        let mut scored: Vec<(MemoryId, f32)> = results
+        let mut scored: Vec<(MemoryId, f32, Option<String>)> = results
             .into_iter()
             .filter_map(|(id, raw_score)| {
                 // Exclude memories that an active Supersedes/Contradicts edge
@@ -1043,10 +1082,10 @@ impl MenteDb {
                 // Without a page entry we cannot check validity or decay; keep
                 // the raw score rather than silently dropping the hit.
                 let Some(&page_id) = pm.get(&id) else {
-                    return Some((id, raw_score));
+                    return Some((id, raw_score, None));
                 };
                 let Ok(node) = self.storage.load_memory(page_id) else {
-                    return Some((id, raw_score));
+                    return Some((id, raw_score, None));
                 };
                 // Drop memories outside their validity window or not visible to
                 // this (user, agent) scope. Both owner axes must pass.
@@ -1088,13 +1127,46 @@ impl MenteDb {
                     }
                     _ => score,
                 };
-                Some((id, score))
+                // Keep the content only when a reranker will consume it, so the
+                // default path pays no extra allocation.
+                let content = if want_rerank {
+                    Some(node.content.clone())
+                } else {
+                    None
+                };
+                Some((id, score, content))
             })
             .collect();
-        // Re-rank by the decay-adjusted score before cutting to k, so the decay
-        // blend actually reorders results rather than just relabeling them.
+        // Optional second pass: reorder the whole fetched pool by the installed
+        // reranker over the query text, before the sort cuts to k, so it can lift
+        // a candidate the first pass ranked outside the top k.
+        if want_rerank
+            && let Some(reranker) = &self.reranker
+            && let Some(qt) = query_text
+        {
+            use crate::reranker::RerankCandidate;
+            let new_scores: std::collections::HashMap<MemoryId, f32> = {
+                let cands: Vec<RerankCandidate<'_>> = scored
+                    .iter()
+                    .map(|(id, sc, content)| RerankCandidate {
+                        id: *id,
+                        content: content.as_deref().unwrap_or(""),
+                        score: *sc,
+                    })
+                    .collect();
+                reranker.rerank(qt, &cands).into_iter().collect()
+            };
+            for (id, sc, _) in scored.iter_mut() {
+                if let Some(&ns) = new_scores.get(id) {
+                    *sc = ns;
+                }
+            }
+        }
+        // Re-rank by the (decay-adjusted, then optionally reranked) score before
+        // cutting to k, so the ranking reorders results rather than relabeling them.
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(k);
+        let scored: Vec<(MemoryId, f32)> = scored.into_iter().map(|(id, sc, _)| (id, sc)).collect();
         // Time only (do not increment recalls here): recall()/query() already
         // count the read, and they reach this hybrid core via execute_plan, so
         // counting here too would double-count them.
@@ -4335,5 +4407,135 @@ mod distinct_owner_tests {
         assert!(owners.contains(&(alice, agent)));
         assert!(owners.contains(&(bob, agent)));
         assert!(owners.contains(&(UserId::nil(), AgentId::nil())));
+    }
+}
+
+#[cfg(test)]
+mod reranker_integration_tests {
+    use super::*;
+    use crate::reranker::{RerankCandidate, Reranker};
+
+    fn now_us() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64
+    }
+
+    /// A test reranker that promotes whichever candidate mentions "gardening",
+    /// regardless of its first-pass score, so the assertion isolates the rerank
+    /// stage from the vector/BM25 signals.
+    struct PromoteGardening;
+    impl Reranker for PromoteGardening {
+        fn rerank(&self, _query: &str, candidates: &[RerankCandidate<'_>]) -> Vec<(MemoryId, f32)> {
+            candidates
+                .iter()
+                .map(|c| {
+                    let s = if c.content.contains("gardening") {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    (c.id, s)
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn reranker_overrides_first_pass_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = MenteDb::open(dir.path()).unwrap();
+
+        // A is far from the query vector and lacks the query term; B is closest to
+        // the query vector AND contains "espresso", so the first pass favors B on
+        // both signals.
+        let a = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            "gardening soil and a trowel".into(),
+            vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        );
+        let b = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            "espresso machine and grinder".into(),
+            vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        );
+        let a_id = a.id;
+        let b_id = b.id;
+        db.store(a).unwrap();
+        db.store(b).unwrap();
+
+        let query_emb = vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let at = now_us();
+
+        // First pass: no reranker installed, B wins.
+        let base = db
+            .recall_hybrid_at(&query_emb, Some("espresso"), 2, at, None, None, None)
+            .unwrap();
+        assert_eq!(
+            base[0].0, b_id,
+            "without a reranker the first pass favors B"
+        );
+
+        // Install the reranker; it must override the first-pass order and lift A.
+        db.set_reranker(Box::new(PromoteGardening));
+        assert!(db.has_reranker());
+        let reranked = db
+            .recall_hybrid_at(&query_emb, Some("espresso"), 2, at, None, None, None)
+            .unwrap();
+        assert_eq!(
+            reranked[0].0, a_id,
+            "the installed reranker must drive the final order"
+        );
+
+        // Clearing it restores the first-pass order.
+        db.clear_reranker();
+        let restored = db
+            .recall_hybrid_at(&query_emb, Some("espresso"), 2, at, None, None, None)
+            .unwrap();
+        assert_eq!(
+            restored[0].0, b_id,
+            "clearing the reranker restores first pass"
+        );
+    }
+
+    /// With no query text the rerank stage is skipped even when a reranker is
+    /// installed, so a text-blind vector recall is unaffected.
+    #[test]
+    fn no_query_text_skips_rerank() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = MenteDb::open(dir.path()).unwrap();
+        let a = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            "gardening soil".into(),
+            vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        );
+        let b = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            "espresso machine".into(),
+            vec![0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        );
+        let b_id = b.id;
+        db.store(a).unwrap();
+        db.store(b).unwrap();
+        db.set_reranker(Box::new(PromoteGardening));
+
+        // No query text: pure vector recall closest to B, rerank not applied.
+        let out = db
+            .recall_hybrid_at(
+                &[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                None,
+                2,
+                now_us(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(out[0].0, b_id, "no query text means no rerank");
     }
 }
