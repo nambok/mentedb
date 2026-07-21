@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0](https://github.com/nambok/mentedb/compare/mentedb-v0.21.1...mentedb-v0.22.0) - 2026-07-21
+
+### Added
+
+- *(recall)* wire the pluggable reranker onto the hybrid recall path ([#331](https://github.com/nambok/mentedb/pull/331))
+- *(recall)* project scope weighting and configurable speculative cache ([#329](https://github.com/nambok/mentedb/pull/329))
+
 ## [0.21.0](https://github.com/nambok/mentedb/compare/mentedb-v0.20.4...mentedb-v0.21.0) - 2026-07-21
 
 ### Added
