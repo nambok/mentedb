@@ -1644,6 +1644,7 @@ mod injection_attention {
                 max_episodic: 0,
                 agent_id: None,
                 user_id: None,
+                current_project: None,
             };
             let ids: Vec<_> = db
                 .recall_for_injection(&query)
@@ -1702,6 +1703,7 @@ mod injection_attention {
             max_episodic: 2,
             agent_id: None,
             user_id: None,
+            current_project: None,
         };
         let out = db.recall_for_injection(&query).unwrap();
 
@@ -1820,6 +1822,7 @@ mod injection_attention {
             max_episodic: 0,
             agent_id: None,
             user_id: None,
+            current_project: None,
         };
         let out = db.recall_for_injection(&query).unwrap();
         let relevant: Vec<_> = out

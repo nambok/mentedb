@@ -103,6 +103,11 @@ pub struct InjectionQuery<'a> {
     /// knowledge, orthogonal to `agent_id`. None recalls globally on the user
     /// axis. A memory is injectable only when visible on BOTH axes.
     pub user_id: Option<UserId>,
+    /// Current project (a `scope:project:<name>` value without the prefix). When
+    /// set, memories from other projects are weighted down in recall so injection
+    /// favors the active project instead of dumping cross-project noise. None
+    /// recalls across all projects.
+    pub current_project: Option<&'a str>,
 }
 
 /// Why an item was selected, for introspection and client display.
@@ -207,6 +212,7 @@ impl MenteDb {
                 None,
                 query.agent_id,
                 query.user_id,
+                query.current_project,
             )
             .unwrap_or_default();
 

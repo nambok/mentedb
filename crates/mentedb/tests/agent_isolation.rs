@@ -79,6 +79,7 @@ fn scoped_recall_isolates_agents() {
             None,
             Some(coder),
             None,
+            None,
         )
         .unwrap();
     let ids: Vec<MemoryId> = hits.iter().map(|(id, _)| *id).collect();
@@ -101,6 +102,7 @@ fn scoped_recall_isolates_agents() {
             now_us(),
             None,
             false,
+            None,
             None,
             None,
             None,
@@ -207,6 +209,7 @@ fn injection_respects_agent_scope() {
             max_episodic: 2,
             agent_id: Some(coder),
             user_id: None,
+            current_project: None,
         })
         .unwrap();
 
@@ -245,6 +248,7 @@ fn ghost_memories_never_inject() {
             max_episodic: 2,
             agent_id: None,
             user_id: None,
+            current_project: None,
         })
         .unwrap();
     let contents: Vec<&str> = selected.iter().map(|c| c.node.content.as_str()).collect();
