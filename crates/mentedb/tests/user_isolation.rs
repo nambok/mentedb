@@ -141,6 +141,7 @@ fn scoped_user_still_sees_own_and_global() {
             None,
             Some(bob),
             None,
+            None,
         )
         .unwrap();
     let ids: Vec<MemoryId> = hits.iter().map(|(id, _)| *id).collect();
@@ -175,6 +176,7 @@ fn scoped_recall_excludes_other_users_even_as_top_match() {
             false,
             None,
             Some(bob),
+            None,
             None,
         )
         .unwrap();
@@ -269,6 +271,7 @@ fn user_scoping_is_orthogonal_to_agent() {
             None,
             Some(agent),
             Some(ua),
+            None,
         )
         .unwrap();
     let ids: Vec<MemoryId> = hits.iter().map(|(id, _)| *id).collect();

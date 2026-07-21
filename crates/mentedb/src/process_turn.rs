@@ -386,6 +386,7 @@ impl MenteDb {
             None,
             agent,
             user,
+            None,
         )?;
         let mut scored: Vec<ScoredMemory> = results
             .iter()
@@ -531,6 +532,7 @@ impl MenteDb {
                 None,
                 agent,
                 user,
+                None,
             )
             .unwrap_or_default();
         let existing: Vec<MemoryNode> = similar_ids
@@ -699,6 +701,7 @@ impl MenteDb {
                 None,
                 agent,
                 user,
+                None,
             )
             .unwrap_or_default();
         let nearby: Vec<MemoryNode> = similar_ids
@@ -763,6 +766,7 @@ impl MenteDb {
                     None,
                     agent,
                     user,
+                    None,
                 )
                 .unwrap_or_default();
             for (mid, score) in &results {

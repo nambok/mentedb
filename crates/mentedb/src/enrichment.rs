@@ -134,6 +134,7 @@ pub async fn run_enrichment<J: LlmJudge>(
                             None,
                             Some(agent),
                             Some(user),
+                            None,
                         )
                         .unwrap_or_default()
                         .into_iter()

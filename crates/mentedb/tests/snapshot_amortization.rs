@@ -34,7 +34,7 @@ fn now_us() -> u64 {
 }
 
 fn recall_ids(db: &MenteDb, axis: usize) -> Vec<MemoryId> {
-    db.recall_hybrid_at(&vec_for(axis), None, 10, now_us(), None, None)
+    db.recall_hybrid_at(&vec_for(axis), None, 10, now_us(), None, None, None)
         .unwrap()
         .into_iter()
         .map(|(id, _)| id)

@@ -320,6 +320,17 @@ pub struct CognitiveConfig {
     pub trajectory_max_turns: usize,
     /// Maximum speculative cache entries.
     pub speculative_cache_size: usize,
+    /// Cosine similarity threshold for a query to hit a speculative cache entry.
+    pub speculative_embedding_threshold: f32,
+    /// Keyword-overlap threshold for a query to hit a speculative cache entry.
+    pub speculative_keyword_threshold: f32,
+    /// Recall relevance penalty for a memory from a DIFFERENT project than the
+    /// query's current project (0.0 = off, 1.0 = hard isolation). A weighted
+    /// signal, not a filter: a strongly-relevant cross-project memory still
+    /// surfaces, ranked below the current project's; global (un-projected) and
+    /// same-project memories are never penalized. Applied only when the caller
+    /// passes a current project (None = search across all projects).
+    pub project_scope_penalty: f32,
     /// Maximum pain signals to retain.
     pub pain_max_warnings: usize,
     /// Configuration for injection attention selection.
@@ -370,7 +381,10 @@ impl Default for CognitiveConfig {
             enrichment_config: EnrichmentConfig::default(),
             interference_threshold: 0.8,
             trajectory_max_turns: 100,
-            speculative_cache_size: 10,
+            speculative_cache_size: 32,
+            speculative_embedding_threshold: 0.5,
+            speculative_keyword_threshold: 0.4,
+            project_scope_penalty: 0.5,
             pain_max_warnings: 5,
             injection_config: injection::InjectionConfig::default(),
             flush_snapshot_interval: 8,
@@ -549,8 +563,8 @@ impl MenteDb {
         let phantom = RwLock::new(PhantomTracker::new(cognitive_config.phantom_config.clone()));
         let speculative = RwLock::new(SpeculativeCache::new(
             cognitive_config.speculative_cache_size,
-            0.5,
-            0.4,
+            cognitive_config.speculative_embedding_threshold,
+            cognitive_config.speculative_keyword_threshold,
         ));
         let interference = InterferenceDetector::new(cognitive_config.interference_threshold);
         let entity_resolver = RwLock::new(EntityResolver::new());
@@ -908,7 +922,7 @@ impl MenteDb {
         tags: Option<&[&str]>,
         time_range: Option<(Timestamp, Timestamp)>,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
-        self.recall_hybrid_at(embedding, None, k, at, tags, time_range)
+        self.recall_hybrid_at(embedding, None, k, at, tags, time_range, None)
     }
 
     /// Hybrid search combining vector similarity and BM25 keyword matching.
@@ -916,6 +930,7 @@ impl MenteDb {
     /// When `query_text` is provided, BM25 results are fused with vector
     /// results via Reciprocal Rank Fusion (RRF) for better recall on
     /// exact entity names, dates, and specific terms.
+    #[allow(clippy::too_many_arguments)]
     pub fn recall_hybrid_at(
         &self,
         embedding: &[f32],
@@ -924,8 +939,18 @@ impl MenteDb {
         at: Timestamp,
         tags: Option<&[&str]>,
         time_range: Option<(Timestamp, Timestamp)>,
+        current_project: Option<&str>,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
-        self.recall_hybrid_at_mode(embedding, query_text, k, at, tags, false, time_range)
+        self.recall_hybrid_at_mode(
+            embedding,
+            query_text,
+            k,
+            at,
+            tags,
+            false,
+            time_range,
+            current_project,
+        )
     }
 
     /// Hybrid recall with configurable tag mode (AND vs OR).
@@ -939,9 +964,19 @@ impl MenteDb {
         tags: Option<&[&str]>,
         tags_or: bool,
         time_range: Option<(Timestamp, Timestamp)>,
+        current_project: Option<&str>,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
         self.recall_hybrid_scoped_at_mode(
-            embedding, query_text, k, at, tags, tags_or, time_range, None, None,
+            embedding,
+            query_text,
+            k,
+            at,
+            tags,
+            tags_or,
+            time_range,
+            None,
+            None,
+            current_project,
         )
     }
 
@@ -963,6 +998,7 @@ impl MenteDb {
         time_range: Option<(Timestamp, Timestamp)>,
         agent: Option<AgentId>,
         user: Option<UserId>,
+        current_project: Option<&str>,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
         let started = std::time::Instant::now();
         debug!(
@@ -972,6 +1008,14 @@ impl MenteDb {
             query_text.is_some(),
             tags_or
         );
+        // Project scope weight: precompute the current project's scope tag and the
+        // retained fraction for cross-project memories. None (or empty) disables
+        // the weighting entirely, which is the "search across all projects"
+        // override.
+        let current_project_tag = current_project
+            .filter(|p| !p.is_empty())
+            .map(|p| format!("scope:project:{p}"));
+        let cross_project_keep = 1.0 - self.cognitive_config.project_scope_penalty;
         // Over-fetch to account for filtered-out results
         let results = self.index.hybrid_search_with_query_mode(
             embedding,
@@ -1027,6 +1071,22 @@ impl MenteDb {
                     raw_score * 0.7 + decayed * 0.3
                 } else {
                     raw_score
+                };
+                // Weight down a memory that belongs to a DIFFERENT project than
+                // the query's current project. Same-project and global (no
+                // scope:project tag) memories are unaffected, so cross-project
+                // recall still works when a memory is strongly relevant, it is
+                // just ranked below the current project's.
+                let score = match &current_project_tag {
+                    Some(cpt)
+                        if node
+                            .tags
+                            .iter()
+                            .any(|t| t.starts_with("scope:project:") && t != cpt) =>
+                    {
+                        score * cross_project_keep
+                    }
+                    _ => score,
                 };
                 Some((id, score))
             })
@@ -1095,7 +1155,8 @@ impl MenteDb {
 
         for (i, emb) in embeddings.iter().enumerate() {
             let qt = query_texts.and_then(|texts| texts.get(i).map(|s| s.as_str()));
-            let results = self.recall_hybrid_at_mode(emb, qt, k, now, tags, tags_or, time_range)?;
+            let results =
+                self.recall_hybrid_at_mode(emb, qt, k, now, tags, tags_or, time_range, None)?;
             for (rank, (id, _score)) in results.iter().enumerate() {
                 *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
             }
@@ -1420,6 +1481,7 @@ impl MenteDb {
                 None,
                 Some(new_memory.agent_id),
                 Some(new_memory.user_id),
+                None,
             )
             .unwrap_or_default()
         } else {
