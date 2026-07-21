@@ -44,6 +44,8 @@ pub struct Metrics {
     vector_index_size: IntGauge,
     graph_nodes: IntGauge,
     standing_rules: IntGauge,
+    store_latency_us: IntGauge,
+    search_latency_us: IntGauge,
 }
 
 static METRICS: OnceLock<Metrics> = OnceLock::new();
@@ -117,6 +119,14 @@ impl Metrics {
             "mentedb_standing_rules",
             "Pinned standing rules (scope:always)",
         );
+        let store_latency_us = gauge(
+            "mentedb_store_latency_microseconds",
+            "EMA of store op latency in microseconds",
+        );
+        let search_latency_us = gauge(
+            "mentedb_search_latency_microseconds",
+            "EMA of hybrid-search op latency in microseconds",
+        );
 
         for g in [&uptime, &memory_count, &live_nodes] {
             registry.register(Box::new(g.clone())).ok();
@@ -142,6 +152,8 @@ impl Metrics {
             vector_index_size,
             graph_nodes,
             standing_rules,
+            store_latency_us,
+            search_latency_us,
         }
     }
 }
@@ -177,6 +189,8 @@ pub async fn handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     m.vector_index_size.set(dm.vector_index_size as i64);
     m.graph_nodes.set(dm.graph_nodes as i64);
     m.standing_rules.set(dm.standing_rules as i64);
+    m.store_latency_us.set(dm.avg_store_latency_us as i64);
+    m.search_latency_us.set(dm.avg_search_latency_us as i64);
     let live = match &state.cluster {
         Some(c) => c.live_node_count().await as i64,
         None => 1,
