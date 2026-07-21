@@ -654,9 +654,11 @@ the fleet is for when one node's write throughput becomes the ceiling.
 ## Observability
 
 `mentedb-server` exposes Prometheus metrics at `GET /metrics` (no auth, aggregate
-only, no per-account labels): process CPU and memory, uptime, memories stored, live
-cluster nodes, and HTTP request rate and latency. It also serves a bundled console
-at `GET /console` (live health, plus a memory browser gated by `--admin-key`).
+only, no per-account labels): process CPU and memory, uptime, memories stored,
+engine store and search op latency (`mentedb_store_latency_microseconds`,
+`mentedb_search_latency_microseconds`), live cluster nodes, and HTTP request rate
+and latency. It also serves a bundled console at `GET /console` (live health, plus
+a memory browser gated by `--admin-key`).
 
 For a full stack, [`observability/`](observability/) has a one-command Prometheus +
 Grafana setup with the dashboard already provisioned:
