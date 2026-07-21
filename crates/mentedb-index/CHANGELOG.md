@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0](https://github.com/nambok/mentedb/compare/mentedb-index-v0.21.1...mentedb-index-v0.22.0) - 2026-07-21
+
+### Fixed
+
+- *(index)* make BM25 indexing upsert-safe and removal cheap ([#328](https://github.com/nambok/mentedb/pull/328))
+
 ## [0.20.3](https://github.com/nambok/mentedb/compare/mentedb-index-v0.20.1...mentedb-index-v0.20.3) - 2026-07-19
 
 ### Other
