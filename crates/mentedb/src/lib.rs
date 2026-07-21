@@ -222,6 +222,12 @@ pub struct PruneReport {
     pub capped: usize,
 }
 
+/// EMA smoothing window for the op-latency metrics:
+/// `new = (cur * (N-1) + sample) / N`. Larger N is smoother and lets a one-off
+/// spike (e.g. a cold path) decay more slowly. Metrics-only, not a cognitive
+/// heuristic.
+const LATENCY_EMA_WINDOW: u64 = 8;
+
 /// A point-in-time snapshot of engine metrics for a `/metrics` exporter. Cheap to
 /// take: counters are atomic loads and sizes are O(1) index/graph/page lookups, so
 /// a scrape does not scan the corpus.
@@ -233,6 +239,11 @@ pub struct DbMetrics {
     pub stores: u64,
     /// Lifetime recall/query operations (reads).
     pub recalls: u64,
+    /// EMA of recent store op latency, microseconds. 0 until the first store.
+    pub avg_store_latency_us: u64,
+    /// EMA of recent hybrid-search op latency, microseconds. 0 until the first
+    /// search.
+    pub avg_search_latency_us: u64,
     /// Buffer-pool page cache hits.
     pub buffer_pool_hits: u64,
     /// Buffer-pool page cache misses (disk reads).
@@ -392,6 +403,11 @@ pub struct MenteDb {
     stores: std::sync::atomic::AtomicU64,
     /// Lifetime count of recall/query operations (metrics).
     recalls: std::sync::atomic::AtomicU64,
+    /// EMA of store op latency, microseconds (metrics). 0 until the first store.
+    store_latency_us: std::sync::atomic::AtomicU64,
+    /// EMA of hybrid-search op latency, microseconds (metrics). 0 until the first
+    /// search.
+    search_latency_us: std::sync::atomic::AtomicU64,
     /// Expected embedding dimension (0 = no validation).
     embedding_dim: usize,
     /// Database directory path for persistence.
@@ -564,6 +580,8 @@ impl MenteDb {
             flushes_since_snapshot: std::sync::atomic::AtomicU32::new(0),
             stores: std::sync::atomic::AtomicU64::new(0),
             recalls: std::sync::atomic::AtomicU64::new(0),
+            store_latency_us: std::sync::atomic::AtomicU64::new(0),
+            search_latency_us: std::sync::atomic::AtomicU64::new(0),
             embedding_dim: 0,
             path: path.to_path_buf(),
             embedder: None,
@@ -635,6 +653,7 @@ impl MenteDb {
     /// - Invalidate superseded memories
     /// - Propagate confidence changes through the graph
     pub fn store(&self, node: MemoryNode) -> MenteResult<()> {
+        let started = std::time::Instant::now();
         let id = node.id;
         debug!("Storing memory {}", id);
 
@@ -672,6 +691,7 @@ impl MenteDb {
             self.run_write_inference(&node);
         }
 
+        Self::record_latency(&self.store_latency_us, started.elapsed());
         Ok(())
     }
 
@@ -944,6 +964,7 @@ impl MenteDb {
         agent: Option<AgentId>,
         user: Option<UserId>,
     ) -> MenteResult<Vec<(MemoryId, f32)>> {
+        let started = std::time::Instant::now();
         debug!(
             "Recall hybrid, k={}, at={}, bm25={}, tags_or={}",
             k,
@@ -1014,6 +1035,10 @@ impl MenteDb {
         // blend actually reorders results rather than just relabeling them.
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(k);
+        // Time only (do not increment recalls here): recall()/query() already
+        // count the read, and they reach this hybrid core via execute_plan, so
+        // counting here too would double-count them.
+        Self::record_latency(&self.search_latency_us, started.elapsed());
         Ok(scored)
     }
 
@@ -1128,6 +1153,28 @@ impl MenteDb {
         self.page_map.read().len()
     }
 
+    /// Fold one op's latency into an exponentially-weighted moving average, in
+    /// microseconds. An EMA (not a lifetime mean) so a one-off slow op, e.g. right
+    /// after a cold open, decays out over the next few ops instead of permanently
+    /// skewing the number; it tracks recent, warm engine performance. Lock-free.
+    fn record_latency(ema: &std::sync::atomic::AtomicU64, elapsed: std::time::Duration) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let sample = elapsed.as_micros() as u64;
+        let n = LATENCY_EMA_WINDOW;
+        let mut cur = ema.load(Relaxed);
+        loop {
+            let next = if cur == 0 {
+                sample
+            } else {
+                (cur * (n - 1) + sample) / n
+            };
+            match ema.compare_exchange_weak(cur, next, Relaxed, Relaxed) {
+                Ok(_) => break,
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+
     /// Snapshot the engine's operational metrics (writes, reads, cache, storage,
     /// index, graph, standing rules) for a `/metrics` exporter. O(1), no scan.
     pub fn metrics(&self) -> DbMetrics {
@@ -1138,6 +1185,8 @@ impl MenteDb {
             memory_count: self.memory_count() as u64,
             stores: self.stores.load(Relaxed),
             recalls: self.recalls.load(Relaxed),
+            avg_store_latency_us: self.store_latency_us.load(Relaxed),
+            avg_search_latency_us: self.search_latency_us.load(Relaxed),
             buffer_pool_hits: bp.hits,
             buffer_pool_misses: bp.misses,
             buffer_pool_evictions: bp.evictions,
@@ -3839,10 +3888,21 @@ mod metrics_snapshot_tests {
         // Read paths: recall (assembles a window) and query (raw).
         let _ = db.recall("RECALL memories LIMIT 10").unwrap();
         let _ = db.query("RECALL LIMIT 10").unwrap();
+        // Exercise the hybrid vector-search path so search latency is recorded
+        // (this path is not counted in recalls, only timed).
+        let _ = db.recall_similar(&[0.15_f32; 8], 3).unwrap();
 
         let m = db.metrics();
         assert_eq!(m.stores, 3, "three writes counted");
         assert_eq!(m.recalls, 2, "recall + query counted as reads");
+        assert!(
+            m.avg_store_latency_us > 0,
+            "store latency EMA populated after writes"
+        );
+        assert!(
+            m.avg_search_latency_us > 0,
+            "search latency EMA populated after a hybrid search"
+        );
         assert_eq!(m.memory_count, 3);
         assert_eq!(m.vector_index_size, 3, "three vectors indexed");
         assert_eq!(m.graph_nodes, 3, "three graph nodes");
