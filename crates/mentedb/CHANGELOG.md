@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.4](https://github.com/nambok/mentedb/compare/mentedb-v0.24.3...mentedb-v0.24.4) - 2026-07-22
+
+### Fixed
+
+- make value-update supersession order-independent ([#349](https://github.com/nambok/mentedb/pull/349))
+
 ## [0.24.3](https://github.com/nambok/mentedb/compare/mentedb-v0.24.1...mentedb-v0.24.3) - 2026-07-22
 
 ### Fixed
