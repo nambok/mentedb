@@ -1431,6 +1431,45 @@ impl MenteDb {
         self.storage.load_memory(page_id)
     }
 
+    /// The supersession history of a memory: the chain of older versions this
+    /// fact replaced, newest predecessor first, walked over `Supersedes` edges
+    /// (source = newer, target = replaced) up to `max_depth` hops.
+    ///
+    /// The engine keeps superseded memories bi-temporally but recall hides
+    /// them, which makes "what was my previous X" unanswerable downstream even
+    /// though the answer is stored. This surfaces it: callers can attach the
+    /// predecessors of a recalled fact ("phone number is 4321, previously
+    /// 1234") without re-deriving graph internals. Cycle-guarded; a memory
+    /// with no history returns an empty vec.
+    pub fn supersession_history(
+        &self,
+        id: MemoryId,
+        max_depth: usize,
+    ) -> MenteResult<Vec<MemoryNode>> {
+        let graph = self.graph.graph();
+        let mut history = Vec::new();
+        let mut seen = std::collections::HashSet::from([id]);
+        let mut current = id;
+        for _ in 0..max_depth {
+            let mut next: Option<MemoryId> = None;
+            for (target, edge) in graph.outgoing(current) {
+                if edge.edge_type == EdgeType::Supersedes && !seen.contains(&target) {
+                    next = Some(target);
+                    break;
+                }
+            }
+            let Some(prev) = next else { break };
+            seen.insert(prev);
+            match self.get_memory(prev) {
+                Ok(node) => history.push(node),
+                // A dangling edge (predecessor forgotten) ends the chain.
+                Err(_) => break,
+            }
+            current = prev;
+        }
+        Ok(history)
+    }
+
     /// Returns all memory IDs currently stored in the database.
     pub fn memory_ids(&self) -> Vec<MemoryId> {
         self.page_map.read().keys().copied().collect()
