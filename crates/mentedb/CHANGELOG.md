@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0](https://github.com/nambok/mentedb/compare/mentedb-v0.22.1...mentedb-v0.23.0) - 2026-07-22
+
+### Added
+
+- *(recall)* contextual-retrieval hook via an optional context field ([#334](https://github.com/nambok/mentedb/pull/334))
+- *(recall)* optional MMR diversity pass on hybrid recall ([#333](https://github.com/nambok/mentedb/pull/333))
+
 ## [0.22.1](https://github.com/nambok/mentedb/compare/mentedb-v0.21.1...mentedb-v0.22.1) - 2026-07-21
 
 ### Added

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.22.1...mentedb-consolidation-v0.23.0) - 2026-07-22
+
+### Added
+
+- *(recall)* contextual-retrieval hook via an optional context field ([#334](https://github.com/nambok/mentedb/pull/334))
+
 ## [0.20.3](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.20.1...mentedb-consolidation-v0.20.3) - 2026-07-19
 
 ### Other
