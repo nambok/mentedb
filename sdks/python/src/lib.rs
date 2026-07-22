@@ -574,6 +574,7 @@ impl MenteDB {
                 tag_refs,
                 use_tags_or,
                 time_range,
+                None,
             )
             .map_err(to_pyerr)?;
 
@@ -607,6 +608,7 @@ impl MenteDB {
                 tag_refs,
                 use_tags_or,
                 time_range,
+                None,
             )
             .map_err(to_pyerr)?
         } else {
@@ -654,6 +656,7 @@ impl MenteDB {
                             tag_refs,
                             use_tags_or,
                             time_range,
+                            None,
                         )
                         .map_err(to_pyerr)?;
                     pass4_item_hits.extend(hits);
@@ -691,6 +694,7 @@ impl MenteDB {
                             tag_refs,
                             use_tags_or,
                             time_range,
+                            None,
                         )
                         .map_err(to_pyerr)?;
                     pass4_broad_hits.extend(hits);
@@ -1049,6 +1053,7 @@ impl MenteDB {
                             tag_refs,
                             use_tags_or,
                             window_range,
+                            None,
                         )
                         .map_err(to_pyerr)?;
                     temporal_window_hits = window_hits;
@@ -1103,6 +1108,7 @@ impl MenteDB {
                                 tag_refs,
                                 use_tags_or,
                                 wide_range,
+                                None,
                             )
                             .map_err(to_pyerr)?;
                         temporal_window_hits.extend(wide_hits);
@@ -1214,6 +1220,7 @@ impl MenteDB {
                         tag_refs,
                         use_tags_or,
                         None,
+                        None,
                     )
                     .map_err(to_pyerr)?;
                 temporal_date_hits.extend(date_hits);
@@ -1297,6 +1304,7 @@ impl MenteDB {
                         tag_refs,
                         use_tags_or,
                         time_range,
+                        None,
                     )
                     .map_err(to_pyerr)?;
                 contextual_hits = followup_hits;
@@ -1370,6 +1378,7 @@ impl MenteDB {
                         tag_refs,
                         use_tags_or,
                         time_range,
+                        None,
                     )
                     .map_err(to_pyerr)?;
                 preference_hits.extend(hits);
@@ -1406,6 +1415,7 @@ impl MenteDB {
                     tag_refs,
                     use_tags_or,
                     time_range,
+                    None,
                 )
                 .map_err(to_pyerr)?;
             // Sort by created_at descending (most recent first)
@@ -1681,6 +1691,7 @@ impl MenteDB {
                                                 tag_refs,
                                                 use_tags_or,
                                                 time_range,
+                                                None,
                                             )
                                             .map_err(to_pyerr)?;
                                         for (id, score) in hits {
