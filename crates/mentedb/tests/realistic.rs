@@ -1021,6 +1021,7 @@ fn test_contradiction_chain() {
         correction_threshold: 0.1,
         confidence_decay_factor: 0.5,
         confidence_floor: 0.1,
+        ..WriteInferenceConfig::default()
     };
     let engine = WriteInferenceEngine::with_config(config);
 
