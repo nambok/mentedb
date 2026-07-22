@@ -135,6 +135,7 @@ pub async fn store_memory(
         tags,
         valid_from: req.get("valid_from").and_then(|v| v.as_u64()),
         valid_until: req.get("valid_until").and_then(|v| v.as_u64()),
+        context: None,
     };
 
     let db = &*state.db;
@@ -468,6 +469,7 @@ async fn run_extraction(
             tags: memory.tags.clone(),
             valid_from: None,
             valid_until: None,
+            context: None,
         };
         match db.store(node) {
             Ok(()) => stored_ids.push(id.to_string()),

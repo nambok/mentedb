@@ -15,6 +15,7 @@ fn make_memory(content: &str, embedding: Vec<f32>) -> MemoryNode {
         agent_id: AgentId::new(),
         user_id: UserId::nil(),
         memory_type: MemoryType::Episodic,
+        context: None,
         embedding,
         content: content.to_string(),
         created_at: 0,

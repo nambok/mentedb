@@ -241,6 +241,7 @@ impl MemoryService for MemoryServiceImpl {
             tags: req.tags,
             valid_from: req.valid_from,
             valid_until: req.valid_until,
+            context: None,
         };
 
         let db = &*self.state.db;

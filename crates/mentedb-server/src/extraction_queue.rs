@@ -101,6 +101,7 @@ async fn process_extraction(req: ExtractionRequest) -> Result<(), String> {
             tags: memory.tags.clone(),
             valid_from: None,
             valid_until: None,
+            context: None,
         };
         match req.db.store(node) {
             Ok(()) => stored += 1,
