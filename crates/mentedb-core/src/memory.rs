@@ -78,6 +78,14 @@ pub struct MemoryNode {
     /// None means still valid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub valid_until: Option<Timestamp>,
+    /// Optional retrieval context, prepended to the content when the memory is
+    /// indexed (BM25) and embedded, but NOT stored as part of the content the
+    /// caller reads back. This is the contextual-retrieval hook: a short
+    /// situating blurb the caller generates (for example "From a thread about the
+    /// billing migration") that makes an otherwise-ambiguous memory findable by
+    /// terms it never literally contains. None indexes the content as-is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
 }
 
 impl MemoryNode {
@@ -110,6 +118,7 @@ impl MemoryNode {
             tags: Vec::new(),
             valid_from: None,
             valid_until: None,
+            context: None,
         }
     }
 
@@ -120,6 +129,25 @@ impl MemoryNode {
     pub fn with_user_id(mut self, user_id: UserId) -> Self {
         self.user_id = user_id;
         self
+    }
+
+    /// Attach retrieval context (builder style). See [`MemoryNode::context`].
+    pub fn with_context(mut self, context: impl Into<String>) -> Self {
+        let ctx = context.into();
+        self.context = if ctx.is_empty() { None } else { Some(ctx) };
+        self
+    }
+
+    /// The text to index and embed: the context (when present) prefixed to the
+    /// content, so retrieval matches on both while the stored `content` stays
+    /// exactly what the caller wrote.
+    pub fn indexed_text(&self) -> std::borrow::Cow<'_, str> {
+        match &self.context {
+            Some(ctx) if !ctx.is_empty() => {
+                std::borrow::Cow::Owned(format!("{ctx}\n{}", self.content))
+            }
+            _ => std::borrow::Cow::Borrowed(&self.content),
+        }
     }
 }
 
@@ -148,6 +176,35 @@ impl MemoryNode {
 mod tests {
     use super::*;
     use crate::types::{AgentId, UserId};
+
+    #[test]
+    fn context_prefixes_indexed_text_but_not_content() {
+        let n = MemoryNode::new(
+            AgentId::new(),
+            MemoryType::Semantic,
+            "the migration plan".to_string(),
+            vec![1.0],
+        )
+        .with_context("From a thread about billing");
+        // The stored content the caller reads back is untouched.
+        assert_eq!(n.content, "the migration plan");
+        // What gets indexed/embedded carries the context prefix.
+        assert_eq!(
+            n.indexed_text(),
+            "From a thread about billing\nthe migration plan"
+        );
+
+        // No context (and empty context) indexes the content as-is.
+        let plain = MemoryNode::new(
+            AgentId::new(),
+            MemoryType::Semantic,
+            "x".to_string(),
+            vec![1.0],
+        );
+        assert_eq!(plain.indexed_text(), "x");
+        assert_eq!(plain.context, None);
+        assert_eq!(plain.with_context("").context, None);
+    }
 
     #[test]
     fn new_memory_has_no_temporal_bounds() {

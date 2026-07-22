@@ -1916,10 +1916,11 @@ impl MenteDb {
                 continue;
             };
             // Already at the target dimension: nothing to do.
-            if node.embedding.len() == target || node.content.is_empty() {
+            let text = node.indexed_text();
+            if node.embedding.len() == target || text.is_empty() {
                 continue;
             }
-            let Some(embedding) = self.embed_text(&node.content)? else {
+            let Some(embedding) = self.embed_text(&text)? else {
                 continue;
             };
             // The embedder is not yet producing the target dimension; leave the
@@ -4644,6 +4645,56 @@ mod reranker_integration_tests {
         assert!(
             mmr_ids.contains(&c2),
             "MMR pulls the diverse memory into the top 2"
+        );
+    }
+
+    /// The contextual-retrieval hook: a term that appears only in a memory's
+    /// context (not its content) still finds it via BM25, and the stored content
+    /// is unchanged.
+    #[test]
+    fn contextual_hook_makes_context_terms_findable() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open(dir.path()).unwrap();
+
+        // "kubernetes" is in the context, never in the content.
+        let node = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            "rolled the pods back to the previous tag".into(),
+            vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+        )
+        .with_context("incident in the kubernetes cluster");
+        let id = node.id;
+        db.store(node).unwrap();
+        // A decoy sharing neither the content nor the context terms.
+        db.store(MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            "lunch plans for friday".into(),
+            vec![0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1],
+        ))
+        .unwrap();
+
+        let hits = db
+            .recall_hybrid_at(
+                &[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+                Some("kubernetes"),
+                5,
+                now_us(),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let ids: Vec<MemoryId> = hits.iter().map(|(id, _)| *id).collect();
+        assert!(
+            ids.contains(&id),
+            "a term only in the context must find the memory via BM25"
+        );
+        // The stored content is exactly what was written, no context leaked in.
+        assert_eq!(
+            db.get_memory(id).unwrap().content,
+            "rolled the pods back to the previous tag"
         );
     }
 }

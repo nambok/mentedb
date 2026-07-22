@@ -58,6 +58,7 @@ pub(crate) mod test_helpers {
             tags: Vec::new(),
             valid_from: None,
             valid_until: None,
+            context: None,
         }
     }
 }

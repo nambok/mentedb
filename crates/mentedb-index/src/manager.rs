@@ -101,9 +101,11 @@ impl IndexManager {
             let _ = self.hnsw.insert(node.id, &node.embedding);
         }
 
-        // BM25 full-text index
-        if !node.content.is_empty() {
-            self.bm25.insert(node.id, &node.content);
+        // BM25 full-text index, over the context-prefixed text so contextual
+        // retrieval also matches the caller's situating blurb.
+        let indexed = node.indexed_text();
+        if !indexed.is_empty() {
+            self.bm25.insert(node.id, &indexed);
         }
 
         // Tag bitmap index. Clear this id's existing tags first, so a re-index
