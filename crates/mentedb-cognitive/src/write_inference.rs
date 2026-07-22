@@ -160,6 +160,34 @@ fn is_value_update(new: &str, old: &str, prefix_share: f32, max_tail: usize) -> 
     prefix as f32 / longest as f32 >= prefix_share && tail > 0 && tail <= max_tail
 }
 
+/// Decide which of two value-frame-matching memories supersedes the other, and
+/// which is left stale. Order-independent: a `Correction` supersedes a plain
+/// fact whichever was stored first (the extractor types a correction explicitly,
+/// so it is the authoritative value); otherwise the later-created memory wins.
+/// Returns `(winner_id, loser_id, loser_confidence)`, or `None` when there is no
+/// correction signal and the timestamps are equal, in which case the two are
+/// kept as coexisting facts rather than guessing a direction.
+fn value_update_resolution(
+    new: &MemoryNode,
+    existing: &MemoryNode,
+) -> Option<(MemoryId, MemoryId, f32)> {
+    let new_correction = new.memory_type == MemoryType::Correction;
+    let old_correction = existing.memory_type == MemoryType::Correction;
+    if new_correction && !old_correction {
+        return Some((new.id, existing.id, existing.confidence));
+    }
+    if old_correction && !new_correction {
+        return Some((existing.id, new.id, new.confidence));
+    }
+    if new.created_at > existing.created_at {
+        return Some((new.id, existing.id, existing.confidence));
+    }
+    if existing.created_at > new.created_at {
+        return Some((existing.id, new.id, new.confidence));
+    }
+    None
+}
+
 pub struct WriteInferenceEngine {
     config: WriteInferenceConfig,
 }
@@ -183,6 +211,9 @@ impl WriteInferenceEngine {
     ) -> Vec<InferredAction> {
         let _ = existing_edges; // reserved for future graph-aware inference
         let mut actions = Vec::new();
+        // Value-frame-matched pairs are owned by the value-update rule below; the
+        // broad correction handler skips them so a pair is never resolved twice.
+        let mut value_update_handled: Vec<MemoryId> = Vec::new();
 
         for existing in existing_memories {
             if existing.id == new_memory.id {
@@ -214,7 +245,6 @@ impl WriteInferenceEngine {
                 });
             } else if self.config.value_update_enabled
                 && sim >= self.config.value_update_min_similarity
-                && new_memory.created_at > existing.created_at
                 && existing.agent_id == new_memory.agent_id
                 && existing.user_id == new_memory.user_id
                 && is_value_update(
@@ -224,19 +254,33 @@ impl WriteInferenceEngine {
                     self.config.value_update_max_tail,
                 )
             {
-                // Same sentence frame, new value: the newer memory supersedes
-                // the older one, so recall serves only the corrected fact.
-                actions.push(InferredAction::CreateEdge {
-                    source: new_memory.id,
-                    target: existing.id,
-                    edge_type: EdgeType::Supersedes,
-                    weight: sim,
-                });
-                actions.push(InferredAction::UpdateConfidence {
-                    memory: existing.id,
-                    new_confidence: (existing.confidence * self.config.confidence_decay_factor)
-                        .max(self.config.confidence_floor),
-                });
+                // Same sentence frame, different value: one supersedes the other.
+                // The value-update rule owns this pair (so the correction handler
+                // skips it), and the winner is decided deterministically rather
+                // than by arrival order: a correction beats a plain fact, else the
+                // later-created wins. Batch enrichment stores extracted facts in
+                // arbitrary order with near-equal timestamps, so an order-dependent
+                // rule fired only about half the time; this resolves the same way
+                // whether the correction arrives before or after the original.
+                value_update_handled.push(existing.id);
+                if let Some((winner, loser, loser_confidence)) =
+                    value_update_resolution(new_memory, existing)
+                {
+                    actions.push(InferredAction::CreateEdge {
+                        source: winner,
+                        target: loser,
+                        edge_type: EdgeType::Supersedes,
+                        weight: sim,
+                    });
+                    actions.push(InferredAction::UpdateConfidence {
+                        memory: loser,
+                        new_confidence: (loser_confidence * self.config.confidence_decay_factor)
+                            .max(self.config.confidence_floor),
+                    });
+                }
+                // else: no correction signal and equal timestamps, so the two are
+                // kept as coexisting facts (a multi-valued attribute) rather than
+                // one silently superseding the other.
             } else if sim > self.config.related_min && sim <= self.config.related_max {
                 actions.push(InferredAction::CreateEdge {
                     source: new_memory.id,
@@ -247,11 +291,12 @@ impl WriteInferenceEngine {
             }
         }
 
-        // Correction type: find the most similar existing memory and supersede it
+        // Correction type: find the most similar existing memory and supersede
+        // it, skipping any pair the value-update rule already resolved above.
         if new_memory.memory_type == MemoryType::Correction
             && let Some(original) = existing_memories
                 .iter()
-                .filter(|m| m.id != new_memory.id)
+                .filter(|m| m.id != new_memory.id && !value_update_handled.contains(&m.id))
                 .max_by(|a, b| {
                     cosine_similarity(&new_memory.embedding, &a.embedding)
                         .partial_cmp(&cosine_similarity(&new_memory.embedding, &b.embedding))
@@ -579,6 +624,108 @@ mod tests {
                 }
             )),
             "below the cosine floor a frame match must not supersede, got: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn correction_supersedes_regardless_of_store_order() {
+        // Batch enrichment can store the correction BEFORE the original it
+        // corrects. The original arriving after the existing correction must
+        // still be the one marked stale: the correction wins either way. This is
+        // the case the old order-dependent rule missed (both facts coexisted).
+        let agent = AgentId::new();
+        let mut correction = make_memory(
+            "The user's favorite coffee is a flat white",
+            vec![1.0, 0.0, 0.0],
+            MemoryType::Correction,
+        );
+        correction.agent_id = agent;
+        correction.created_at = 5000;
+        let mut original = make_memory(
+            "The user's favorite coffee is a cortado",
+            vec![0.98, 0.02, 0.0],
+            MemoryType::Semantic,
+        );
+        original.agent_id = agent;
+        original.created_at = 5000; // same batch timestamp
+
+        // The original arrives as the new memory; the correction already exists.
+        let actions =
+            WriteInferenceEngine::new().infer_on_write(&original, &[correction.clone()], &[]);
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                InferredAction::CreateEdge { source, target, edge_type: EdgeType::Supersedes, .. }
+                    if *source == correction.id && *target == original.id
+            )),
+            "the correction must supersede the later-arriving original, got: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn correction_supersedes_original_at_equal_timestamps() {
+        // The other store order: original first, correction second, same batch
+        // timestamp. The correction still wins.
+        let agent = AgentId::new();
+        let mut original = make_memory(
+            "The user's favorite coffee is a cortado",
+            vec![1.0, 0.0, 0.0],
+            MemoryType::Semantic,
+        );
+        original.agent_id = agent;
+        original.created_at = 5000;
+        let mut correction = make_memory(
+            "The user's favorite coffee is a flat white",
+            vec![0.98, 0.02, 0.0],
+            MemoryType::Correction,
+        );
+        correction.agent_id = agent;
+        correction.created_at = 5000;
+
+        let actions =
+            WriteInferenceEngine::new().infer_on_write(&correction, &[original.clone()], &[]);
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                InferredAction::CreateEdge { source, target, edge_type: EdgeType::Supersedes, .. }
+                    if *source == correction.id && *target == original.id
+            )),
+            "the correction must supersede the original at equal timestamps, got: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn multivalued_facts_at_equal_timestamps_are_both_kept() {
+        // Two plain facts sharing a frame that are not a correction of each other
+        // (a multi-valued attribute) must not supersede when timestamps are equal,
+        // so making the rule order-independent does not start eating coexisting
+        // facts. Only a correction signal or a clear time order triggers it.
+        let agent = AgentId::new();
+        let mut a = make_memory(
+            "The user knows Rust",
+            vec![1.0, 0.0, 0.0],
+            MemoryType::Semantic,
+        );
+        a.agent_id = agent;
+        a.created_at = 5000;
+        let mut b = make_memory(
+            "The user knows Python",
+            vec![0.97, 0.03, 0.0],
+            MemoryType::Semantic,
+        );
+        b.agent_id = agent;
+        b.created_at = 5000;
+
+        let actions = WriteInferenceEngine::new().infer_on_write(&b, &[a], &[]);
+        assert!(
+            !actions.iter().any(|x| matches!(
+                x,
+                InferredAction::CreateEdge {
+                    edge_type: EdgeType::Supersedes,
+                    ..
+                }
+            )),
+            "coexisting facts at equal timestamps must not supersede, got: {actions:?}"
         );
     }
 
