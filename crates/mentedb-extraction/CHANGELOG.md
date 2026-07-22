@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.23.0...mentedb-extraction-v0.24.0) - 2026-07-22
+
+### Fixed
+
+- *(inference)* value-update corrections supersede the outdated fact ([#341](https://github.com/nambok/mentedb/pull/341))
+
 ## [0.23.0](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.22.1...mentedb-extraction-v0.23.0) - 2026-07-22
 
 ### Added
