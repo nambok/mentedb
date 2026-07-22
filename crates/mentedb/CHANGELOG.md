@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.1](https://github.com/nambok/mentedb/compare/mentedb-v0.23.0...mentedb-v0.24.1) - 2026-07-22
+
+### Added
+
+- supersession_history API for previous-value questions ([#343](https://github.com/nambok/mentedb/pull/343))
+- *(store)* paraphrase dedup for regular memories ([#342](https://github.com/nambok/mentedb/pull/342))
+
+### Fixed
+
+- *(inference)* value-update corrections supersede the outdated fact ([#341](https://github.com/nambok/mentedb/pull/341))
+
+### Other
+
+- release v0.24.0 ([#337](https://github.com/nambok/mentedb/pull/337))
+
 ## [0.24.0](https://github.com/nambok/mentedb/compare/mentedb-v0.23.0...mentedb-v0.24.0) - 2026-07-22
 
 ### Added
