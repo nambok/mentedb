@@ -87,6 +87,22 @@ pub struct WriteInferenceConfig {
     pub confidence_decay_factor: f32,
     /// Minimum confidence after decay (default: 0.1).
     pub confidence_floor: f32,
+    /// Whether the value-update rule runs: a new memory that shares an older
+    /// same-owner memory's sentence frame (long common token prefix) but ends
+    /// in a different value supersedes it, so "favorite coffee is a cortado"
+    /// followed by "favorite coffee is a flat white" keeps only the correction.
+    /// This is the cheap, LLM-free slice of contradiction handling; unlike bare
+    /// cosine (which cannot tell paraphrase from contradiction and was removed
+    /// at ~0% precision), the shared-frame test only fires on the update shape.
+    pub value_update_enabled: bool,
+    /// Minimum embedding similarity for the value-update rule (default: 0.88).
+    pub value_update_min_similarity: f32,
+    /// Minimum fraction of the longer memory's tokens that must be a shared
+    /// prefix for the pair to count as the same sentence frame (default: 0.6).
+    pub value_update_prefix_share: f32,
+    /// Maximum differing tail tokens for a value update (default: 4). Larger
+    /// tails mean genuinely different statements, not a value change.
+    pub value_update_max_tail: usize,
 }
 
 impl Default for WriteInferenceConfig {
@@ -99,8 +115,38 @@ impl Default for WriteInferenceConfig {
             correction_threshold: 0.5,
             confidence_decay_factor: 0.5,
             confidence_floor: 0.1,
+            value_update_enabled: true,
+            value_update_min_similarity: 0.88,
+            value_update_prefix_share: 0.6,
+            value_update_max_tail: 4,
         }
     }
+}
+
+/// Lowercased alphanumeric tokens of a memory's content, the unit of the
+/// value-update frame comparison.
+fn frame_tokens(s: &str) -> Vec<String> {
+    s.split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_lowercase())
+        .collect()
+}
+
+/// True when `new` and `old` share the same sentence frame but end in a
+/// different value: a long common token prefix with a short, non-identical
+/// tail. "the user's favorite coffee order is a cortado" vs "... is a flat
+/// white" fires; "my dog is allergic to chicken" vs "my cat is allergic to
+/// chicken" does not (the difference is at the head, a different subject).
+fn is_value_update(new: &str, old: &str, prefix_share: f32, max_tail: usize) -> bool {
+    let nt = frame_tokens(new);
+    let ot = frame_tokens(old);
+    if nt.is_empty() || ot.is_empty() || nt == ot {
+        return false;
+    }
+    let prefix = nt.iter().zip(ot.iter()).take_while(|(a, b)| a == b).count();
+    let longest = nt.len().max(ot.len());
+    let tail = longest - prefix;
+    prefix as f32 / longest as f32 >= prefix_share && tail > 0 && tail <= max_tail
 }
 
 pub struct WriteInferenceEngine {
@@ -154,6 +200,31 @@ impl WriteInferenceEngine {
                 actions.push(InferredAction::DeduplicateExact {
                     duplicate: existing.id,
                     keeper: new_memory.id,
+                });
+            } else if self.config.value_update_enabled
+                && sim >= self.config.value_update_min_similarity
+                && new_memory.created_at > existing.created_at
+                && existing.agent_id == new_memory.agent_id
+                && existing.user_id == new_memory.user_id
+                && is_value_update(
+                    &new_memory.content,
+                    &existing.content,
+                    self.config.value_update_prefix_share,
+                    self.config.value_update_max_tail,
+                )
+            {
+                // Same sentence frame, new value: the newer memory supersedes
+                // the older one, so recall serves only the corrected fact.
+                actions.push(InferredAction::CreateEdge {
+                    source: new_memory.id,
+                    target: existing.id,
+                    edge_type: EdgeType::Supersedes,
+                    weight: sim,
+                });
+                actions.push(InferredAction::UpdateConfidence {
+                    memory: existing.id,
+                    new_confidence: (existing.confidence * self.config.confidence_decay_factor)
+                        .max(self.config.confidence_floor),
                 });
             } else if sim > self.config.related_min && sim <= self.config.related_max {
                 actions.push(InferredAction::CreateEdge {
@@ -388,6 +459,155 @@ mod tests {
             "Heuristic must not flag contradictions from bare similarity, got: {:?}",
             actions
         );
+    }
+
+    #[test]
+    fn value_update_supersedes_the_old_fact() {
+        // The canonical correction shape: same sentence frame, new value at the
+        // tail. The newer memory must supersede the older one so recall serves
+        // only the corrected fact (live bug: both coffee facts coexisted).
+        let agent = AgentId::new();
+        let mut existing = make_memory(
+            "The user's favorite coffee order is a cortado",
+            vec![1.0, 0.0, 0.0],
+            MemoryType::Semantic,
+        );
+        existing.agent_id = agent;
+        let mut new_mem = make_memory(
+            "The user's favorite coffee order is a flat white",
+            vec![0.98, 0.02, 0.0],
+            MemoryType::Semantic,
+        );
+        new_mem.agent_id = agent;
+        new_mem.created_at = 2000;
+
+        let engine = WriteInferenceEngine::new();
+        let actions = engine.infer_on_write(&new_mem, &[existing.clone()], &[]);
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                InferredAction::CreateEdge { source, target, edge_type: EdgeType::Supersedes, .. }
+                    if *source == new_mem.id && *target == existing.id
+            )),
+            "value update must create a Supersedes edge, got: {actions:?}"
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, InferredAction::UpdateConfidence { memory, .. } if *memory == existing.id)),
+            "superseded fact's confidence must decay"
+        );
+    }
+
+    #[test]
+    fn subject_change_is_not_a_value_update() {
+        // "my dog ..." vs "my cat ..." differ at the head: two facts about two
+        // subjects, both must survive.
+        let agent = AgentId::new();
+        let mut existing = make_memory(
+            "My dog is allergic to chicken",
+            vec![1.0, 0.0, 0.0],
+            MemoryType::Semantic,
+        );
+        existing.agent_id = agent;
+        let mut new_mem = make_memory(
+            "My cat is allergic to chicken",
+            vec![0.99, 0.01, 0.0],
+            MemoryType::Semantic,
+        );
+        new_mem.agent_id = agent;
+        new_mem.created_at = 2000;
+
+        let engine = WriteInferenceEngine::new();
+        let actions = engine.infer_on_write(&new_mem, &[existing], &[]);
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                InferredAction::CreateEdge {
+                    edge_type: EdgeType::Supersedes,
+                    ..
+                }
+            )),
+            "a subject change must not supersede, got: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn value_update_respects_owner_and_config() {
+        // Cross-owner pairs never supersede, and the rule can be disabled.
+        let mut existing = make_memory(
+            "The user's favorite coffee order is a cortado",
+            vec![1.0, 0.0, 0.0],
+            MemoryType::Semantic,
+        );
+        existing.agent_id = AgentId::new();
+        let mut new_mem = make_memory(
+            "The user's favorite coffee order is a flat white",
+            vec![0.98, 0.02, 0.0],
+            MemoryType::Semantic,
+        );
+        new_mem.agent_id = AgentId::new(); // different owner
+        new_mem.created_at = 2000;
+
+        let engine = WriteInferenceEngine::new();
+        let actions = engine.infer_on_write(&new_mem, &[existing.clone()], &[]);
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                InferredAction::CreateEdge {
+                    edge_type: EdgeType::Supersedes,
+                    ..
+                }
+            )),
+            "cross-owner memories must never supersede each other"
+        );
+
+        // Same owner but rule disabled: no supersession either.
+        let agent = AgentId::new();
+        existing.agent_id = agent;
+        new_mem.agent_id = agent;
+        let engine_off = WriteInferenceEngine::with_config(WriteInferenceConfig {
+            value_update_enabled: false,
+            ..WriteInferenceConfig::default()
+        });
+        let actions = engine_off.infer_on_write(&new_mem, &[existing], &[]);
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                InferredAction::CreateEdge {
+                    edge_type: EdgeType::Supersedes,
+                    ..
+                }
+            )),
+            "disabled rule must not supersede"
+        );
+    }
+
+    #[test]
+    fn is_value_update_frame_analysis() {
+        // Positive: long shared prefix, short differing tail.
+        assert!(is_value_update(
+            "my phone number is 4321",
+            "my phone number is 1234",
+            0.6,
+            4
+        ));
+        // Negative: head differs (different subject).
+        assert!(!is_value_update(
+            "my cat is allergic to chicken",
+            "my dog is allergic to chicken",
+            0.6,
+            4
+        ));
+        // Negative: identical content is not an update.
+        assert!(!is_value_update("same fact", "same fact", 0.6, 4));
+        // Negative: tail too long (a genuinely different statement).
+        assert!(!is_value_update(
+            "the deploy runs every friday and sarah reviews it after standup",
+            "the deploy runs every friday unless the release train is frozen for the quarter end audit",
+            0.6,
+            4
+        ));
     }
 
     #[test]
