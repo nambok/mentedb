@@ -112,6 +112,10 @@ pub mod enrichment;
 /// Optional second-pass reranking of recall results (off by default).
 pub mod reranker;
 
+/// Maximal Marginal Relevance: an optional diversity pass over recall results
+/// (off by default; enabled by `CognitiveConfig::mmr_lambda` below 1.0).
+pub(crate) mod mmr;
+
 /// Structured export: fill a JSON schema from memories via an embedder-supplied LLM.
 pub mod export;
 
@@ -337,6 +341,13 @@ pub struct CognitiveConfig {
     /// relevant hit that the first pass ranked outside the top k. Ignored when no
     /// reranker is installed. Minimum effective value is 1.
     pub rerank_pool_factor: usize,
+    /// Diversity weight for the optional MMR pass on hybrid recall, in `[0, 1]`.
+    /// `1.0` (the default) disables it, ranking on relevance alone. Below 1.0,
+    /// recall greedily balances relevance against novelty so near-duplicate
+    /// memories do not all fill the context budget: `0.7` trims obvious
+    /// duplicates, `0.5` diversifies harder. Runs after any reranker, over the
+    /// same over-fetched pool, so it can pull a distinct memory into the top k.
+    pub mmr_lambda: f32,
     /// Maximum pain signals to retain.
     pub pain_max_warnings: usize,
     /// Configuration for injection attention selection.
@@ -392,6 +403,7 @@ impl Default for CognitiveConfig {
             speculative_keyword_threshold: 0.4,
             project_scope_penalty: 0.5,
             rerank_pool_factor: 4,
+            mmr_lambda: 1.0,
             pain_max_warnings: 5,
             injection_config: injection::InjectionConfig::default(),
             flush_snapshot_interval: 8,
@@ -1051,12 +1063,14 @@ impl MenteDb {
             .filter(|p| !p.is_empty())
             .map(|p| format!("scope:project:{p}"));
         let cross_project_keep = 1.0 - self.cognitive_config.project_scope_penalty;
-        // When a reranker is installed, over-fetch a larger candidate pool so it
-        // can promote a relevant hit the first pass ranked outside the top k;
-        // otherwise the usual 3x over-fetch covers results filtered out below.
+        // When a reranker or the MMR diversity pass is active, over-fetch a larger
+        // candidate pool so it can promote (or diversify in) a relevant hit the
+        // first pass ranked outside the top k; otherwise the usual 3x over-fetch
+        // covers results filtered out below.
         let want_rerank =
             self.reranker.is_some() && query_text.map(|q| !q.is_empty()).unwrap_or(false);
-        let fetch_k = if want_rerank {
+        let want_mmr = self.cognitive_config.mmr_lambda < 1.0;
+        let fetch_k = if want_rerank || want_mmr {
             k.saturating_mul(self.cognitive_config.rerank_pool_factor.max(1))
         } else {
             k * 3
@@ -1066,7 +1080,10 @@ impl MenteDb {
         );
         let graph = self.graph.graph();
         let pm = self.page_map.read();
-        let mut scored: Vec<(MemoryId, f32, Option<String>)> = results
+        // (id, score, content for a reranker, embedding for the MMR pass); the
+        // last two are captured only when their stage is active.
+        type ScoredCandidate = (MemoryId, f32, Option<String>, Option<Vec<f32>>);
+        let mut scored: Vec<ScoredCandidate> = results
             .into_iter()
             .filter_map(|(id, raw_score)| {
                 // Exclude memories that an active Supersedes/Contradicts edge
@@ -1082,10 +1099,10 @@ impl MenteDb {
                 // Without a page entry we cannot check validity or decay; keep
                 // the raw score rather than silently dropping the hit.
                 let Some(&page_id) = pm.get(&id) else {
-                    return Some((id, raw_score, None));
+                    return Some((id, raw_score, None, None));
                 };
                 let Ok(node) = self.storage.load_memory(page_id) else {
-                    return Some((id, raw_score, None));
+                    return Some((id, raw_score, None, None));
                 };
                 // Drop memories outside their validity window or not visible to
                 // this (user, agent) scope. Both owner axes must pass.
@@ -1127,14 +1144,20 @@ impl MenteDb {
                     }
                     _ => score,
                 };
-                // Keep the content only when a reranker will consume it, so the
-                // default path pays no extra allocation.
+                // Capture the content only when a reranker will consume it, and
+                // the embedding only when the MMR pass will, so the default path
+                // pays no extra allocation.
                 let content = if want_rerank {
                     Some(node.content.clone())
                 } else {
                     None
                 };
-                Some((id, score, content))
+                let embedding = if want_mmr && !node.embedding.is_empty() {
+                    Some(node.embedding.clone())
+                } else {
+                    None
+                };
+                Some((id, score, content, embedding))
             })
             .collect();
         // Optional second pass: reorder the whole fetched pool by the installed
@@ -1148,7 +1171,7 @@ impl MenteDb {
             let new_scores: std::collections::HashMap<MemoryId, f32> = {
                 let cands: Vec<RerankCandidate<'_>> = scored
                     .iter()
-                    .map(|(id, sc, content)| RerankCandidate {
+                    .map(|(id, sc, content, _)| RerankCandidate {
                         id: *id,
                         content: content.as_deref().unwrap_or(""),
                         score: *sc,
@@ -1156,7 +1179,7 @@ impl MenteDb {
                     .collect();
                 reranker.rerank(qt, &cands).into_iter().collect()
             };
-            for (id, sc, _) in scored.iter_mut() {
+            for (id, sc, _, _) in scored.iter_mut() {
                 if let Some(&ns) = new_scores.get(id) {
                     *sc = ns;
                 }
@@ -1165,8 +1188,19 @@ impl MenteDb {
         // Re-rank by the (decay-adjusted, then optionally reranked) score before
         // cutting to k, so the ranking reorders results rather than relabeling them.
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(k);
-        let scored: Vec<(MemoryId, f32)> = scored.into_iter().map(|(id, sc, _)| (id, sc)).collect();
+        let scored: Vec<(MemoryId, f32)> = if want_mmr && scored.len() > 1 {
+            // Diversity pass: greedily pick k relevant-yet-distinct memories from
+            // the sorted pool, so near-duplicates do not all fill the budget.
+            let rel: Vec<f32> = scored.iter().map(|(_, sc, _, _)| *sc).collect();
+            let emb: Vec<Option<&[f32]>> = scored.iter().map(|(_, _, _, e)| e.as_deref()).collect();
+            mmr::mmr_select(&rel, &emb, self.cognitive_config.mmr_lambda, k)
+                .into_iter()
+                .map(|i| (scored[i].0, scored[i].1))
+                .collect()
+        } else {
+            scored.truncate(k);
+            scored.into_iter().map(|(id, sc, _, _)| (id, sc)).collect()
+        };
         // Time only (do not increment recalls here): recall()/query() already
         // count the read, and they reach this hybrid core via execute_plan, so
         // counting here too would double-count them.
@@ -4537,5 +4571,79 @@ mod reranker_integration_tests {
             )
             .unwrap();
         assert_eq!(out[0].0, b_id, "no query text means no rerank");
+    }
+
+    /// With MMR enabled, recall should pull a distinct memory into the top-k
+    /// ahead of a near-duplicate of the top hit; with MMR off (default), the
+    /// near-duplicate keeps its by-relevance slot.
+    #[test]
+    fn mmr_diversifies_top_k() {
+        // a: closest to the query. b: a near-duplicate of a (same direction),
+        // slightly less relevant. c: a distinct direction, less relevant still.
+        let a_emb = vec![1.0, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let b_emb = vec![0.98, 0.16, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let c_emb = vec![0.1, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let query = vec![1.0, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+        let fill = |db: &MenteDb| -> (MemoryId, MemoryId, MemoryId) {
+            let a = MemoryNode::new(
+                AgentId::nil(),
+                MemoryType::Semantic,
+                "alpha".into(),
+                a_emb.clone(),
+            );
+            let b = MemoryNode::new(
+                AgentId::nil(),
+                MemoryType::Semantic,
+                "alpha prime".into(),
+                b_emb.clone(),
+            );
+            let c = MemoryNode::new(
+                AgentId::nil(),
+                MemoryType::Semantic,
+                "distinct".into(),
+                c_emb.clone(),
+            );
+            let (ai, bi, ci) = (a.id, b.id, c.id);
+            db.store(a).unwrap();
+            db.store(b).unwrap();
+            db.store(c).unwrap();
+            (ai, bi, ci)
+        };
+
+        // Default (mmr_lambda = 1.0): the two nearest fill the top 2, diverse c is out.
+        let dir1 = tempfile::tempdir().unwrap();
+        let db1 = MenteDb::open(dir1.path()).unwrap();
+        let (_a1, _b1, c1) = fill(&db1);
+        let base = db1
+            .recall_hybrid_at(&query, None, 2, now_us(), None, None, None)
+            .unwrap();
+        let base_ids: Vec<MemoryId> = base.iter().map(|(id, _)| *id).collect();
+        assert!(
+            !base_ids.contains(&c1),
+            "without MMR the diverse memory is out of the top 2"
+        );
+
+        // MMR on (lambda = 0.5): the diverse memory is pulled into the top 2.
+        let dir2 = tempfile::tempdir().unwrap();
+        let cfg = CognitiveConfig {
+            mmr_lambda: 0.5,
+            ..CognitiveConfig::default()
+        };
+        let db2 = MenteDb::open_with_config(dir2.path(), cfg).unwrap();
+        let (a2, _b2, c2) = fill(&db2);
+        let mmr = db2
+            .recall_hybrid_at(&query, None, 2, now_us(), None, None, None)
+            .unwrap();
+        let mmr_ids: Vec<MemoryId> = mmr.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            mmr_ids.first().copied(),
+            Some(a2),
+            "most relevant is still first"
+        );
+        assert!(
+            mmr_ids.contains(&c2),
+            "MMR pulls the diverse memory into the top 2"
+        );
     }
 }
