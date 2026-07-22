@@ -95,7 +95,18 @@ pub struct WriteInferenceConfig {
     /// cosine (which cannot tell paraphrase from contradiction and was removed
     /// at ~0% precision), the shared-frame test only fires on the update shape.
     pub value_update_enabled: bool,
-    /// Minimum embedding similarity for the value-update rule (default: 0.88).
+    /// Minimum embedding similarity for the value-update rule (default: 0.5).
+    ///
+    /// This is a loose topical floor, not the primary gate. A value correction
+    /// inherently drives cosine down (the changed value is most of a short
+    /// fact's meaning), so real corrections land well below a high cosine bar:
+    /// measured on Titan V2 at 256 dims, "favorite coffee is a cortado" vs
+    /// "... a flat white" is 0.61 and "phone is 1234" vs "... 4321" is 0.51;
+    /// on OpenAI text-embedding-3-small they are 0.80 and 0.79. A 0.88 gate
+    /// (the old default) was unreachable on either embedder, so the rule never
+    /// fired in production. The embedder-independent `is_value_update` shared
+    /// frame test carries the precision here; the cosine floor only rejects
+    /// genuinely off-topic pairs that a shared token frame collided on.
     pub value_update_min_similarity: f32,
     /// Minimum fraction of the longer memory's tokens that must be a shared
     /// prefix for the pair to count as the same sentence frame (default: 0.6).
@@ -116,7 +127,7 @@ impl Default for WriteInferenceConfig {
             confidence_decay_factor: 0.5,
             confidence_floor: 0.1,
             value_update_enabled: true,
-            value_update_min_similarity: 0.88,
+            value_update_min_similarity: 0.5,
             value_update_prefix_share: 0.6,
             value_update_max_tail: 4,
         }
@@ -496,6 +507,78 @@ mod tests {
                 .iter()
                 .any(|a| matches!(a, InferredAction::UpdateConfidence { memory, .. } if *memory == existing.id)),
             "superseded fact's confidence must decay"
+        );
+    }
+
+    #[test]
+    fn value_update_fires_at_realistic_embedder_cosine() {
+        // Regression for the production-dead rule: real embedders put a value
+        // correction far below a high cosine bar (measured: Titan V2 0.61,
+        // OpenAI 3-small 0.80 for cortado vs flat white; 0.51 / 0.79 for a phone
+        // number change). The old 0.88 default was unreachable on either, so the
+        // rule never fired in prod. A frame-matched correction at cosine 0.6 must
+        // now supersede; the structural shared-frame test, not the cosine, is
+        // what proves it is a correction.
+        let agent = AgentId::new();
+        let mut existing = make_memory(
+            "The user's favorite coffee order is a cortado",
+            vec![1.0, 0.0, 0.0],
+            MemoryType::Semantic,
+        );
+        existing.agent_id = agent;
+        // cosine([1,0,0], [0.6,0.8,0]) = 0.6: below the old 0.88 gate, above 0.5.
+        let mut new_mem = make_memory(
+            "The user's favorite coffee order is a flat white",
+            vec![0.6, 0.8, 0.0],
+            MemoryType::Semantic,
+        );
+        new_mem.agent_id = agent;
+        new_mem.created_at = 2000;
+
+        let actions =
+            WriteInferenceEngine::new().infer_on_write(&new_mem, &[existing.clone()], &[]);
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                InferredAction::CreateEdge { source, target, edge_type: EdgeType::Supersedes, .. }
+                    if *source == new_mem.id && *target == existing.id
+            )),
+            "a frame-matched correction at realistic cosine 0.6 must supersede, got: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn value_update_below_cosine_floor_does_not_supersede() {
+        // The cosine floor still guards: a shared token frame that collided on
+        // genuinely off-topic content (cosine 0.4, below the 0.5 floor) must not
+        // supersede, even though the frame test alone would pass. Structure is
+        // primary, but the floor rejects pathological frame collisions.
+        let agent = AgentId::new();
+        let mut existing = make_memory(
+            "The user's favorite coffee order is a cortado",
+            vec![1.0, 0.0, 0.0],
+            MemoryType::Semantic,
+        );
+        existing.agent_id = agent;
+        // cosine([1,0,0], [0.4,0.917,0]) = 0.4: below the 0.5 floor.
+        let mut new_mem = make_memory(
+            "The user's favorite coffee order is a flat white",
+            vec![0.4, 0.917, 0.0],
+            MemoryType::Semantic,
+        );
+        new_mem.agent_id = agent;
+        new_mem.created_at = 2000;
+
+        let actions = WriteInferenceEngine::new().infer_on_write(&new_mem, &[existing], &[]);
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                InferredAction::CreateEdge {
+                    edge_type: EdgeType::Supersedes,
+                    ..
+                }
+            )),
+            "below the cosine floor a frame match must not supersede, got: {actions:?}"
         );
     }
 
