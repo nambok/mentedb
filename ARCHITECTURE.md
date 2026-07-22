@@ -19,7 +19,7 @@ mentedb (workspace root)
  |
  +-- mentedb-core            Fundamental types shared by every crate
  +-- mentedb-storage          Page manager, WAL, buffer pool
- +-- mentedb-index            HNSW vectors, bitmap tags, temporal, salience
+ +-- mentedb-index            HNSW vectors, BM25 keyword, bitmap tags, temporal, salience
  +-- mentedb-graph            CSR/CSC knowledge graph, traversal, belief propagation
  +-- mentedb-query            MQL lexer, parser, query planner
  +-- mentedb-context          Token budgets, U curve attention, delta serving, serializers
@@ -139,7 +139,7 @@ Wires page manager, WAL, and buffer pool together. Provides `store_memory`
 
 ### mentedb-index
 
-Four index structures, each optimized for a different access pattern, managed
+Five index structures, each optimized for a different access pattern, managed
 by a unified `IndexManager` that coordinates hybrid queries.
 
 **HNSW Vector Index** (`hnsw.rs`):
@@ -171,17 +171,27 @@ first) and `update` (move a memory when its salience decays). This index is
 the backbone of the "what matters most" question that context assembly asks
 on every read.
 
+**BM25 Keyword Index** (`bm25.rs`):
+An inverted index with proper BM25 scoring (IDF, term-frequency saturation, and
+document-length normalization). It complements vector search for the exact entity
+names, dates, and numbers that embeddings blur together. Indexing is upsert safe,
+so re-indexing a memory after an edit replaces its posting rather than double
+counting it. It indexes each memory's context-prefixed text (the contextual
+retrieval hook), so a memory is findable by situating terms the caller attached
+even when the content itself never contains them.
+
 **Index Manager** (`manager.rs`):
-`index_memory` fans out a single `MemoryNode` to all four indexes. `hybrid_search`
-combines results with a weighted score:
-
-```
-final_score = vector_similarity * 0.6 + salience * 0.3 + recency * 0.1
-```
-
-This formula is intentionally simple and configurable. Vector similarity dominates
-because embeddings capture semantic intent. Salience rewards memories the agent
-has flagged as important. Recency provides a mild preference for fresh information.
+`index_memory` fans out a single `MemoryNode` to every index. `hybrid_search`
+retrieves candidates from HNSW (vector) and BM25 (keyword) independently and fuses
+them with Reciprocal Rank Fusion, then applies tag, temporal, and validity
+filters. The recall layer above it (in the `mentedb` crate) finishes the ranking:
+it blends in decay-adjusted salience, applies optional project scope weighting
+(down-weighting memories tagged for a different project than the query's), then
+runs two optional, config-gated passes over the fused pool, a pluggable reranker
+(relevance re-scoring, e.g. a cross-encoder) and MMR (diversity selection so
+near-duplicates do not fill the budget), before truncating to k. Every stage is
+off by default and tunable through `CognitiveConfig`, so the base path stays a
+simple, predictable RRF fusion.
 
 ### mentedb-graph
 

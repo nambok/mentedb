@@ -214,7 +214,9 @@ The result: a clean, curated memory that actually helps the AI perform better.
 
 - **Automatic Memory Extraction** LLM powered pipeline extracts structured memories from raw conversations
 - **Entity-Centric Memory** Extracts typed entities (person, pet, place, event, item, organization) with structured attributes. Entity resolution merges attributes across mentions. `Derived` and labeled `Related` edges link entities to the memories they came from
-- **Hybrid Retrieval** Vector similarity (HNSW) fused with BM25 keyword search via reciprocal rank fusion, plus tag, temporal, and validity filtering
+- **Hybrid Retrieval** Vector similarity (HNSW) fused with BM25 keyword search via reciprocal rank fusion, plus tag, temporal, and validity filtering. Optional second-pass reranking (pluggable, e.g. a cross-encoder or LLM judge) and optional MMR diversity selection so near-duplicate memories do not crowd the context budget
+- **Contextual Retrieval** An optional per-memory `context` blurb is indexed and embedded alongside the content (never stored in it), so a memory is findable by situating terms it never literally contains. The caller generates the context; the engine indexes it
+- **Project Scope Weighting** Recall can weight down memories tagged for other projects so the project you are working in ranks first, without hiding a strongly relevant cross-project memory
 - **Write Time Intelligence** Quality filter, deduplication, and contradiction detection at ingest
 - **LLM Powered Cognitive Inference** CognitiveLlmService judges whether new memories invalidate, update, or are compatible with existing ones (supports Anthropic, OpenAI, Ollama)
 - **Bi-Temporal Validity** Memories and edges carry `valid_from`/`valid_until` timestamps. Temporal invalidation instead of deletion. Point-in-time queries via `recall_similar_at(embedding, k, timestamp)` or in MQL with `RECALL ... AS OF <timestamp>`
@@ -383,8 +385,9 @@ graph TD
     end
 
     subgraph Retrieval["Retrieval"]
-        HYB["Hybrid Fusion<br/>BM25 + vector, RRF"]
-        RERANK["Optional Reranker"]
+        HYB["Hybrid Fusion<br/>BM25 + vector, RRF<br/>+ project scope weight"]
+        RERANK["Optional Reranker<br/>pluggable second pass"]
+        MMR["Optional MMR<br/>diversity selection"]
     end
 
     subgraph Cognitive["Cognitive Engine"]
@@ -405,7 +408,7 @@ graph TD
 
     subgraph Index["Index Layer"]
         HNSW["HNSW Vector Index"]
-        BM25["BM25 Keyword Index"]
+        BM25["BM25 Keyword Index<br/>context-aware"]
         ROAR["Roaring Bitmap Tags"]
         TEMP["Temporal / Bi-temporal Index"]
     end
@@ -442,7 +445,8 @@ graph TD
     HNSW --> HYB
     BM25 --> HYB
     HYB --> RERANK
-    RERANK --> CTX
+    RERANK --> MMR
+    MMR --> CTX
     CTX --> INJ
 
     WI --> Graph
