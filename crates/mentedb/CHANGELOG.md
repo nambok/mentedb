@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.3](https://github.com/nambok/mentedb/compare/mentedb-v0.24.1...mentedb-v0.24.3) - 2026-07-22
+
+### Fixed
+
+- make value-update supersession structure-primary, not cosine-gated ([#345](https://github.com/nambok/mentedb/pull/345))
+
+### Other
+
+- release v0.24.2 ([#346](https://github.com/nambok/mentedb/pull/346))
+
 ## [0.24.2](https://github.com/nambok/mentedb/compare/mentedb-v0.24.1...mentedb-v0.24.2) - 2026-07-22
 
 ### Fixed
