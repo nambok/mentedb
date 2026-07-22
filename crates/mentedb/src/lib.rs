@@ -378,6 +378,22 @@ pub struct CognitiveConfig {
     /// prompt budget it consumes, stay bounded. The `user_profile` rule is always
     /// kept and does not count against this.
     pub always_max: usize,
+    /// Whether storing a regular memory that is a near-identical paraphrase of
+    /// an existing same-owner memory is skipped instead of inserted. Repeated
+    /// extraction of the same conversation produces reworded copies of one fact
+    /// ("User is building TaskPilot with Next.js" / "The user builds TaskPilot
+    /// using Next.js"); without this they pile up, dilute recall, and waste
+    /// context tokens. Two gates must BOTH pass, so a genuine value update
+    /// (high cosine but a changed value token) is never swallowed and still
+    /// reaches the write-inference supersession rule.
+    pub memory_dedup: bool,
+    /// Cosine similarity at or above which a regular memory can count as a
+    /// paraphrase duplicate (first gate).
+    pub memory_dedup_threshold: f32,
+    /// Minimum token-set jaccard overlap between the two contents (second
+    /// gate). Value updates share a frame but swap a value token, which drops
+    /// them below this and keeps them storable.
+    pub memory_dedup_token_overlap: f32,
 }
 
 impl Default for CognitiveConfig {
@@ -412,6 +428,9 @@ impl Default for CognitiveConfig {
             always_dedup: true,
             always_dedup_threshold: 0.95,
             always_max: 30,
+            memory_dedup: true,
+            memory_dedup_threshold: 0.97,
+            memory_dedup_token_overlap: 0.85,
         }
     }
 }
@@ -740,6 +759,21 @@ impl MenteDb {
             return Ok(());
         }
 
+        // Regular-memory paraphrase dedup: repeated extraction produces reworded
+        // copies of the same fact; skip the insert when a near-identical
+        // same-owner memory already exists. Both gates (embedding cosine AND
+        // token overlap) must pass, so a value update, which shares the frame
+        // but swaps a value token, stays storable and reaches the
+        // write-inference supersession rule instead.
+        if self.cognitive_config.memory_dedup
+            && !node.embedding.is_empty()
+            && !node.tags.iter().any(|t| t == "scope:always")
+            && self.is_paraphrase_duplicate(&node)
+        {
+            debug!("memory dedup: {id} is a paraphrase of an existing memory, skipping insert");
+            return Ok(());
+        }
+
         let page_id = self.storage.store_memory(&node)?;
         self.page_map.write().insert(id, page_id);
         self.index.index_memory(&node);
@@ -786,6 +820,93 @@ impl MenteDb {
             }
         }
         false
+    }
+
+    /// Whether `node` is a near-identical paraphrase of an existing memory with
+    /// the SAME owner on both axes. Candidates come from a small owner-scoped
+    /// vector search; a candidate counts only when embedding cosine reaches
+    /// `memory_dedup_threshold` AND token-set jaccard reaches
+    /// `memory_dedup_token_overlap`, the two-gate design that keeps genuine
+    /// value updates storable.
+    fn is_paraphrase_duplicate(&self, node: &MemoryNode) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        let Ok(candidates) = self.recall_hybrid_scoped_at_mode(
+            &node.embedding,
+            None,
+            5,
+            now,
+            None,
+            false,
+            None,
+            Some(node.agent_id),
+            Some(node.user_id),
+            None,
+        ) else {
+            return false;
+        };
+        let new_tokens = Self::token_set(&node.content);
+        if new_tokens.is_empty() {
+            return false;
+        }
+        for (id, _) in candidates {
+            if id == node.id {
+                continue;
+            }
+            let Ok(existing) = self.get_memory(id) else {
+                continue;
+            };
+            // Exact-owner only: a shared/global memory must never absorb an
+            // owned one, or vice versa.
+            if existing.agent_id != node.agent_id || existing.user_id != node.user_id {
+                continue;
+            }
+            // Scope tags are part of a memory's identity: the same sentence
+            // scoped globally and scoped to a project are two memories, never
+            // duplicates of each other.
+            let existing_scopes: std::collections::BTreeSet<&str> = existing
+                .tags
+                .iter()
+                .filter(|t| t.starts_with("scope:"))
+                .map(|t| t.as_str())
+                .collect();
+            let node_scopes: std::collections::BTreeSet<&str> = node
+                .tags
+                .iter()
+                .filter(|t| t.starts_with("scope:"))
+                .map(|t| t.as_str())
+                .collect();
+            if existing_scopes != node_scopes {
+                continue;
+            }
+            if existing.embedding.is_empty()
+                || Self::cosine(&node.embedding, &existing.embedding)
+                    < self.cognitive_config.memory_dedup_threshold
+            {
+                continue;
+            }
+            let old_tokens = Self::token_set(&existing.content);
+            if old_tokens.is_empty() {
+                continue;
+            }
+            let inter = new_tokens.intersection(&old_tokens).count() as f32;
+            let union = new_tokens.union(&old_tokens).count() as f32;
+            if union > 0.0 && inter / union >= self.cognitive_config.memory_dedup_token_overlap {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Lowercased alphanumeric token set of a content string, for the
+    /// paraphrase-dedup overlap gate.
+    fn token_set(s: &str) -> std::collections::HashSet<String> {
+        s.split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_lowercase())
+            .collect()
     }
 
     /// Cosine similarity of two equal-length vectors; 0 for mismatched or zero
