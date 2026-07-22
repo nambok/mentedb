@@ -467,11 +467,12 @@ fn test_write_inference_defers_conflict_to_llm() {
 }
 
 #[test]
-fn test_byte_identical_store_deduplicates_old_copy() {
-    // Byte-identical text is an unambiguous duplicate: the older copy is
-    // invalidated and linked to the survivor by a Derived edge (dedup lineage),
-    // NOT a Supersedes edge, so it never surfaces as a conflict. (Reworded
-    // near-duplicates are left to the LLM consolidation/conflict paths.)
+fn test_byte_identical_store_is_skipped() {
+    // Byte-identical text is the ultimate paraphrase: since store-time
+    // paraphrase dedup landed, the re-save is skipped outright, so the
+    // original stays the single valid copy and nothing needs invalidating or
+    // linking. (Previously the copy was stored and the older invalidated with
+    // Derived lineage; the store-time gate makes that round-trip moot.)
     let dir = tempfile::tempdir().unwrap();
     let db = MenteDb::open(dir.path()).unwrap();
     let agent = AgentId::new();
@@ -495,29 +496,16 @@ fn test_byte_identical_store_deduplicates_old_copy() {
     let m2_id = m2.id;
     db.store(m2).unwrap();
 
+    assert!(
+        db.get_memory(m2_id).is_err(),
+        "the identical re-save must be skipped, not stored"
+    );
     let m1_after = db.get_memory(m1_id).unwrap();
     assert!(
-        m1_after.valid_until.is_some(),
-        "identical duplicate should invalidate the older copy, got None"
+        m1_after.valid_until.is_none(),
+        "the original stays the single valid copy"
     );
-
-    let g = db.graph().read_graph();
-    let edges: Vec<_> = g
-        .outgoing(m2_id)
-        .into_iter()
-        .filter(|(t, _)| *t == m1_id)
-        .collect();
-    assert!(
-        edges.iter().any(|(_, e)| e.edge_type == EdgeType::Derived),
-        "dedup must link the duplicate with a Derived edge, got {edges:?}"
-    );
-    assert!(
-        edges
-            .iter()
-            .all(|(_, e)| e.edge_type != EdgeType::Supersedes),
-        "dedup must NOT create a Supersedes edge (it would read as a conflict), got {edges:?}"
-    );
-    drop(g);
+    assert_eq!(db.memory_count(), 1);
 
     db.close().unwrap();
 }
