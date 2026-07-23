@@ -398,15 +398,18 @@ impl MenteDb {
             })
             .collect();
 
-        // Append always-scoped memories (not already in results)
+        // Append always-scoped memories not already recalled. Fetch them from the
+        // tag index (scope:always is capped near-zero), loading only the handful
+        // of matches. The old path scanned every page and called load_memory for
+        // every memory on each turn, which thrashed the buffer pool against disk
+        // on large accounts and dominated turn latency.
         let hybrid_ids: std::collections::HashSet<MemoryId> =
             scored.iter().map(|sm| sm.memory.id).collect();
-        let always_scope_tag = "scope:always";
-        let pm = self.page_map.read();
-        for pid in pm.values() {
-            if let Ok(mem) = self.storage.load_memory(*pid)
-                && mem.tags.iter().any(|t| t == always_scope_tag)
-                && !hybrid_ids.contains(&mem.id)
+        for mid in self.index.bitmap.query_tag("scope:always") {
+            if hybrid_ids.contains(&mid) {
+                continue;
+            }
+            if let Ok(mem) = self.get_memory(mid)
                 && crate::agent_visible(mem.agent_id, agent)
                 && crate::user_visible(mem.user_id, user)
             {
@@ -416,7 +419,6 @@ impl MenteDb {
                 });
             }
         }
-        drop(pm);
 
         let ids: Vec<MemoryId> = scored.iter().map(|sm| sm.memory.id).collect();
         Ok((scored, ids, false))
