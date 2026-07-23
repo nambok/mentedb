@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.6](https://github.com/nambok/mentedb/compare/mentedb-v0.24.5...mentedb-v0.24.6) - 2026-07-23
+
+### Added
+
+- *(migration)* add reembed_ids for lock-released batched re-embedding ([#354](https://github.com/nambok/mentedb/pull/354))
+
 ## [0.24.4](https://github.com/nambok/mentedb/compare/mentedb-v0.24.3...mentedb-v0.24.4) - 2026-07-22
 
 ### Fixed
