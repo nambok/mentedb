@@ -624,7 +624,13 @@ impl MenteDb {
         agent: Option<AgentId>,
         user: Option<UserId>,
     ) -> crate::MenteResult<u32> {
-        let target = self.get_memory(id)?;
+        // The turn's memory can legitimately be gone by now: paraphrase dedup
+        // can skip the store, and write inference inside store can supersede
+        // or forget it (a correction resolving against an earlier fact). A
+        // missing target ends this step, never the whole turn.
+        let Ok(target) = self.get_memory(id) else {
+            return Ok(0);
+        };
         // Scope to the turn's owner on BOTH axes: contradiction and dedup edges
         // must not form across users or agents. Nil owned (shared/global)
         // memories remain in scope.
@@ -787,7 +793,12 @@ impl MenteDb {
         agent: Option<AgentId>,
         user: Option<UserId>,
     ) -> crate::MenteResult<(usize, u32)> {
-        let target = self.get_memory(id)?;
+        // Same tolerance as run_explicit_write_inference: the turn's memory
+        // can have been deduped, superseded, or forgotten between store and
+        // this step; a missing target ends this step, never the whole turn.
+        let Ok(target) = self.get_memory(id) else {
+            return Ok((0, 0));
+        };
         let extractor = FactExtractor::new();
         let facts = extractor.extract_facts(&target);
         if facts.is_empty() {
