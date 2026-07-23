@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0](https://github.com/nambok/mentedb/compare/mentedb-v0.24.6...mentedb-v0.25.0) - 2026-07-23
+
+### Added
+
+- *(injection)* precision gates so silence beats plausible noise ([#356](https://github.com/nambok/mentedb/pull/356))
+
 ## [0.24.6](https://github.com/nambok/mentedb/compare/mentedb-v0.24.5...mentedb-v0.24.6) - 2026-07-23
 
 ### Added
