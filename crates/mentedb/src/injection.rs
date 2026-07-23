@@ -50,6 +50,30 @@ pub struct InjectionConfig {
     pub demotion_shown_min: i64,
     /// Score multiplier applied to chronically ignored memories.
     pub demotion_factor: f32,
+    /// Shown at least this often with zero uses = excluded from injection
+    /// entirely (still reachable through ordinary recall). Demotion halves a
+    /// score; this is the terminal stage for memories the model never draws on.
+    pub demotion_drop_shown: i64,
+    /// Head size exempt from the semantic tail gate. The top RRF ranks are
+    /// trusted as-is because a pure keyword hit (exact identifier, phone
+    /// number) can carry a low cosine yet be exactly right.
+    pub tail_min_keep: usize,
+    /// Beyond the head, a candidate must reach this fraction of the best
+    /// query cosine among candidates or it is dropped. Relative to the query's
+    /// own score distribution, never an absolute cosine, so it holds across
+    /// embedders. This is what keeps a weak tail silent instead of letting
+    /// selection fill its quota with plausible-but-irrelevant memories.
+    pub tail_floor_fraction: f32,
+    /// Whether episodic memories tagged to another project may inject when a
+    /// current project is set. Episodic turns are working context of the
+    /// project they happened in; injecting them elsewhere is the classic
+    /// cross-context contamination users disable memory over.
+    pub cross_project_episodic: bool,
+    /// A non-episodic memory tagged to another project must reach this
+    /// fraction of the best query cosine to inject cross-project. Facts and
+    /// preferences may travel, but only when they are among the most relevant
+    /// candidates for the query, not as tail filler.
+    pub cross_project_floor_fraction: f32,
     /// Reply similarity above which a shown memory counts as used.
     pub used_similarity: f32,
     /// Salience reinforcement applied when a memory is actually used.
@@ -73,6 +97,11 @@ impl Default for InjectionConfig {
             knee_gap_ratio: 2.0,
             demotion_shown_min: 5,
             demotion_factor: 0.5,
+            demotion_drop_shown: 12,
+            tail_min_keep: 3,
+            tail_floor_fraction: 0.55,
+            cross_project_episodic: false,
+            cross_project_floor_fraction: 0.8,
             used_similarity: 0.6,
             use_reinforcement: 0.05,
             graph_expansion_max: 0,
@@ -189,6 +218,53 @@ fn knee_cutoff(scores: &[f32], gap_ratio: f32) -> usize {
     }
 }
 
+/// The project a memory is scoped to, from its `scope:project:<name>` tag.
+fn project_of(node: &MemoryNode) -> Option<&str> {
+    node.tags
+        .iter()
+        .find_map(|t| t.strip_prefix("scope:project:"))
+}
+
+/// Cross-project policy for a candidate when a current project is set.
+/// Untagged (global) memories and same-project memories always pass. Episodic
+/// memories from another project pass only if configured to. Other types from
+/// another project must be among the most semantically relevant candidates
+/// (cosine relative to the query's best), never tail filler.
+fn cross_project_allowed(
+    node: &MemoryNode,
+    cos: f32,
+    best_cos: f32,
+    current_project: Option<&str>,
+    cfg: &InjectionConfig,
+) -> bool {
+    let Some(current) = current_project else {
+        return true;
+    };
+    let Some(mem_project) = project_of(node) else {
+        return true;
+    };
+    if mem_project == current {
+        return true;
+    }
+    if node.memory_type == MemoryType::Episodic {
+        return cfg.cross_project_episodic;
+    }
+    cos >= best_cos * cfg.cross_project_floor_fraction
+}
+
+/// Semantic tail gate over a descending-ranked candidate list: the head
+/// (`tail_min_keep`) is trusted as ranked, the tail must reach
+/// `tail_floor_fraction` of the best query cosine to stay. Operates on
+/// (index, cosine) so RRF rank compression does not blunt it. Degenerate
+/// inputs (best cosine 0, e.g. mid-migration dimension mismatch) pass
+/// everything rather than silencing injection entirely.
+fn passes_tail_gate(idx: usize, cos: f32, best_cos: f32, cfg: &InjectionConfig) -> bool {
+    if idx < cfg.tail_min_keep {
+        return true;
+    }
+    cos >= best_cos * cfg.tail_floor_fraction
+}
+
 impl MenteDb {
     /// Injection-ready context selection. See the module docs for the
     /// policy; this is the API client hooks should prefer over raw recall.
@@ -216,7 +292,7 @@ impl MenteDb {
             )
             .unwrap_or_default();
 
-        let mut scored: Vec<(MemoryNode, f32)> = Vec::new();
+        let mut candidates: Vec<(MemoryNode, f32, f32)> = Vec::new();
         for (id, score) in hits {
             if excluded.contains(&id) {
                 continue;
@@ -240,20 +316,47 @@ impl MenteDb {
                 continue;
             }
             // Chronically ignored memories fall back in the ranking until
-            // usage or decay resolves them.
+            // usage or decay resolves them; past the drop threshold they are
+            // excluded from injection outright (ordinary recall still finds
+            // them). Exposure without a single use is the strongest negative
+            // signal the system has.
             let shown = attr_count(&node, ATTR_INJECTION_SHOWN);
             let used = attr_count(&node, ATTR_INJECTION_USED);
+            if shown >= cfg.demotion_drop_shown && used == 0 {
+                continue;
+            }
             let adjusted = if shown >= cfg.demotion_shown_min && used == 0 {
                 score * cfg.demotion_factor
             } else {
                 score
             };
-            scored.push((node, adjusted));
+            let cos = cosine_similarity(query.embedding, &node.embedding);
+            candidates.push((node, adjusted, cos));
         }
 
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let scores: Vec<f32> = scored.iter().map(|(_, s)| *s).collect();
-        scored.truncate(knee_cutoff(&scores, cfg.knee_gap_ratio));
+        // Gates are relative to the query's own best cosine, never an absolute
+        // threshold, so they hold across embedders (RRF scores are rank
+        // compressed and useless for this; the raw cosine is not).
+        let best_cos = candidates.iter().map(|(_, _, c)| *c).fold(0.0f32, f32::max);
+        candidates.retain(|(node, _, cos)| {
+            cross_project_allowed(node, *cos, best_cos, query.current_project, &cfg)
+        });
+
+        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let scores: Vec<f32> = candidates.iter().map(|(_, s, _)| *s).collect();
+        candidates.truncate(knee_cutoff(&scores, cfg.knee_gap_ratio));
+
+        // Semantic tail gate: beyond the trusted head, weak-cosine candidates
+        // vanish instead of being carried to MMR, which would otherwise fill
+        // max_items however irrelevant the tail. Silence beats plausible noise.
+        let mut idx = 0usize;
+        candidates.retain(|(_, _, cos)| {
+            let keep = passes_tail_gate(idx, *cos, best_cos, &cfg);
+            idx += 1;
+            keep
+        });
+        let mut scored: Vec<(MemoryNode, f32)> =
+            candidates.into_iter().map(|(n, s, _)| (n, s)).collect();
 
         // Associative recall: after the vector-tail knee, fold in 1-hop graph
         // neighbors of the surviving hits, so a memory linked to a relevant hit
@@ -353,16 +456,16 @@ impl MenteDb {
 
         // Pinned memories bypass every gate except the ledger, and lead the
         // result. The client's ledger reset (at context loss) governs
-        // re-delivery.
+        // re-delivery. Fetched from the tag index (scope:always is capped
+        // near-zero) so this loads only the handful of matches; the old path
+        // scanned every page on every injection call, which thrashed the
+        // buffer pool against disk on large accounts.
         let mut result: Vec<InjectionCandidate> = Vec::new();
-        let page_ids: Vec<_> = {
-            let pm = self.page_map.read();
-            pm.values().copied().collect()
-        };
-        for pid in page_ids {
-            if let Ok(node) = self.storage.load_memory(pid)
-                && has_tag(&node, "scope:always")
-                && !excluded.contains(&node.id)
+        for mid in self.index.bitmap.query_tag("scope:always") {
+            if excluded.contains(&mid) {
+                continue;
+            }
+            if let Ok(node) = self.get_memory(mid)
                 && crate::agent_visible(node.agent_id, query.agent_id)
                 && crate::user_visible(node.user_id, query.user_id)
             {
@@ -462,5 +565,84 @@ mod tests {
         bump_attr(&mut node, ATTR_INJECTION_SHOWN);
         bump_attr(&mut node, ATTR_INJECTION_SHOWN);
         assert_eq!(attr_count(&node, ATTR_INJECTION_SHOWN), 2);
+    }
+
+    fn node_with_tags(memory_type: MemoryType, tags: &[&str]) -> MemoryNode {
+        let mut node = MemoryNode::new(AgentId(Uuid::nil()), memory_type, "x".into(), vec![0.0; 4]);
+        node.tags = tags.iter().map(|t| t.to_string()).collect();
+        node
+    }
+
+    #[test]
+    fn tail_gate_trusts_head_and_prunes_weak_tail() {
+        let cfg = InjectionConfig::default();
+        let best = 0.8;
+        // Head positions pass regardless of cosine (keyword hits).
+        assert!(passes_tail_gate(0, 0.05, best, &cfg));
+        assert!(passes_tail_gate(2, 0.05, best, &cfg));
+        // Tail passes only near the query's own best cosine.
+        assert!(passes_tail_gate(3, 0.6, best, &cfg));
+        assert!(!passes_tail_gate(3, 0.3, best, &cfg));
+        // Degenerate best cosine (mid-migration): everything passes.
+        assert!(passes_tail_gate(5, 0.0, 0.0, &cfg));
+    }
+
+    #[test]
+    fn cross_project_policy() {
+        let cfg = InjectionConfig::default();
+        let best = 0.8;
+        let foreign_epi = node_with_tags(MemoryType::Episodic, &["scope:project:other"]);
+        let foreign_sem = node_with_tags(MemoryType::Semantic, &["scope:project:other"]);
+        let same_epi = node_with_tags(MemoryType::Episodic, &["scope:project:mine"]);
+        let global_sem = node_with_tags(MemoryType::Semantic, &[]);
+
+        // No current project: everything passes.
+        assert!(cross_project_allowed(&foreign_epi, 0.1, best, None, &cfg));
+        // Same project and untagged always pass.
+        assert!(cross_project_allowed(
+            &same_epi,
+            0.1,
+            best,
+            Some("mine"),
+            &cfg
+        ));
+        assert!(cross_project_allowed(
+            &global_sem,
+            0.1,
+            best,
+            Some("mine"),
+            &cfg
+        ));
+        // Foreign episodic never passes by default.
+        assert!(!cross_project_allowed(
+            &foreign_epi,
+            0.79,
+            best,
+            Some("mine"),
+            &cfg
+        ));
+        // Foreign semantic passes only when among the most relevant.
+        assert!(cross_project_allowed(
+            &foreign_sem,
+            0.7,
+            best,
+            Some("mine"),
+            &cfg
+        ));
+        assert!(!cross_project_allowed(
+            &foreign_sem,
+            0.5,
+            best,
+            Some("mine"),
+            &cfg
+        ));
+    }
+
+    #[test]
+    fn project_of_reads_scope_tag() {
+        let node = node_with_tags(MemoryType::Semantic, &["session:s1", "scope:project:apex"]);
+        assert_eq!(project_of(&node), Some("apex"));
+        let untagged = node_with_tags(MemoryType::Semantic, &["session:s1"]);
+        assert_eq!(project_of(&untagged), None);
     }
 }
