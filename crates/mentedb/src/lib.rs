@@ -2064,14 +2064,40 @@ impl MenteDb {
     /// this reaches it. Runs synchronously and re-embeds one memory at a time;
     /// the caller should run it on a blocking pool.
     pub fn reembed_all(&self) -> MenteResult<usize> {
+        let reembedded = self.reembed_ids(&self.memory_ids())?;
+        if reembedded > 0 {
+            info!(
+                "Re-embedded {reembedded} memories at dimension {}",
+                self.embedding_dim
+            );
+        }
+        Ok(reembedded)
+    }
+
+    /// Re-embed the given memories to the current embedding dimension, returning
+    /// how many were changed. Memories already at the target dimension, missing,
+    /// or not yet embeddable at the target dimension are skipped, so this is
+    /// idempotent. Each call's work and its hold on any external write lock are
+    /// bounded by `ids.len()`.
+    ///
+    /// To migrate a whole database without blocking foreground writes for the
+    /// entire migration, snapshot `memory_ids()` once and feed it here in
+    /// fixed-size chunks, releasing the external write lock between chunks so
+    /// foreground writes can interleave. `reembed_all` is the single-call form.
+    pub fn reembed_ids(&self, ids: &[MemoryId]) -> MenteResult<usize> {
         let target = self.embedding_dim;
         if target == 0 {
             return Ok(0);
         }
-        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+        // Resolve pages up front, then drop the page-map lock before the (slow)
+        // load / embed / update loop, matching reembed_all's old structure.
+        let pids: Vec<PageId> = {
+            let pm = self.page_map.read();
+            ids.iter().filter_map(|id| pm.get(id).copied()).collect()
+        };
 
         let mut reembedded = 0usize;
-        for pid in &page_ids {
+        for pid in &pids {
             let Ok(mut node) = self.storage.load_memory(*pid) else {
                 continue;
             };
@@ -2093,9 +2119,6 @@ impl MenteDb {
             self.storage.update_memory(*pid, &node)?;
             self.index.index_memory(&node);
             reembedded += 1;
-        }
-        if reembedded > 0 {
-            info!("Re-embedded {reembedded} memories at dimension {target}");
         }
         Ok(reembedded)
     }
