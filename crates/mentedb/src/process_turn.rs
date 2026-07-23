@@ -120,6 +120,80 @@ pub struct ProcessTurnResult {
     pub delta_removed: Vec<MemoryId>,
 }
 
+/// The read half of a turn: what the caller needs to build its next prompt.
+/// Produced by [`MenteDb::recall_turn_context`]; feed `context` to
+/// [`MenteDb::ingest_turn`] so analysis sees what the caller saw.
+#[derive(Debug, Clone)]
+pub struct RecallContextResult {
+    /// Retrieved context memories (scored and ranked).
+    pub context: Vec<ScoredMemory>,
+    /// Pain warnings triggered by the user message.
+    pub pain_warnings: Vec<PainWarning>,
+    /// Whether context came from the speculative cache.
+    pub cache_hit: bool,
+    /// Delta: memory IDs added since last turn.
+    pub delta_added: Vec<MemoryId>,
+    /// Delta: memory IDs removed since last turn.
+    pub delta_removed: Vec<MemoryId>,
+}
+
+/// The write half of a turn: everything [`MenteDb::ingest_turn`] produced
+/// after the caller's response no longer depends on it.
+#[derive(Debug, Clone)]
+pub struct IngestTurnResult {
+    /// IDs of newly stored memories this turn.
+    pub stored_ids: Vec<MemoryId>,
+    /// The episodic memory ID for this turn.
+    pub episodic_id: Option<MemoryId>,
+    /// Number of write-inference actions applied.
+    pub inference_actions: u32,
+    /// Detected actions in the conversation.
+    pub detected_actions: Vec<DetectedAction>,
+    /// Proactively recalled memories.
+    pub proactive_recalls: Vec<ProactiveRecall>,
+    /// Auto-correction memory ID if a correction was detected.
+    pub correction_id: Option<MemoryId>,
+    /// Sentiment score (-1.0 to 1.0).
+    pub sentiment: f32,
+    /// Number of phantom (knowledge gap) entities detected.
+    pub phantom_count: usize,
+    /// Number of stream contradictions detected.
+    pub contradiction_count: usize,
+    /// Predicted next topics from trajectory analysis.
+    pub predicted_topics: Vec<String>,
+    /// Number of facts extracted and linked.
+    pub facts_extracted: usize,
+    /// Number of edges created from fact extraction.
+    pub edges_created: u32,
+    /// Whether enrichment is pending (caller should invoke enrichment pipeline).
+    pub enrichment_pending: bool,
+}
+
+/// Recompose the split halves into the classic single-call result, so
+/// `process_turn` keeps its exact shape for existing callers.
+fn compose_turn_result(recall: RecallContextResult, ingest: IngestTurnResult) -> ProcessTurnResult {
+    ProcessTurnResult {
+        context: recall.context,
+        stored_ids: ingest.stored_ids,
+        episodic_id: ingest.episodic_id,
+        pain_warnings: recall.pain_warnings,
+        cache_hit: recall.cache_hit,
+        inference_actions: ingest.inference_actions,
+        detected_actions: ingest.detected_actions,
+        proactive_recalls: ingest.proactive_recalls,
+        correction_id: ingest.correction_id,
+        sentiment: ingest.sentiment,
+        phantom_count: ingest.phantom_count,
+        contradiction_count: ingest.contradiction_count,
+        predicted_topics: ingest.predicted_topics,
+        facts_extracted: ingest.facts_extracted,
+        edges_created: ingest.edges_created,
+        enrichment_pending: ingest.enrichment_pending,
+        delta_added: recall.delta_added,
+        delta_removed: recall.delta_removed,
+    }
+}
+
 // ── Action detection keywords ──
 
 const ACTION_KEYWORDS: &[(&str, &str)] = &[
@@ -227,14 +301,22 @@ impl MenteDb {
         input: &ProcessTurnInput,
         delta_tracker: &mut DeltaTracker,
     ) -> crate::MenteResult<ProcessTurnResult> {
-        let agent_id = AgentId(input.agent_id.unwrap_or(Uuid::nil()));
-        let user_id = UserId(input.user_id.unwrap_or(Uuid::nil()));
-        let assistant_resp = input.assistant_response.as_deref().unwrap_or("");
-        let conversation = format!(
-            "User: {}\nAssistant: {}",
-            input.user_message, assistant_resp
-        );
+        let recall = self.recall_turn_context(input, delta_tracker)?;
+        let ingest = self.ingest_turn(input, &recall.context)?;
+        Ok(compose_turn_result(recall, ingest))
+    }
 
+    /// The read half of a turn: everything the caller needs to build its next
+    /// prompt (recalled context, pain warnings, delta), and nothing else. The
+    /// write half is [`MenteDb::ingest_turn`]; callers on a latency budget
+    /// respond after this returns and run ingestion behind the response.
+    /// `process_turn` composes the two halves and is behavior-identical to the
+    /// original single-call pipeline.
+    pub fn recall_turn_context(
+        &self,
+        input: &ProcessTurnInput,
+        delta_tracker: &mut DeltaTracker,
+    ) -> crate::MenteResult<RecallContextResult> {
         // §1: Embed query
         let query_embedding = self.embed_or_empty(&input.user_message)?;
 
@@ -253,6 +335,34 @@ impl MenteDb {
         // §2b: Delta tracking
         let delta = delta_tracker.compute_delta(&current_ids, &delta_tracker.last_served.clone());
         delta_tracker.update(&current_ids);
+
+        Ok(RecallContextResult {
+            context,
+            pain_warnings,
+            cache_hit,
+            delta_added: delta.added,
+            delta_removed: delta.removed,
+        })
+    }
+
+    /// The write half of a turn: store, reconcile, analyze, maintain. Takes
+    /// the context recalled by [`MenteDb::recall_turn_context`] so phantom and
+    /// stream analysis see exactly what the caller saw, without re-running
+    /// recall. Safe to run after the caller's response has already been sent;
+    /// the single-writer discipline is the caller's (hold the account write
+    /// lock while this runs, as with any write).
+    pub fn ingest_turn(
+        &self,
+        input: &ProcessTurnInput,
+        context: &[ScoredMemory],
+    ) -> crate::MenteResult<IngestTurnResult> {
+        let agent_id = AgentId(input.agent_id.unwrap_or(Uuid::nil()));
+        let user_id = UserId(input.user_id.unwrap_or(Uuid::nil()));
+        let assistant_resp = input.assistant_response.as_deref().unwrap_or("");
+        let conversation = format!(
+            "User: {}\nAssistant: {}",
+            input.user_message, assistant_resp
+        );
 
         // §3: Store episodic turn (write inference runs automatically inside store)
         let (stored_ids, episodic_id) = self.store_episodic(
@@ -302,7 +412,7 @@ impl MenteDb {
         let (phantom_count, contradiction_count) = self.detect_phantoms_and_check_stream(
             &conversation,
             assistant_resp,
-            &context,
+            context,
             input.turn_id,
         );
 
@@ -322,12 +432,9 @@ impl MenteDb {
         // §13: Auto-maintenance
         self.maybe_run_maintenance(input.turn_id);
 
-        Ok(ProcessTurnResult {
-            context,
-            stored_ids: stored_ids.clone(),
+        Ok(IngestTurnResult {
+            stored_ids,
             episodic_id,
-            pain_warnings,
-            cache_hit,
             inference_actions,
             detected_actions,
             proactive_recalls,
@@ -339,8 +446,6 @@ impl MenteDb {
             facts_extracted,
             edges_created,
             enrichment_pending: self.needs_enrichment(),
-            delta_added: delta.added,
-            delta_removed: delta.removed,
         })
     }
 

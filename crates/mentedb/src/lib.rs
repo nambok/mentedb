@@ -101,6 +101,10 @@ pub mod process_turn;
 /// Engine-native injection attention (selection policy for context injection).
 pub mod injection;
 
+/// Embedder self-calibration: cosine thresholds derived from measured score
+/// distributions instead of embedder-coupled absolute constants.
+pub mod calibration;
+
 /// LLM-driven memory consolidation (semantic dedup via a pluggable LlmJudge).
 pub mod llm_consolidation;
 pub use llm_consolidation::ConsolidationParams;
@@ -394,6 +398,14 @@ pub struct CognitiveConfig {
     /// gate). Value updates share a frame but swap a value token, which drops
     /// them below this and keeps them storable.
     pub memory_dedup_token_overlap: f32,
+    /// Whether to derive the cosine-based thresholds (paraphrase dedup,
+    /// standing-rule dedup, value-update floor) from the installed embedder's
+    /// measured score distributions at open. Absolute cosine constants are
+    /// embedder-coupled and have twice silently disabled cognition in
+    /// production; calibration replaces them with distribution-derived values
+    /// and keeps the configured defaults when the embedder cannot separate
+    /// paraphrase from noise.
+    pub calibration_enabled: bool,
 }
 
 impl Default for CognitiveConfig {
@@ -431,6 +443,7 @@ impl Default for CognitiveConfig {
             memory_dedup: true,
             memory_dedup_threshold: 0.97,
             memory_dedup_token_overlap: 0.85,
+            calibration_enabled: true,
         }
     }
 }
@@ -466,6 +479,9 @@ pub struct MenteDb {
     path: PathBuf,
     /// Optional embedding provider for auto-embedding on store and search.
     embedder: Option<Box<dyn EmbeddingProvider>>,
+    /// Distribution-derived thresholds for the installed embedder, when
+    /// calibration succeeded. None means configured defaults are in effect.
+    calibration: Option<calibration::EmbedderCalibration>,
     /// Optional second-pass reranker applied to the fused candidate pool on the
     /// hybrid recall path. None (the default) leaves recall a pure vector/BM25 +
     /// decay ranking; when set, a larger pool is fetched and reordered by this
@@ -642,6 +658,7 @@ impl MenteDb {
             embedding_dim: 0,
             path: path.to_path_buf(),
             embedder: None,
+            calibration: None,
             reranker: None,
             cognitive_config,
             write_inference,
@@ -669,6 +686,7 @@ impl MenteDb {
         let mut db = Self::open(path)?;
         db.embedding_dim = embedder.dimensions();
         db.embedder = Some(embedder);
+        db.apply_calibration();
         Ok(db)
     }
 
@@ -681,6 +699,7 @@ impl MenteDb {
         let mut db = Self::open_with_config(path, cognitive_config)?;
         db.embedding_dim = embedder.dimensions();
         db.embedder = Some(embedder);
+        db.apply_calibration();
         Ok(db)
     }
 
@@ -688,6 +707,45 @@ impl MenteDb {
     pub fn set_embedder(&mut self, embedder: Box<dyn EmbeddingProvider>) {
         self.embedding_dim = embedder.dimensions();
         self.embedder = Some(embedder);
+        self.apply_calibration();
+    }
+
+    /// The distribution-derived thresholds in effect for the installed
+    /// embedder, when calibration succeeded. None means configured defaults.
+    pub fn calibration(&self) -> Option<&calibration::EmbedderCalibration> {
+        self.calibration.as_ref()
+    }
+
+    /// Replace the cosine-coupled thresholds with values derived from the
+    /// installed embedder's measured score distributions (see [`calibration`]).
+    /// The stored file makes this a one-time cost per embedder; a swap to a
+    /// different model or dimension recomputes automatically. On any failure
+    /// (embedder down, or a provider whose paraphrase and noise distributions
+    /// overlap, like the hash test provider) the configured defaults stay in
+    /// effect, so tests and degraded environments keep deterministic behavior.
+    fn apply_calibration(&mut self) {
+        if !self.cognitive_config.calibration_enabled {
+            return;
+        }
+        let Some(embedder) = self.embedder.as_deref() else {
+            return;
+        };
+        match calibration::load_or_calibrate(&self.path, embedder) {
+            Ok(cal) => {
+                self.cognitive_config.memory_dedup_threshold = cal.dedup_cosine;
+                self.cognitive_config.always_dedup_threshold = cal.dedup_cosine;
+                self.cognitive_config
+                    .inference_config
+                    .value_update_min_similarity = cal.topical_floor;
+                self.write_inference = WriteInferenceEngine::with_config(
+                    self.cognitive_config.inference_config.clone(),
+                );
+                self.calibration = Some(cal);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "embedder calibration unavailable, keeping configured thresholds");
+            }
+        }
     }
 
     /// Install a second-pass [`Reranker`](crate::reranker::Reranker) applied to
@@ -829,6 +887,14 @@ impl MenteDb {
     /// `memory_dedup_token_overlap`, the two-gate design that keeps genuine
     /// value updates storable.
     fn is_paraphrase_duplicate(&self, node: &MemoryNode) -> bool {
+        self.find_paraphrase_duplicate_of(node).is_some()
+    }
+
+    /// The stored memory `node` duplicates, if any: same owner, same scope
+    /// tags, cosine at the (calibrated) dedup gate AND token-set jaccard at
+    /// the overlap gate. Shared by the write-time skip and the retroactive
+    /// sweep so both apply identical policy.
+    fn find_paraphrase_duplicate_of(&self, node: &MemoryNode) -> Option<MemoryId> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -845,11 +911,11 @@ impl MenteDb {
             Some(node.user_id),
             None,
         ) else {
-            return false;
+            return None;
         };
         let new_tokens = Self::token_set(&node.content);
         if new_tokens.is_empty() {
-            return false;
+            return None;
         }
         for (id, _) in candidates {
             if id == node.id {
@@ -894,10 +960,68 @@ impl MenteDb {
             let inter = new_tokens.intersection(&old_tokens).count() as f32;
             let union = new_tokens.union(&old_tokens).count() as f32;
             if union > 0.0 && inter / union >= self.cognitive_config.memory_dedup_token_overlap {
-                return true;
+                return Some(id);
             }
         }
-        false
+        None
+    }
+
+    /// Retroactively merge paraphrase duplicates among the given memories,
+    /// returning how many were merged away. For each memory that still exists,
+    /// the same two-gate policy as write-time dedup finds a duplicate; the
+    /// OLDER memory is kept (stable identity for edges and references), the
+    /// newer one is forgotten after folding its tags, access count, and peak
+    /// salience into the keeper. Idempotent, and work is bounded by the slice,
+    /// so callers migrating a whole database chunk `memory_ids()` and release
+    /// any external write lock between chunks, the same pattern as
+    /// `reembed_ids`. Requires an embedder-backed index only insofar as the
+    /// stored embeddings exist; no new embeddings are computed.
+    pub fn dedup_sweep_ids(&self, ids: &[MemoryId]) -> MenteResult<usize> {
+        let mut merged = 0usize;
+        for id in ids {
+            let Ok(node) = self.get_memory(*id) else {
+                continue;
+            };
+            let Some(dup_id) = self.find_paraphrase_duplicate_of(&node) else {
+                continue;
+            };
+            let Ok(dup) = self.get_memory(dup_id) else {
+                continue;
+            };
+            // Keep the older memory; forget the newer restatement.
+            let (keep, drop) = if node.created_at <= dup.created_at {
+                (node, dup)
+            } else {
+                (dup, node)
+            };
+            let keep_pid = {
+                let pm = self.page_map.read();
+                match pm.get(&keep.id) {
+                    Some(p) => *p,
+                    None => continue,
+                }
+            };
+            let mut keeper = match self.storage.load_memory(keep_pid) {
+                Ok(k) => k,
+                Err(_) => continue,
+            };
+            for tag in &drop.tags {
+                if !keeper.tags.contains(tag) {
+                    keeper.tags.push(tag.clone());
+                }
+            }
+            keeper.access_count = keeper.access_count.saturating_add(drop.access_count);
+            if drop.salience > keeper.salience {
+                keeper.salience = drop.salience;
+            }
+            self.storage.update_memory(keep_pid, &keeper)?;
+            self.forget(drop.id)?;
+            merged += 1;
+        }
+        if merged > 0 {
+            info!("dedup sweep merged {merged} paraphrase duplicates");
+        }
+        Ok(merged)
     }
 
     /// Lowercased alphanumeric token set of a content string, for the
