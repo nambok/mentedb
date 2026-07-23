@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0](https://github.com/nambok/mentedb/compare/mentedb-v0.25.0...mentedb-v0.26.0) - 2026-07-23
+
+### Added
+
+- embedder calibration, dedup sweep, and recall/ingest turn split ([#358](https://github.com/nambok/mentedb/pull/358))
+
 ## [0.25.0](https://github.com/nambok/mentedb/compare/mentedb-v0.24.6...mentedb-v0.25.0) - 2026-07-23
 
 ### Added
