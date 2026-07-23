@@ -416,6 +416,143 @@ pub async fn ingest_conversation(
     Ok((StatusCode::OK, Json(stats)))
 }
 
+// ---------------------------------------------------------------------------
+// POST /v1/process_turn
+// ---------------------------------------------------------------------------
+
+/// Run the full cognitive turn pipeline: embed, recall context, store the
+/// turn, reconcile, analyze. The same engine call the hosted platform serves;
+/// self-hosters get the one-call pipeline instead of assembling it from the
+/// store and recall primitives. Delta serving is tracked per agent across
+/// requests via `AppState::turn_trackers`.
+pub async fn process_turn(
+    State(state): State<Arc<AppState>>,
+    agent: Option<Extension<AuthenticatedAgent>>,
+    Json(req): Json<Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    let user_message = req
+        .get("user_message")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ApiError::BadRequest("missing or invalid 'user_message'".into()))?
+        .to_string();
+    let assistant_response = req
+        .get("assistant_response")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let turn_id = req.get("turn_id").and_then(|v| v.as_u64()).unwrap_or(0);
+    let project_context = req
+        .get("project_context")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let session_id = req
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let agent_id = req
+        .get("agent_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            Uuid::parse_str(s).map_err(|_| ApiError::BadRequest("invalid 'agent_id' UUID".into()))
+        })
+        .transpose()?;
+    let user_id = req
+        .get("user_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            Uuid::parse_str(s).map_err(|_| ApiError::BadRequest("invalid 'user_id' UUID".into()))
+        })
+        .transpose()?;
+
+    // A scoped token must only process turns for its own agent.
+    if let (Some(Extension(authed)), Some(aid)) = (&agent, agent_id) {
+        let tid: AgentId = authed
+            .agent_id
+            .parse()
+            .map_err(|_| ApiError::Internal("token contains invalid agent_id UUID".into()))?;
+        if tid != AgentId(aid) {
+            return Err(ApiError::Forbidden(
+                "agent_id in request body does not match token".into(),
+            ));
+        }
+    }
+
+    let input = mentedb::process_turn::ProcessTurnInput {
+        user_message,
+        assistant_response,
+        turn_id,
+        project_context,
+        agent_id,
+        user_id,
+        session_id,
+    };
+
+    // The tracker is keyed by agent (nil for the shared/global agent) so a
+    // multi-agent server keeps one delta stream per agent. Taken out of the
+    // map for the duration of the blocking call, then put back, so the mutex
+    // is never held across the engine turn.
+    let tracker_key = agent_id.unwrap_or_else(Uuid::nil).to_string();
+    let mut tracker = {
+        let mut map = state.turn_trackers.lock().await;
+        map.remove(&tracker_key)
+            .unwrap_or_else(mentedb::context::DeltaTracker::new)
+    };
+
+    let db = Arc::clone(&state.db);
+    let joined = tokio::task::spawn_blocking(move || {
+        let result = db.process_turn(&input, &mut tracker);
+        (result, tracker)
+    })
+    .await
+    .map_err(|e| ApiError::Internal(format!("process_turn task failed: {e}")))?;
+    let (result, tracker) = joined;
+    {
+        let mut map = state.turn_trackers.lock().await;
+        map.insert(tracker_key, tracker);
+    }
+    let result = result.map_err(|e| {
+        error!("process_turn failed: {e}");
+        ApiError::Internal(format!("process_turn failed: {e}"))
+    })?;
+
+    let context: Vec<Value> = result
+        .context
+        .iter()
+        .map(|sm| {
+            json!({
+                "id": sm.memory.id.to_string(),
+                "content": sm.memory.content,
+                "memory_type": format!("{:?}", sm.memory.memory_type).to_lowercase(),
+                "relevance_score": sm.score,
+                "created_at": sm.memory.created_at,
+            })
+        })
+        .collect();
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "context": context,
+            "cache_hit": result.cache_hit,
+            "stored_ids": result.stored_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+            "episodic_id": result.episodic_id.map(|id| id.to_string()),
+            "contradictions": result.contradiction_count,
+            "facts_extracted": result.facts_extracted,
+            "edges_created": result.edges_created,
+            "inference_actions": result.inference_actions,
+            "pain_warnings": result.pain_warnings.len(),
+            "predicted_topics": result.predicted_topics,
+            "delta_added": result.delta_added.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+            "delta_removed": result.delta_removed.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+        })),
+    ))
+}
+
 /// Run the extraction pipeline and store accepted memories. Returns JSON stats.
 async fn run_extraction(
     config: &ExtractionConfig,

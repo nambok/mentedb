@@ -21,4 +21,9 @@ pub struct AppState {
     pub extraction_tx: Option<ExtractionSender>,
     /// Self-organizing sharding handle. `None` unless `MENTEDB_SHARDING` is set.
     pub cluster: Option<crate::cluster::Cluster>,
+    /// Per-agent delta trackers for `/v1/process_turn`, so delta-aware context
+    /// serving (only what changed since the agent's last turn) works across
+    /// requests instead of resetting every call.
+    pub turn_trackers:
+        Arc<tokio::sync::Mutex<std::collections::HashMap<String, mentedb::context::DeltaTracker>>>,
 }

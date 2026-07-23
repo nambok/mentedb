@@ -464,6 +464,7 @@ async fn main() -> Result<()> {
         auto_extract,
         extraction_tx,
         cluster,
+        turn_trackers: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
     });
 
     let app = routes::build_router(state.clone())
@@ -497,6 +498,7 @@ async fn main() -> Result<()> {
     println!("  POST   /v1/edges            create an edge");
     println!("  GET    /v1/stats            database statistics");
     println!("  POST   /v1/ingest           extract & store from conversation");
+    println!("  POST   /v1/process_turn     full cognitive turn pipeline");
     println!("  POST   /v1/auth/token       generate JWT");
     println!("  GET    /v1/ws/stream        WebSocket cognition stream");
     println!();

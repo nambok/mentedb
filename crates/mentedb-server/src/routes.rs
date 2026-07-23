@@ -23,6 +23,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/edges", post(handlers::create_edge))
         .route("/v1/stats", get(handlers::stats))
         .route("/v1/ingest", post(handlers::ingest_conversation))
+        .route("/v1/process_turn", post(handlers::process_turn))
         .route("/v1/auth/token", post(crate::auth::generate_token))
         .route(
             "/v1/spaces",
