@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0](https://github.com/nambok/mentedb/compare/mentedb-v0.26.0...mentedb-v0.27.0) - 2026-07-24
+
+### Added
+
+- offline dedup sweep profile and multi-arch docker image ([#362](https://github.com/nambok/mentedb/pull/362))
+- *(server)* expose process_turn on the REST API and tolerate mid-turn memory loss ([#360](https://github.com/nambok/mentedb/pull/360))
+
 ## [0.26.0](https://github.com/nambok/mentedb/compare/mentedb-v0.25.0...mentedb-v0.26.0) - 2026-07-23
 
 ### Added

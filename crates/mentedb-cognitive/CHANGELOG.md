@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.26.0...mentedb-cognitive-v0.27.0) - 2026-07-24
+
+### Added
+
+- offline dedup sweep profile and multi-arch docker image ([#362](https://github.com/nambok/mentedb/pull/362))
+
 ## [0.24.4](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.24.3...mentedb-cognitive-v0.24.4) - 2026-07-22
 
 ### Fixed
