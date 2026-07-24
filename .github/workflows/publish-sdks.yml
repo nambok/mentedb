@@ -219,9 +219,60 @@ jobs:
           packages-dir: dist/
           skip-existing: true
 
+  # Build each architecture on its own native runner (no QEMU emulation, which
+  # would make the Rust + Candle release build take tens of minutes for arm64),
+  # push each by digest, then assemble a multi-arch manifest so
+  # `docker run ghcr.io/nambok/mentedb:latest` works on both amd64 and Apple
+  # Silicon (arm64). The Dockerfile is architecture-agnostic and unchanged.
   publish-docker:
-    name: Publish Docker image
+    name: Build Docker image (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - name: Prepare platform slug
+        run: echo "PLATFORM_SLUG=$(echo '${{ matrix.platform }}' | tr '/' '-')" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/nambok/mentedb,push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-digest-${{ env.PLATFORM_SLUG }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-docker-manifest:
+    name: Publish multi-arch Docker manifest
     runs-on: ubuntu-latest
+    needs: [publish-docker]
     permissions:
       contents: read
       packages: write
@@ -238,17 +289,24 @@ jobs:
             VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "mentedb") | .version')
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: docker-digest-*
+          merge-multiple: true
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ghcr.io/nambok/mentedb:latest
-            ghcr.io/nambok/mentedb:${{ steps.version.outputs.version }}
+      - name: Create and push manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            -t ghcr.io/nambok/mentedb:latest \
+            -t "ghcr.io/nambok/mentedb:${{ steps.version.outputs.version }}" \
+            $(printf 'ghcr.io/nambok/mentedb@sha256:%s ' *)
+      - name: Inspect manifest
+        run: docker buildx imagetools inspect "ghcr.io/nambok/mentedb:${{ steps.version.outputs.version }}"

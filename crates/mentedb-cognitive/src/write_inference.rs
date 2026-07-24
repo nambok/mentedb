@@ -203,6 +203,21 @@ impl WriteInferenceEngine {
         Self { config }
     }
 
+    /// Whether `new` and `old` look like a value update (same sentence frame,
+    /// changed value tail) under this engine's configured thresholds. A
+    /// deduplication pass that merges near-duplicates uses this as a guard so a
+    /// correction ("coffee is a cortado" then "coffee is a flat white") is
+    /// never collapsed into the fact it corrects; the two must stay distinct
+    /// for supersession to resolve them.
+    pub fn looks_like_value_update(&self, new: &str, old: &str) -> bool {
+        is_value_update(
+            new,
+            old,
+            self.config.value_update_prefix_share,
+            self.config.value_update_max_tail,
+        )
+    }
+
     pub fn infer_on_write(
         &self,
         new_memory: &MemoryNode,

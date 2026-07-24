@@ -30,6 +30,7 @@ fn test_state(
         auto_extract,
         extraction_tx: None,
         cluster: None,
+        turn_trackers: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
     });
     (state, tmp)
 }
