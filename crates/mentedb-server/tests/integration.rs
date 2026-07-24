@@ -41,6 +41,7 @@ fn build_test_app_with_auth() -> (axum::Router, TempDir) {
         auto_extract: false,
         extraction_tx: None,
         cluster: None,
+        turn_trackers: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
     });
     let app = routes::build_router(state.clone()).layer(middleware::from_fn_with_state(
         state.clone(),
@@ -63,6 +64,7 @@ fn build_test_app_no_auth() -> (axum::Router, TempDir) {
         auto_extract: false,
         extraction_tx: None,
         cluster: None,
+        turn_trackers: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
     });
     let app = routes::build_router(state.clone()).layer(middleware::from_fn_with_state(
         state.clone(),
@@ -85,6 +87,7 @@ fn build_test_app_rate_limited(max_tokens: u32) -> (axum::Router, TempDir) {
         auto_extract: false,
         extraction_tx: None,
         cluster: None,
+        turn_trackers: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
     });
     let app = routes::build_router(state.clone())
         .layer(middleware::from_fn_with_state(
@@ -112,6 +115,7 @@ fn build_test_app_with_auth_no_admin_key() -> (axum::Router, TempDir) {
         auto_extract: false,
         extraction_tx: None,
         cluster: None,
+        turn_trackers: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
     });
     let app = routes::build_router(state.clone()).layer(middleware::from_fn_with_state(
         state.clone(),

@@ -467,6 +467,7 @@ mod tests {
             auto_extract: false,
             extraction_tx: None,
             cluster: None,
+            turn_trackers: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         });
         (state, tmp)
     }
@@ -779,6 +780,7 @@ mod tests {
                 auto_extract: false,
                 extraction_tx: None,
                 cluster: None,
+                turn_trackers: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             }),
             tmp,
         )
