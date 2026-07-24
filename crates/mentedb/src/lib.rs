@@ -398,6 +398,13 @@ pub struct CognitiveConfig {
     /// gate). Value updates share a frame but swap a value token, which drops
     /// them below this and keeps them storable.
     pub memory_dedup_token_overlap: f32,
+    /// Token-set jaccard overlap gate for the OFFLINE dedup sweep, looser than
+    /// the write-time gate so it catches reworded paraphrases that already
+    /// accumulated. Safe to loosen here only because the sweep also applies a
+    /// value-update structural guard, so a correction is never merged even
+    /// when its overlap clears this bar. The write hot path keeps the strict
+    /// `memory_dedup_token_overlap`.
+    pub sweep_dedup_token_overlap: f32,
     /// Whether to derive the cosine-based thresholds (paraphrase dedup,
     /// standing-rule dedup, value-update floor) from the installed embedder's
     /// measured score distributions at open. Absolute cosine constants are
@@ -443,6 +450,7 @@ impl Default for CognitiveConfig {
             memory_dedup: true,
             memory_dedup_threshold: 0.97,
             memory_dedup_token_overlap: 0.85,
+            sweep_dedup_token_overlap: 0.55,
             calibration_enabled: true,
         }
     }
@@ -895,6 +903,34 @@ impl MenteDb {
     /// the overlap gate. Shared by the write-time skip and the retroactive
     /// sweep so both apply identical policy.
     fn find_paraphrase_duplicate_of(&self, node: &MemoryNode) -> Option<MemoryId> {
+        self.find_duplicate_of(
+            node,
+            self.cognitive_config.memory_dedup_token_overlap,
+            false,
+        )
+    }
+
+    /// Offline dedup sweep variant of the paraphrase finder: a looser
+    /// token-overlap gate catches the reworded paraphrases that pile up below
+    /// the strict write-time gate ("User builds X with Y" vs "the user is
+    /// building X using Y"), while a value-update structural guard ensures a
+    /// correction is never merged into the fact it corrects.
+    fn find_sweep_duplicate_of(&self, node: &MemoryNode) -> Option<MemoryId> {
+        self.find_duplicate_of(node, self.cognitive_config.sweep_dedup_token_overlap, true)
+    }
+
+    /// Shared duplicate finder for the write-time paraphrase gate and the
+    /// offline sweep: a same-owner, same-scope candidate whose embedding cosine
+    /// reaches the (calibrated) dedup threshold AND whose token-set jaccard
+    /// reaches `min_overlap`. With `guard_value_update` set, a candidate that
+    /// reads as a value update (shared frame, changed value tail) is skipped,
+    /// so a correction is never collapsed into the fact it supersedes.
+    fn find_duplicate_of(
+        &self,
+        node: &MemoryNode,
+        min_overlap: f32,
+        guard_value_update: bool,
+    ) -> Option<MemoryId> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -959,7 +995,14 @@ impl MenteDb {
             }
             let inter = new_tokens.intersection(&old_tokens).count() as f32;
             let union = new_tokens.union(&old_tokens).count() as f32;
-            if union > 0.0 && inter / union >= self.cognitive_config.memory_dedup_token_overlap {
+            if union > 0.0 && inter / union >= min_overlap {
+                if guard_value_update
+                    && self
+                        .write_inference
+                        .looks_like_value_update(&node.content, &existing.content)
+                {
+                    continue;
+                }
                 return Some(id);
             }
         }
@@ -982,7 +1025,7 @@ impl MenteDb {
             let Ok(node) = self.get_memory(*id) else {
                 continue;
             };
-            let Some(dup_id) = self.find_paraphrase_duplicate_of(&node) else {
+            let Some(dup_id) = self.find_sweep_duplicate_of(&node) else {
                 continue;
             };
             let Ok(dup) = self.get_memory(dup_id) else {
