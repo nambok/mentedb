@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.1](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.27.0...mentedb-consolidation-v0.27.1) - 2026-07-24
+
+### Added
+
+- *(embed)* expose embed and embed_batch, honest benchmark timing ([#365](https://github.com/nambok/mentedb/pull/365))
+
 ## [0.23.0](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.22.1...mentedb-consolidation-v0.23.0) - 2026-07-22
 
 ### Added
