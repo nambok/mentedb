@@ -107,8 +107,29 @@ class MenteDB:
         """Recall memories using an MQL query string."""
         return self._db.recall(query)
 
+    def embed(self, text: str) -> list[float]:
+        """Embed a single text with the configured provider (hash fallback).
+
+        Useful to time embedding separately from the engine search, or to
+        precompute a vector to pass to ``store(embedding=...)``.
+        """
+        return self._db.embed(text)
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed many texts in one provider call, returned in input order.
+
+        Remote providers accept many inputs per request, so batching amortizes
+        the network round trip that otherwise dominates per item insert latency:
+        embed a batch, then ``store(content, embedding=vec)`` for each.
+        """
+        return self._db.embed_batch(texts)
+
     def search(self, embedding: list[float], k: int = 10):
-        """Vector similarity search. Returns a list of SearchResult."""
+        """Vector similarity search over a precomputed embedding.
+
+        Identical engine path to ``search_text`` without the embedding step,
+        so timing this isolates engine latency from provider round trips.
+        """
         return self._db.search(embedding, k)
 
     def search_text(self, query: str, k: int = 10, tags: list[str] | None = None,

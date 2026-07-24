@@ -1525,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb"
-version = "0.13.0"
+version = "0.26.0"
 dependencies = [
  "mentedb-cognitive",
  "mentedb-consolidation",
@@ -1538,6 +1538,8 @@ dependencies = [
  "mentedb-query",
  "mentedb-storage",
  "parking_lot",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
  "uuid",
@@ -1545,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-cognitive"
-version = "0.13.0"
+version = "0.26.0"
 dependencies = [
  "ahash",
  "crossbeam",
@@ -1560,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-consolidation"
-version = "0.13.0"
+version = "0.26.0"
 dependencies = [
  "ahash",
  "mentedb-core",
@@ -1571,7 +1573,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-context"
-version = "0.13.0"
+version = "0.26.0"
 dependencies = [
  "ahash",
  "mentedb-core",
@@ -1583,7 +1585,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-core"
-version = "0.13.0"
+version = "0.26.0"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1598,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-embedding"
-version = "0.13.0"
+version = "0.26.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1619,7 +1621,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-extraction"
-version = "0.13.0"
+version = "0.26.0"
 dependencies = [
  "mentedb-cognitive",
  "mentedb-core",
@@ -1635,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-graph"
-version = "0.13.0"
+version = "0.26.0"
 dependencies = [
  "ahash",
  "bincode",
@@ -1650,7 +1652,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-index"
-version = "0.13.0"
+version = "0.26.0"
 dependencies = [
  "ahash",
  "bincode",
@@ -1688,7 +1690,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-query"
-version = "0.13.0"
+version = "0.26.0"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -1699,7 +1701,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-storage"
-version = "0.13.0"
+version = "0.26.0"
 dependencies = [
  "ahash",
  "bincode",
@@ -1707,6 +1709,7 @@ dependencies = [
  "crc32fast",
  "crossbeam",
  "fs2",
+ "libc",
  "lz4_flex",
  "mentedb-core",
  "parking_lot",

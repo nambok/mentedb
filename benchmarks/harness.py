@@ -39,13 +39,37 @@ class MenteDBBenchmark:
             print("Or build from source: cd sdks/python && maturin develop")
             sys.exit(1)
     
-    def store(self, content, memory_type="semantic", tags=None, agent_id=None):
-        """Store a memory and return its ID."""
-        return self.db.store(content, memory_type=memory_type, tags=tags or [])
-    
+    def store(self, content, memory_type="semantic", tags=None, agent_id=None, embedding=None):
+        """Store a memory and return its ID.
+
+        Pass a precomputed ``embedding`` to skip the per item provider call,
+        so bulk inserts can batch embeddings up front (see embed_batch).
+        """
+        return self.db.store(content, memory_type=memory_type, tags=tags or [], embedding=embedding)
+
+    def embed(self, text):
+        """Embed one text through the configured provider (engine binding)."""
+        return self.db.embed(text)
+
+    def embed_batch(self, texts):
+        """Embed many texts in a single provider call, in input order."""
+        return self.db.embed_batch(texts)
+
+    def search_vec(self, embedding, limit=10):
+        """Engine only vector search over a precomputed embedding.
+
+        Same engine path as search_text minus the embedding step, so timing
+        this isolates engine latency from the provider round trip.
+        """
+        try:
+            results = self.db.search(embedding, limit)
+            return [(r.id, r.score) for r in results]
+        except Exception:
+            return []
+
     def search(self, query, limit=10):
         """Search memories using the real HNSW engine via search_text.
-        
+
         Uses hash embedding similarity search through the Rust engine.
         Superseded and contradicted memories are filtered out natively
         by the engine's graph-aware recall_similar.

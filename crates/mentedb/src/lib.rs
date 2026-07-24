@@ -787,6 +787,19 @@ impl MenteDb {
         }
     }
 
+    /// Generate embeddings for a batch of texts in a single provider call.
+    ///
+    /// Remote embedders accept many inputs per request, so batching amortizes
+    /// the network round trip that otherwise dominates per item insert latency.
+    /// The returned vectors are in the same order as the inputs. Returns None
+    /// if no provider is configured.
+    pub fn embed_batch(&self, texts: &[&str]) -> MenteResult<Option<Vec<Vec<f32>>>> {
+        match &self.embedder {
+            Some(e) => Ok(Some(e.embed_batch(texts)?)),
+            None => Ok(None),
+        }
+    }
+
     /// Stores a memory node into the database.
     ///
     /// The node is persisted to storage, added to all indexes, and registered

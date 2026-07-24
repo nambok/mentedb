@@ -47,7 +47,12 @@ QUERIES = [
 
 
 def run_provider(provider_name, api_key=None):
-    """Run accuracy test for a given provider. Returns (hits, total, avg_ms, details)."""
+    """Run accuracy test for a given provider.
+
+    Returns (hits, total, avg_search_ms, avg_embed_ms, details). The embedding
+    round trip and the engine search are timed separately so a remote provider's
+    network latency is not misattributed to the engine.
+    """
     import mentedb
 
     kwargs = {"embedding_provider": provider_name}
@@ -70,13 +75,18 @@ def run_provider(provider_name, api_key=None):
     hits = 0
     total = len(QUERIES)
     search_times = []
+    embed_times = []
     details = []
 
     for query, expected_present, expected_absent in QUERIES:
+        # Embedding (provider round trip) timed apart from the engine search.
         t0 = time.perf_counter()
-        results = db.search_text(query, 5)
-        elapsed = (time.perf_counter() - t0) * 1000
-        search_times.append(elapsed)
+        qvec = db.embed(query)
+        embed_times.append((time.perf_counter() - t0) * 1000)
+
+        t0 = time.perf_counter()
+        results = db.search(qvec, 5)
+        search_times.append((time.perf_counter() - t0) * 1000)
 
         filtered = [r for r in results if r.id not in superseded][:3]
         texts = []
@@ -92,8 +102,9 @@ def run_provider(provider_name, api_key=None):
             hits += 1
         details.append((query, passed, texts[0][:60] if texts else "no results"))
 
-    avg_ms = sum(search_times) / len(search_times)
-    return hits, total, avg_ms, details
+    avg_search = sum(search_times) / len(search_times)
+    avg_embed = sum(embed_times) / len(embed_times)
+    return hits, total, avg_search, avg_embed, details
 
 
 def main():
@@ -104,10 +115,10 @@ def main():
     # Candle (always available)
     print("\n--- Candle (all-MiniLM-L6-v2, local) ---")
     t0 = time.perf_counter()
-    c_hits, c_total, c_avg, c_details = run_provider("candle")
+    c_hits, c_total, c_avg, c_embed, c_details = run_provider("candle")
     c_total_ms = (time.perf_counter() - t0) * 1000
     print(f"  Accuracy: {c_hits}/{c_total} ({100*c_hits/c_total:.0f}%)")
-    print(f"  Avg search: {c_avg:.1f}ms")
+    print(f"  Avg engine search: {c_avg:.1f}ms  (+ {c_embed:.1f}ms local embed)")
     print(f"  Total time: {c_total_ms:.0f}ms")
     for q, passed, top in c_details:
         print(f"  {'PASS' if passed else 'FAIL'} | {q} -> {top}")
@@ -118,16 +129,17 @@ def main():
         print_result("Candle vs OpenAI", True, {
             "Candle accuracy": f"{c_hits}/{c_total} ({100*c_hits/c_total:.0f}%)",
             "OpenAI": "skipped (no API key)",
-            "Candle avg search": f"{c_avg:.1f}ms",
+            "Candle engine search": f"{c_avg:.1f}ms",
+            "Candle local embed": f"{c_embed:.1f}ms",
         })
         return
 
     print("\n--- OpenAI (text-embedding-3-small) ---")
     t0 = time.perf_counter()
-    o_hits, o_total, o_avg, o_details = run_provider("openai", os.environ["OPENAI_API_KEY"])
+    o_hits, o_total, o_avg, o_embed, o_details = run_provider("openai", os.environ["OPENAI_API_KEY"])
     o_total_ms = (time.perf_counter() - t0) * 1000
     print(f"  Accuracy: {o_hits}/{o_total} ({100*o_hits/o_total:.0f}%)")
-    print(f"  Avg search: {o_avg:.1f}ms")
+    print(f"  Avg engine search: {o_avg:.1f}ms  (+ {o_embed:.1f}ms OpenAI API round trip)")
     print(f"  Total time: {o_total_ms:.0f}ms")
     for q, passed, top in o_details:
         print(f"  {'PASS' if passed else 'FAIL'} | {q} -> {top}")
@@ -142,16 +154,13 @@ def main():
     else:
         verdict = "Tied"
 
-    speed_ratio = o_total_ms / c_total_ms if c_total_ms > 0 else 0
-
     print_result("Candle vs OpenAI", True, {
         "Candle accuracy": f"{c_hits}/{c_total} ({100*c_hits/c_total:.0f}%)",
         "OpenAI accuracy": f"{o_hits}/{o_total} ({100*o_hits/o_total:.0f}%)",
         "Verdict": verdict,
-        "Candle avg search": f"{c_avg:.1f}ms",
-        "OpenAI avg search": f"{o_avg:.1f}ms",
-        "Candle total": f"{c_total_ms:.0f}ms (no API calls)",
-        "OpenAI total": f"{o_total_ms:.0f}ms (includes API latency)",
+        "Engine search (both, no embed)": f"candle {c_avg:.1f}ms / openai {o_avg:.1f}ms",
+        "Query embed": f"candle {c_embed:.1f}ms local / openai {o_embed:.1f}ms API round trip",
+        "Note": "engine search is the same code path; only the embedder differs",
     })
 
 

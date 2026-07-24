@@ -28,6 +28,11 @@ TOPICS = [
     "logging", "ci-cd", "schema", "migration", "config",
 ]
 
+# Texts embedded per provider call. Remote embedders accept many inputs per
+# request, so one call per batch amortizes the network round trip that would
+# otherwise be paid once per memory.
+EMBED_BATCH = 512
+
 BELIEF_CHANGES = {
     500: ("Project alpha uses PostgreSQL for the database.", "Project alpha switched from PostgreSQL to CockroachDB."),
     1500: ("Project beta deploys on AWS ECS.", "Project beta moved from AWS ECS to Kubernetes on GCP."),
@@ -74,52 +79,55 @@ def run_scale_test(force_provider=None):
         embedding_model="text-embedding-3-small" if api_key else None,
     )
 
+    # Build the full ordered insert plan first so embeddings can be batched.
+    # Order within a turn matches the original: any belief original first, then
+    # the regular memory. Belief-change turns insert only the update.
+    ops = []  # (content, tags, role, change_turn)
+    for i in range(10000):
+        turn = generate_memory(i)
+        if i in BELIEF_CHANGES:
+            update_content = BELIEF_CHANGES[i][1]
+            ops.append((update_content, turn["tags"], "update", i))
+            continue
+        for change_turn, (original, _) in BELIEF_CHANGES.items():
+            if i == change_turn - 100:
+                ops.append((original, turn["tags"], "original", change_turn))
+        ops.append((turn["content"], turn["tags"], "regular", None))
+
+    # Phase 1: batch embed every memory. One provider call per EMBED_BATCH
+    # inputs amortizes the network round trip that a naive per item insert pays
+    # once per memory. This time is the embedding provider's, not the engine's.
+    print(f"  Embedding {len(ops)} memories in batches of {EMBED_BATCH}...")
+    contents = [c for (c, _, _, _) in ops]
+    embeddings = []
+    embed_start = time.time()
+    for j in range(0, len(contents), EMBED_BATCH):
+        embeddings.extend(bench.embed_batch(contents[j:j + EMBED_BATCH]))
+    total_embed = time.time() - embed_start
+
+    # Phase 2: store with precomputed embeddings. No provider call on the hot
+    # path, so this times the ENGINE write (storage + index + graph) only.
+    print(f"  Storing {len(ops)} memories (engine write only)...")
     belief_ids = {}
     insert_times = []
     total_start = time.time()
-
-    print(f"  Inserting 10,000 memories...")
-
-    for i in range(10000):
-        turn = generate_memory(i)
-
-        # Insert belief change originals before their supersession turn
-        if i in BELIEF_CHANGES:
-            original, _ = BELIEF_CHANGES[i]
-            # The original was inserted earlier, now insert the update
-            update_content = BELIEF_CHANGES[i][1]
-            t0 = time.time()
-            new_id = bench.store(update_content, memory_type="semantic", tags=turn["tags"])
-            insert_times.append(time.time() - t0)
-
-            if i in belief_ids:
-                bench.relate(new_id, belief_ids[i], "supersedes", weight=1.0)
-            continue
-
-        # Insert belief originals 100 turns before the change
-        for change_turn, (original, _) in BELIEF_CHANGES.items():
-            if i == change_turn - 100:
-                t0 = time.time()
-                orig_id = bench.store(original, memory_type="semantic", tags=turn["tags"])
-                insert_times.append(time.time() - t0)
-                belief_ids[change_turn] = orig_id
-
+    for idx, ((content, tags, role, change_turn), emb) in enumerate(zip(ops, embeddings)):
         t0 = time.time()
-        bench.store(turn["content"], memory_type=turn["type"], tags=turn["tags"])
+        new_id = bench.store(content, memory_type="semantic", tags=tags, embedding=emb)
         insert_times.append(time.time() - t0)
-
-        if (i + 1) % 500 == 0:
-            batch = insert_times[-500:]
-            avg = sum(batch) / len(batch) * 1000
-            elapsed = time.time() - total_start
-            rate = (i + 1) / elapsed
-            remaining = (10000 - i - 1) / rate if rate > 0 else 0
-            print(f"    {i+1}/10000 inserted (avg {avg:.2f}ms last 500, {elapsed:.0f}s elapsed, ~{remaining:.0f}s remaining)")
-
+        if role == "original":
+            belief_ids[change_turn] = new_id
+        elif role == "update" and change_turn in belief_ids:
+            bench.relate(new_id, belief_ids[change_turn], "supersedes", weight=1.0)
+        if (idx + 1) % 2000 == 0:
+            print(f"    {idx+1}/{len(ops)} stored")
     total_insert = time.time() - total_start
 
-    # Search tests
+    # Search tests. Time the provider embed and the engine search SEPARATELY:
+    # a single figure would be dominated by the provider round trip and hide
+    # the engine's real latency.
     search_times = []
+    embed_query_times = []
     stale_found = 0
     correct_found = 0
 
@@ -136,7 +144,11 @@ def run_scale_test(force_provider=None):
 
     for query, expected_keyword, stale_keyword in queries:
         t0 = time.time()
-        results = bench.search(query, limit=10)
+        qvec = bench.embed(query)
+        embed_query_times.append(time.time() - t0)
+
+        t0 = time.time()
+        results = bench.search_vec(qvec, 10)
         search_times.append(time.time() - t0)
 
         for rid, score in results:
@@ -150,14 +162,18 @@ def run_scale_test(force_provider=None):
 
     avg_insert = sum(insert_times) / len(insert_times) * 1000
     avg_search = sum(search_times) / len(search_times) * 1000
+    avg_query_embed = sum(embed_query_times) / len(embed_query_times) * 1000
+    embed_per_mem = total_embed / len(ops) * 1000
+    insert_rate = len(ops) / total_insert if total_insert > 0 else 0
 
     passed = stale_found == 0
     result = {
-        "Total memories": 10000,
+        "Total memories": len(ops),
         "Belief changes": len(BELIEF_CHANGES),
-        "Total insert time": f"{total_insert:.1f}s",
-        "Avg insert": f"{avg_insert:.2f}ms",
-        "Avg search (10K memories)": f"{avg_search:.2f}ms",
+        "Engine insert (write only)": f"{avg_insert:.2f}ms/mem ({insert_rate:.0f} mem/s)",
+        "Batch embed (provider)": f"{embed_per_mem:.2f}ms/mem amortized, {total_embed:.1f}s total",
+        "Engine search at 10K (no embed)": f"{avg_search:.2f}ms",
+        "Query embed (provider round trip)": f"{avg_query_embed:.2f}ms",
         "Correct beliefs found": correct_found,
         "Stale beliefs returned": stale_found,
         "Embedding provider": provider_label,
