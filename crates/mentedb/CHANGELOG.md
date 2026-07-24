@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.2](https://github.com/nambok/mentedb/compare/mentedb-v0.27.1...mentedb-v0.27.2) - 2026-07-24
+
+### Added
+
+- action-cued recall via recall_for_action ([#368](https://github.com/nambok/mentedb/pull/368))
+
 ## [0.27.1](https://github.com/nambok/mentedb/compare/mentedb-v0.27.0...mentedb-v0.27.1) - 2026-07-24
 
 ### Added
