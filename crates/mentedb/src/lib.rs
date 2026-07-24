@@ -1243,6 +1243,75 @@ impl MenteDb {
         self.recall_similar_filtered_at(embedding, k, now, tags, time_range)
     }
 
+    /// Standing rules for a class of agent actions: memories tagged
+    /// `trigger:<action>` (for example `trigger:git-commit`), scoped to the
+    /// querying agent and user, temporally valid now, newest first, capped
+    /// at `k`.
+    ///
+    /// This is the action-cued recall channel. Preferences about how to
+    /// perform an action ("no co-author trailers in commits") share no
+    /// semantic overlap with the conversation topic, so similarity recall
+    /// cannot surface them at the moment they apply, and `scope:always` would
+    /// inject them into every turn. Clients call this right before
+    /// performing the action (for example from a pre-tool hook) and inject
+    /// the results.
+    ///
+    /// Guarantees, chosen so the call is safe on any path:
+    /// - Read only: no counters or decay clocks are touched.
+    /// - O(matching rules), not a corpus scan: candidates come from the tag
+    ///   index and only candidates are loaded from storage.
+    /// - Same visibility semantics as every other scoped recall
+    ///   (`agent_visible` and `user_visible`): the agent's own rules plus
+    ///   account-global (nil-owned) rules, never another agent's.
+    /// - Superseded or invalidated rules are excluded via temporal validity,
+    ///   so a corrected preference stops firing the moment the correction
+    ///   lands.
+    /// - Newest first (tie-broken by id) so when write-time reconciliation
+    ///   kept both an old rule and its correction, the correction leads.
+    ///
+    /// An unknown or empty trigger returns an empty vec.
+    pub fn recall_for_action(
+        &self,
+        trigger: &str,
+        agent_id: Option<AgentId>,
+        user_id: Option<UserId>,
+        k: usize,
+    ) -> MenteResult<Vec<MemoryNode>> {
+        let trigger = trigger.trim().to_lowercase();
+        if trigger.is_empty() || k == 0 {
+            return Ok(Vec::new());
+        }
+        let tag = format!("trigger:{trigger}");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        let mut rules: Vec<MemoryNode> = Vec::new();
+        for id in self.index.bitmap.query_tag(&tag) {
+            let Ok(node) = self.get_memory(id) else {
+                continue;
+            };
+            // The bitmap can lag a tag removal (see count_standing_rules);
+            // trust the node, not the index.
+            if !node.tags.iter().any(|t| t == &tag) {
+                continue;
+            }
+            if !node.is_valid_at(now) {
+                continue;
+            }
+            if !agent_visible(node.agent_id, agent_id) {
+                continue;
+            }
+            if !user_visible(node.user_id, user_id) {
+                continue;
+            }
+            rules.push(node);
+        }
+        rules.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)));
+        rules.truncate(k);
+        Ok(rules)
+    }
+
     /// Vector similarity search at a specific point in time.
     ///
     /// Only returns memories that were temporally valid at the given timestamp.
