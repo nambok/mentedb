@@ -833,26 +833,33 @@ Multi-session reasoning is the weakest category: synthesizing facts scattered ac
 
 **How we measured:** each conversation is ingested chronologically with timestamps; MenteDB extracts memories (gpt-4o-mini) into vectors, BM25, and graph. For each question it runs hybrid retrieval (BM25 + vector, RRF-merged, time-filtered to memories dated before the question) and answers with gpt-4o. Embeddings are text-embedding-3-small. Grading uses the official LongMemEval judge, unmodified. The raw per-question hypotheses and judge labels are committed under `benchmarks/longmemeval/results/` for audit.
 
-### 10K Scale Test (OpenAI text-embedding-3-small)
+### 10K Scale Test (engine latency vs embedding provider)
+
+Run: `python3 benchmarks/scale_10k.py candle` (local Candle embeddings, no API key). The embedding round trip is timed separately from the engine, so the two are never conflated. A remote provider (OpenAI, Cohere) swaps the local embed for a network call of a few hundred ms, but the engine numbers below are unchanged.
 
 | Metric | Value |
 |--------|-------|
-| Total memories | 10,000 |
-| Avg insert | 457ms (includes OpenAI API round trip) |
-| Avg search at 10K | 431ms |
-| Belief changes | 6/6 correctly tracked |
+| Total memories | 10,006 |
+| Engine search at 10K (no embed) | 1.05ms |
+| Engine insert, full write pipeline (no embed) | 13.9ms/mem |
+| Query embed (local Candle, per query) | 40ms |
+| Batch embed (amortized, one provider call per 512 inputs) | 30ms/mem |
+| Belief supersessions tracked | 6/6 |
 | Stale beliefs returned | 0 |
+
+Engine search stays near 1ms at 10,000 memories. An earlier version of this table reported roughly 431ms search: that figure was almost entirely the OpenAI round trip to embed the query, not engine work. Bulk inserts precompute embeddings in one batched provider call and pass them to `store(embedding=...)`, so the per item network round trip is paid once per batch instead of once per memory. To reproduce with OpenAI embeddings, set `OPENAI_API_KEY` before running.
 
 ### Candle (Local) vs OpenAI Embedding Quality
 
 | Metric | Candle (all-MiniLM-L6-v2) | OpenAI (text-embedding-3-small) |
 |--------|---------------------------|----------------------------------|
-| Retrieval accuracy | 62% (5/8) | Requires API key to compare |
-| Avg search | 41ms | 431ms (includes API latency) |
+| Retrieval accuracy (8 queries) | 62% (5/8) | Requires API key to compare |
+| Engine search (identical code path) | 0.3ms | 0.3ms |
+| Query embed | 39ms (local, no network) | network round trip (hundreds of ms) |
 | Setup required | None (auto-downloads model) | OPENAI_API_KEY |
 | Cost | Free | ~$0.02 per 1M tokens |
 
-Candle provides good quality for zero-config local use. OpenAI offers higher accuracy for production workloads. Run `python3 benchmarks/candle_vs_openai.py` with OPENAI_API_KEY set to get a head-to-head comparison.
+The engine search is the same for both providers, so the practical difference is embed latency (local model vs API round trip) and retrieval quality. Candle is zero-config and free but a smaller 384-dim model; OpenAI trades an API round trip for higher accuracy. Run `python3 benchmarks/candle_vs_openai.py` with OPENAI_API_KEY set for a head-to-head comparison.
 
 ### Performance Benchmarks (Criterion)
 

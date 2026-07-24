@@ -306,6 +306,30 @@ impl MenteDB {
             .collect())
     }
 
+    /// Embed a single text with the configured provider (hash fallback when
+    /// none is configured). Lets callers time embedding separately from the
+    /// engine search, or precompute a vector to pass to `store(embedding=...)`.
+    fn embed(&self, text: &str) -> PyResult<Vec<f32>> {
+        Ok(match self.embedder {
+            Some(ref e) => e.embed(text).map_err(to_pyerr)?,
+            None => hash_embedding(text, 384),
+        })
+    }
+
+    /// Embed many texts in a single provider call, returned in input order.
+    /// Remote providers accept many inputs per request, so this amortizes the
+    /// network round trip that otherwise dominates per item insert latency:
+    /// embed a batch, then `store(content, embedding=vec)` for each.
+    fn embed_batch(&self, texts: Vec<String>) -> PyResult<Vec<Vec<f32>>> {
+        Ok(match self.embedder {
+            Some(ref e) => {
+                let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+                e.embed_batch(&refs).map_err(to_pyerr)?
+            }
+            None => texts.iter().map(|t| hash_embedding(t, 384)).collect(),
+        })
+    }
+
     /// Text-based similarity search using the configured embedding provider.
     /// Uses OpenAI/Cohere/Voyage if configured, falls back to hash embedding.
     #[pyo3(signature = (query, k=10, tags=None, after=None, before=None))]
