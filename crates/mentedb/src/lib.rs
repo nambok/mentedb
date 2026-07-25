@@ -123,6 +123,9 @@ pub(crate) mod mmr;
 /// Structured export: fill a JSON schema from memories via an embedder-supplied LLM.
 pub mod export;
 
+/// Agent file ingestion: instruction files become on demand memories.
+pub mod agent_file;
+
 /// Lease-based elastic sharding: places each account on exactly one node and
 /// coordinates ownership so a fleet can scale horizontally. The engine owns the
 /// placement and coordination logic; the embedder supplies the lease and

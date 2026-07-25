@@ -107,6 +107,27 @@ class MenteDB:
         """Recall memories using an MQL query string."""
         return self._db.recall(query)
 
+    def ingest_agent_file(self, content: str, agent_id: str | None = None,
+                          source_tag: str | None = None) -> dict:
+        """Ingest an agent instruction file (CLAUDE.md, AGENTS.md,
+        .cursorrules) as individual memories.
+
+        Atomic statements with section provenance, action trigger tags where
+        rules govern an action (``trigger:git-commit``), nothing pinned to
+        every turn. Re ingesting an edited file deduplicates instead of
+        duplicating. Returns the ingest report as a dict.
+        """
+        return self._db.ingest_agent_file(content, agent_id, source_tag)
+
+    def recall_for_action(self, trigger: str, agent_id: str | None = None,
+                          k: int = 6) -> list[dict]:
+        """Standing rules for a class of agent actions.
+
+        Memories tagged ``trigger:<action>`` for the moment the agent
+        performs that action, newest first, superseded rules excluded.
+        """
+        return self._db.recall_for_action(trigger, agent_id, k)
+
     def embed(self, text: str) -> list[float]:
         """Embed a single text with the configured provider (hash fallback).
 
