@@ -599,7 +599,7 @@ impl MenteDb {
 /// any language, any kind of agent, atomic self contained memories, open
 /// trigger vocabulary, JSON only.
 #[cfg(feature = "enrichment")]
-const AGENT_FILE_PROMPT: &str = "You parse agent instruction files into individual memories for a memory database. The file may be in ANY format (markdown, plain text, YAML, JSON persona, numbered lists), ANY language, for ANY kind of agent (coding assistant, customer support, sales, trading, scheduling, personal).\n\nReturn ONLY a JSON array. Each element:\n{\"content\": string, \"type\": \"semantic\" | \"procedural\" | \"anti_pattern\", \"trigger\": optional string}\n\nRules:\n- One atomic instruction or fact per element. Split compound rules.\n- content must be self contained: include the context needed to apply it alone (which project, product, tool, or situation it belongs to). Preserve the meaning exactly; keep concrete values, names, numbers, and commands; never invent or generalize away specifics.\n- type: anti_pattern for things the agent must never do; procedural for how to do something, workflows, commands, and rules of conduct; semantic for facts, preferences, and background.\n- trigger: set ONLY when the rule governs one specific recurring action the agent performs, and name that action as a short lowercase kebab case slug. Examples across domains: git-commit, pr-create, order-refund, ticket-escalation, trade-entry, email-send, meeting-schedule. When in doubt, omit trigger.\n- Skip pure formatting, tables of contents, and import references.\n- Output the JSON array only. No markdown fences, no commentary.";
+const AGENT_FILE_PROMPT: &str = "You parse agent instruction files into individual memories for a memory database. The file may be in ANY format (markdown, plain text, YAML, JSON persona, numbered lists), ANY language, for ANY kind of agent (coding assistant, customer support, sales, trading, scheduling, personal).\n\nReturn ONLY a JSON array. Each element:\n{\"content\": string, \"type\": \"semantic\" | \"procedural\" | \"anti_pattern\", \"trigger\": optional string, \"exemplars\": optional array of strings}\n\nRules:\n- One atomic instruction or fact per element. Split compound rules.\n- content must be self contained: include the context needed to apply it alone (which project, product, tool, or situation it belongs to). Preserve the meaning exactly; keep concrete values, names, numbers, and commands; never invent or generalize away specifics.\n- type: anti_pattern for things the agent must never do; procedural for how to do something, workflows, commands, and rules of conduct; semantic for facts, preferences, and background.\n- trigger: set ONLY when the rule governs one specific recurring action or activity of the agent, and name it as a short lowercase kebab case slug. Examples across domains: git-commit, pr-create, order-refund, ticket-escalation, trade-entry, email-send, meeting-schedule, code-change, reply-style. When in doubt, omit trigger.\n- exemplars: when you set a trigger for a standing directive that governs a whole activity (a way of working or replying rather than one discrete command), also give 3 to 5 short example user requests that would enter that activity, phrased the way real users ask (for code-change: \"fix this bug in the auth flow\", \"refactor the retry logic\"). Omit for narrow tool actions.\n- Skip pure formatting, tables of contents, and import references.\n- Output the JSON array only. No markdown fences, no commentary.";
 
 /// Split a large file into LLM sized chunks at section boundaries so no
 /// rule is cut in half.
@@ -680,12 +680,14 @@ fn parse_llm_atoms(raw: &str, opts: &AgentFileIngestOptions) -> Vec<AgentFileAto
             _ => MemoryType::Semantic,
         };
         let mut tags = Vec::new();
+        let mut trigger_slug = None;
         if let Some(trigger) = item
             .get("trigger")
             .and_then(|t| t.as_str())
             .and_then(valid_trigger)
         {
             tags.push(format!("trigger:{trigger}"));
+            trigger_slug = Some(trigger);
         }
         atoms.push(AgentFileAtom {
             section: String::new(),
@@ -694,6 +696,29 @@ fn parse_llm_atoms(raw: &str, opts: &AgentFileIngestOptions) -> Vec<AgentFileAto
             memory_type,
             tags,
         });
+        // Standing directives arrive with exemplar turns: short example
+        // requests that enter the mode. They are stored as activation
+        // anchors for the injection mode channel (mode-exemplar tags keep
+        // them out of ordinary context), never as instructions.
+        if let (Some(trigger), Some(exemplars)) = (
+            trigger_slug,
+            item.get("exemplars").and_then(|e| e.as_array()),
+        ) {
+            for ex in exemplars.iter().take(6) {
+                let Some(text) = ex.as_str() else { continue };
+                let text = text.trim();
+                if text.len() < 4 || text.len() > 400 {
+                    continue;
+                }
+                atoms.push(AgentFileAtom {
+                    section: String::new(),
+                    text: text.to_string(),
+                    content: text.to_string(),
+                    memory_type: MemoryType::Semantic,
+                    tags: vec![format!("mode-exemplar:{trigger}")],
+                });
+            }
+        }
     }
     atoms
 }

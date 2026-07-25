@@ -87,6 +87,15 @@ pub struct InjectionConfig {
     /// fraction of that hit's score times the edge weight. Keeps neighbors below
     /// direct hits so they only win a slot when there is room after them.
     pub graph_expansion_decay: f32,
+    /// Mode rules: standing directives bound to an activity (working on
+    /// code, composing a reply) carry `trigger:` tags, and a trigger is
+    /// active for a turn when the turn's embedding lands within this cosine
+    /// of one of that trigger's own rules. Self defining and cognitive,
+    /// the rules are their own anchors, no pattern matching anywhere.
+    /// Embedder coupled like every absolute gate. 0 disables the channel.
+    pub mode_trigger_gate: f32,
+    /// Maximum mode rules injected per turn across all active triggers.
+    pub mode_rules_max: usize,
 }
 
 impl Default for InjectionConfig {
@@ -106,6 +115,8 @@ impl Default for InjectionConfig {
             use_reinforcement: 0.05,
             graph_expansion_max: 0,
             graph_expansion_decay: 0.5,
+            mode_trigger_gate: 0.40,
+            mode_rules_max: 4,
         }
     }
 }
@@ -146,6 +157,9 @@ pub enum SelectionReason {
     Pinned,
     /// Survived the relevance knee, MMR, and quotas.
     Relevant,
+    /// A standing directive whose activity mode is active for this turn:
+    /// the turn's embedding landed within the mode gate of the rule.
+    ModeRule,
 }
 
 /// One injection-ready memory with its selection metadata.
@@ -303,6 +317,7 @@ impl MenteDb {
             if has_tag(&node, "action")
                 || has_tag(&node, "scope:always")
                 || has_tag(&node, "ghost-memory")
+                || node.tags.iter().any(|t| t.starts_with("mode-exemplar:"))
             {
                 // Actions never inject; pinned items are handled separately.
                 // Ghost memories are speculative working material for the
@@ -476,6 +491,84 @@ impl MenteDb {
                 });
             }
         }
+        // Mode rules: standing directives bound to an activity rather than a
+        // topic or a tool moment. "Longterm fixes only" must fire for "fix
+        // the login timeout" even though they share no words; the turn's
+        // embedding landing near the rule's own stored embedding is the
+        // activation, cognitive and self defining, dot products only.
+        if cfg.mode_trigger_gate > 0.0 && !query.embedding.is_empty() {
+            let now = now_us();
+            let mut mode_rules: Vec<(f32, MemoryNode)> = Vec::new();
+            for tag in self.index.bitmap.tags_with_prefix("trigger:") {
+                let trigger = tag.trim_start_matches("trigger:");
+                // Activation signal: the trigger's exemplar turns when it
+                // has any (model emitted examples of requests that enter
+                // this mode; a turn matching a turn is the strong signal,
+                // measured), otherwise the rules' own embeddings.
+                let exemplar_tag = format!("mode-exemplar:{trigger}");
+                let mut activation = f32::MIN;
+                let exemplar_ids = self.index.bitmap.query_tag(&exemplar_tag);
+                if exemplar_ids.is_empty() {
+                    for mid in self.index.bitmap.query_tag(&tag) {
+                        if let Ok(node) = self.get_memory(mid)
+                            && node.is_valid_at(now)
+                            && !node.embedding.is_empty()
+                            && crate::agent_visible(node.agent_id, query.agent_id)
+                            && crate::user_visible(node.user_id, query.user_id)
+                        {
+                            let sim = cosine_similarity(query.embedding, &node.embedding);
+                            activation = activation.max(sim);
+                        }
+                    }
+                } else {
+                    for mid in exemplar_ids {
+                        if let Ok(node) = self.get_memory(mid)
+                            && node.is_valid_at(now)
+                            && !node.embedding.is_empty()
+                            && crate::agent_visible(node.agent_id, query.agent_id)
+                            && crate::user_visible(node.user_id, query.user_id)
+                        {
+                            let sim = cosine_similarity(query.embedding, &node.embedding);
+                            activation = activation.max(sim);
+                        }
+                    }
+                }
+                if activation < cfg.mode_trigger_gate {
+                    continue;
+                }
+                // The mode is active: inject its RULES (never exemplars).
+                for mid in self.index.bitmap.query_tag(&tag) {
+                    if excluded.contains(&mid)
+                        || result.iter().any(|c| c.node.id == mid)
+                        || selected.iter().any(|c| c.node.id == mid)
+                        || mode_rules.iter().any(|(_, n)| n.id == mid)
+                    {
+                        continue;
+                    }
+                    let Ok(node) = self.get_memory(mid) else {
+                        continue;
+                    };
+                    if !node.tags.iter().any(|t| t == &tag)
+                        || !node.is_valid_at(now)
+                        || !crate::agent_visible(node.agent_id, query.agent_id)
+                        || !crate::user_visible(node.user_id, query.user_id)
+                    {
+                        continue;
+                    }
+                    mode_rules.push((activation, node));
+                }
+            }
+            mode_rules.sort_by(|a, b| b.0.total_cmp(&a.0));
+            mode_rules.truncate(cfg.mode_rules_max);
+            for (sim, node) in mode_rules {
+                result.push(InjectionCandidate {
+                    node,
+                    score: sim,
+                    reason: SelectionReason::ModeRule,
+                });
+            }
+        }
+
         result.extend(selected);
         Ok(result)
     }
