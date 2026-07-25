@@ -22,3 +22,4 @@ cargo_errors.txt
 .venv/
 __pycache__/
 *.dSYM/
+.claude/
