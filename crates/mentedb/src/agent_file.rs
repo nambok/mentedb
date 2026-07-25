@@ -106,6 +106,10 @@ pub struct AgentFileIngestReport {
     pub avg_memory_token_estimate: usize,
     /// Which parser produced the atoms: "llm" or "deterministic".
     pub parsed_by: &'static str,
+    /// The distinct action trigger names assigned, so callers can discover
+    /// the open vocabulary the parser chose ("order-refund",
+    /// "ticket-escalation") instead of guessing slugs.
+    pub triggers: Vec<String>,
     /// Number of chunks sent to the LLM (zero for the deterministic parser).
     pub llm_chunks: usize,
 }
@@ -224,6 +228,9 @@ fn segment(md: &str) -> Vec<(String, String)> {
     let mut buf_is_bullet = false;
     let mut in_code = false;
     let mut code_buf: Vec<String> = Vec::new();
+    // True when the line directly above the opening fence held text (no
+    // blank line between): only that text is a caption for the block.
+    let mut caption_adjacent = false;
 
     fn section_of(path: &[(usize, String)]) -> String {
         path.iter()
@@ -258,11 +265,31 @@ fn segment(md: &str) -> Vec<(String, String)> {
             if in_code {
                 let code = code_buf.join("\n").trim().to_string();
                 if !code.is_empty() {
-                    out.push((section_of(&path), format!("code: {code}")));
+                    // Fuse the block with the short caption right above it
+                    // ("Run these before committing:"), so the commands are
+                    // retrievable from natural language questions instead of
+                    // embedding as bare code.
+                    let caption = match out.last() {
+                        Some((sec, text))
+                            if caption_adjacent
+                                && *sec == section_of(&path)
+                                && text.len() <= 120
+                                && !text.starts_with("code: ") =>
+                        {
+                            Some(out.pop().expect("last exists").1)
+                        }
+                        _ => None,
+                    };
+                    let content = match caption {
+                        Some(c) => format!("{c} code: {code}"),
+                        None => format!("code: {code}"),
+                    };
+                    out.push((section_of(&path), content));
                 }
                 code_buf.clear();
                 in_code = false;
             } else {
+                caption_adjacent = !buf.is_empty();
                 flush(&mut buf, &mut buf_is_bullet, &mut out, &section_of(&path));
                 in_code = true;
             }
@@ -535,8 +562,11 @@ impl MenteDb {
                 MemoryType::AntiPattern => report.anti_pattern += 1,
                 _ => report.semantic += 1,
             }
-            if atom.tags.iter().any(|t| t.starts_with("trigger:")) {
+            if let Some(trigger) = atom.tags.iter().find_map(|t| t.strip_prefix("trigger:")) {
                 report.trigger_tagged += 1;
+                if !report.triggers.iter().any(|t| t == trigger) {
+                    report.triggers.push(trigger.to_string());
+                }
             }
         }
         let after = self.count_by_tag(&opts.source_tag);
@@ -569,7 +599,7 @@ impl MenteDb {
 /// any language, any kind of agent, atomic self contained memories, open
 /// trigger vocabulary, JSON only.
 #[cfg(feature = "enrichment")]
-const AGENT_FILE_PROMPT: &str = "You parse agent instruction files into individual memories for a memory database. The file may be in ANY format (markdown, plain text, YAML, JSON persona, numbered lists), ANY language, for ANY kind of agent (coding assistant, customer support, sales, trading, scheduling, personal).\n\nReturn ONLY a JSON array. Each element:\n{\"content\": string, \"type\": \"semantic\" | \"procedural\" | \"anti_pattern\", \"trigger\": optional string}\n\nRules:\n- One atomic instruction or fact per element. Split compound rules.\n- content must be self contained: include the context needed to apply it alone (which project, product, tool, or situation it belongs to). Preserve the meaning exactly; keep concrete values, names, numbers, and commands; never invent or generalize away specifics.\n- type: anti_pattern for things the agent must never do; procedural for how to do something, workflows, commands, and rules of conduct; semantic for facts, preferences, and background.\n- trigger: set ONLY when the rule governs one specific recurring action the agent performs, and name that action as a short lowercase kebab case slug. Examples across domains: git-commit, pr-create, order-refund, ticket-escalation, trade-entry, email-send, meeting-schedule. When in doubt, omit trigger.\n- Skip pure formatting, tables of contents, and import references.\n- Output the JSON array only. No markdown fences, no commentary.";
+const AGENT_FILE_PROMPT: &str = "You parse agent instruction files into individual memories for a memory database. The file may be in ANY format (markdown, plain text, YAML, JSON persona, numbered lists), ANY language, for ANY kind of agent (coding assistant, customer support, sales, trading, scheduling, personal).\n\nReturn ONLY a JSON array. Each element:\n{\"content\": string, \"type\": \"semantic\" | \"procedural\" | \"anti_pattern\", \"trigger\": optional string, \"exemplars\": optional array of strings}\n\nRules:\n- One atomic instruction or fact per element. Split compound rules.\n- content must be self contained: include the context needed to apply it alone (which project, product, tool, or situation it belongs to). Preserve the meaning exactly; keep concrete values, names, numbers, and commands; never invent or generalize away specifics.\n- type: anti_pattern for things the agent must never do; procedural for how to do something, workflows, commands, and rules of conduct; semantic for facts, preferences, and background.\n- trigger: set ONLY when the rule governs one specific recurring action or activity of the agent, and name it as a short lowercase kebab case slug. Examples across domains: git-commit, pr-create, order-refund, ticket-escalation, trade-entry, email-send, meeting-schedule, code-change, reply-style. When in doubt, omit trigger.\n- exemplars: when you set a trigger for a standing directive that governs a whole activity (a way of working or replying rather than one discrete command), also give 3 to 5 short example user requests that would enter that activity, phrased the way real users ask (for code-change: \"fix this bug in the auth flow\", \"refactor the retry logic\"). Omit for narrow tool actions.\n- Skip pure formatting, tables of contents, and import references.\n- Output the JSON array only. No markdown fences, no commentary.";
 
 /// Split a large file into LLM sized chunks at section boundaries so no
 /// rule is cut in half.
@@ -650,12 +680,14 @@ fn parse_llm_atoms(raw: &str, opts: &AgentFileIngestOptions) -> Vec<AgentFileAto
             _ => MemoryType::Semantic,
         };
         let mut tags = Vec::new();
+        let mut trigger_slug = None;
         if let Some(trigger) = item
             .get("trigger")
             .and_then(|t| t.as_str())
             .and_then(valid_trigger)
         {
             tags.push(format!("trigger:{trigger}"));
+            trigger_slug = Some(trigger);
         }
         atoms.push(AgentFileAtom {
             section: String::new(),
@@ -664,6 +696,29 @@ fn parse_llm_atoms(raw: &str, opts: &AgentFileIngestOptions) -> Vec<AgentFileAto
             memory_type,
             tags,
         });
+        // Standing directives arrive with exemplar turns: short example
+        // requests that enter the mode. They are stored as activation
+        // anchors for the injection mode channel (mode-exemplar tags keep
+        // them out of ordinary context), never as instructions.
+        if let (Some(trigger), Some(exemplars)) = (
+            trigger_slug,
+            item.get("exemplars").and_then(|e| e.as_array()),
+        ) {
+            for ex in exemplars.iter().take(6) {
+                let Some(text) = ex.as_str() else { continue };
+                let text = text.trim();
+                if text.len() < 4 || text.len() > 400 {
+                    continue;
+                }
+                atoms.push(AgentFileAtom {
+                    section: String::new(),
+                    text: text.to_string(),
+                    content: text.to_string(),
+                    memory_type: MemoryType::Semantic,
+                    tags: vec![format!("mode-exemplar:{trigger}")],
+                });
+            }
+        }
     }
     atoms
 }
@@ -737,6 +792,30 @@ mod tests {
         assert!(
             rejoined as f64 > text.len() as f64 * 0.95,
             "splitting must not lose content"
+        );
+    }
+
+    #[test]
+    fn code_blocks_fuse_with_adjacent_captions_only() {
+        // Adjacent caption, no blank line: fused into one retrievable atom.
+        let md = "# Ops\n\nRun these before committing:\n```bash\ncargo test\n```\n";
+        let segs = segment(md);
+        assert!(
+            segs.iter()
+                .any(|(_, t)| t.contains("before committing") && t.contains("code: cargo test")),
+            "adjacent caption must fuse with its code block: {segs:?}"
+        );
+        // Blank line between: the bullet is not a caption, the block stands
+        // alone.
+        let md = "# Ops\n\n- Use thiserror for error types\n\n```bash\ncargo test\n```\n";
+        let segs = segment(md);
+        assert!(
+            segs.iter().any(|(_, t)| t == "code: cargo test"),
+            "non adjacent block stays bare: {segs:?}"
+        );
+        assert!(
+            segs.iter().any(|(_, t)| t.contains("thiserror")),
+            "the bullet survives on its own: {segs:?}"
         );
     }
 

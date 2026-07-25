@@ -140,3 +140,34 @@ async fn unusable_completion_falls_back_to_deterministic() {
     );
     assert!(report.stored >= 2);
 }
+
+#[tokio::test]
+async fn exemplars_store_as_activation_anchors_not_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+
+    let provider = CannedProvider {
+        response: r#"[
+  {"content": "When changing code, make longterm root cause fixes only, never quick patches", "type": "procedural", "trigger": "code-change", "exemplars": ["fix this bug in the auth flow", "refactor the retry logic", "add rate limiting to the API"]},
+  {"content": "Commit messages are a single line with a conventional prefix", "type": "procedural", "trigger": "git-commit"}
+]"#
+        .to_string(),
+        calls: AtomicUsize::new(0),
+    };
+    let opts = AgentFileIngestOptions::default();
+    let report = db
+        .ingest_agent_file_llm("# Ways of working\n", &opts, &provider)
+        .await
+        .unwrap();
+    assert_eq!(report.parsed_by, "llm");
+    // 2 rules + 3 exemplars all stored through the normal pipeline.
+    assert_eq!(report.stored, 5, "{report:?}");
+
+    // Exemplars carry the mode-exemplar tag for their trigger and never the
+    // trigger tag itself, so the action channel returns only real rules.
+    let rules = db.recall_for_action("code-change", None, None, 10).unwrap();
+    assert_eq!(rules.len(), 1, "{rules:?}");
+    assert!(rules[0].content.contains("root cause"));
+    let anchors = db.recall_for_action("git-commit", None, None, 10).unwrap();
+    assert_eq!(anchors.len(), 1, "{anchors:?}");
+}

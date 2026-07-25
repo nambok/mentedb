@@ -113,10 +113,31 @@ fn now_us() -> Timestamp {
 // MenteDB
 // ---------------------------------------------------------------------------
 
+/// Shares one embedding provider between the wrapper (which embeds queries
+/// and store() content) and the engine (which embeds for ingest, anchors,
+/// and calibration). Before this, the engine received a hash stand-in and
+/// every engine side embedding for SDK users was non semantic.
+struct SharedEmbedder(std::sync::Arc<dyn EmbeddingProvider>);
+
+impl EmbeddingProvider for SharedEmbedder {
+    fn embed(&self, text: &str) -> mentedb_core::error::MenteResult<Vec<f32>> {
+        self.0.embed(text)
+    }
+    fn embed_batch(&self, texts: &[&str]) -> mentedb_core::error::MenteResult<Vec<Vec<f32>>> {
+        self.0.embed_batch(texts)
+    }
+    fn dimensions(&self) -> usize {
+        self.0.dimensions()
+    }
+    fn model_name(&self) -> &str {
+        self.0.model_name()
+    }
+}
+
 #[pyclass]
 struct MenteDB {
     db: Option<MenteDb>,
-    embedder: Option<Box<dyn EmbeddingProvider>>,
+    embedder: Option<std::sync::Arc<dyn EmbeddingProvider>>,
     delta_tracker: Mutex<DeltaTracker>,
 }
 
@@ -195,14 +216,21 @@ impl MenteDB {
         // An explicit `dimension` lets callers bring their own embeddings at an
         // arbitrary size (for example a 4096-dim external embedder), overriding
         // the provider-derived or default 384 vector dimension.
-        let embedder: Option<Box<dyn EmbeddingProvider>> = if let Some(d) = dimension {
+        let embedder: Option<std::sync::Arc<dyn EmbeddingProvider>> = if let Some(d) = dimension {
+            // Explicit dimension means bring your own vectors: the engine
+            // only needs the dimension, so a hash placeholder is correct.
             db.set_embedder(Box::new(HashEmbeddingProvider::new(d)));
-            Some(Box::new(HashEmbeddingProvider::new(d)))
+            Some(std::sync::Arc::new(HashEmbeddingProvider::new(d)))
         } else {
-            if let Some(ref e) = embedder {
-                db.set_embedder(Box::new(HashEmbeddingProvider::new(e.dimensions())));
+            let shared: Option<std::sync::Arc<dyn EmbeddingProvider>> =
+                embedder.map(std::sync::Arc::from);
+            if let Some(ref e) = shared {
+                // The engine gets the SAME provider, not a stand in, so
+                // engine side embedding (agent file ingest, trigger anchors,
+                // calibration) is as semantic as the wrapper side.
+                db.set_embedder(Box::new(SharedEmbedder(e.clone())));
             }
-            embedder
+            shared
         };
         Ok(Self {
             db: Some(db),
@@ -341,6 +369,9 @@ impl MenteDB {
             dict.set_item("sections", report.sections)?;
             dict.set_item("file_token_estimate", report.file_token_estimate)?;
             dict.set_item("avg_memory_token_estimate", report.avg_memory_token_estimate)?;
+            dict.set_item("parsed_by", report.parsed_by)?;
+            dict.set_item("llm_chunks", report.llm_chunks)?;
+            dict.set_item("triggers", report.triggers.clone())?;
             Ok(dict.into())
         })
     }

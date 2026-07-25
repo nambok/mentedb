@@ -83,6 +83,19 @@ impl BitmapIndex {
         }
     }
 
+    /// All tags currently indexed that start with the given prefix. Cheap:
+    /// one pass over the tag key set, used to enumerate small controlled
+    /// vocabularies like the `trigger:` namespace.
+    pub fn tags_with_prefix(&self, prefix: &str) -> Vec<String> {
+        let inner = self.inner.read();
+        inner
+            .tag_bitmaps
+            .keys()
+            .filter(|t| t.starts_with(prefix))
+            .cloned()
+            .collect()
+    }
+
     /// Get memory ids that have ALL given tags (intersection).
     pub fn query_tags_and(&self, tags: &[&str]) -> Vec<MemoryId> {
         let inner = self.inner.read();
