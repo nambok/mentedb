@@ -376,6 +376,22 @@ impl MenteDB {
         })
     }
 
+    /// Nearest neighbours for an explicit embedding: query in whatever
+    /// embedding space the caller stored with, independent of the engine's
+    /// configured provider. Returns (id, score) pairs.
+    #[pyo3(signature = (embedding, k = 10))]
+    fn recall_similar(&self, embedding: Vec<f32>, k: usize) -> PyResult<Vec<(String, f32)>> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let hits = db.recall_similar(&embedding, k).map_err(to_pyerr)?;
+        Ok(hits
+            .into_iter()
+            .map(|(id, score)| (id.to_string(), score))
+            .collect())
+    }
+
     /// Injection ready context for a turn: relevance selection, pins, and
     /// mode rules, exactly what get_injection_context serves in production.
     /// Returns a list of dicts with content, reason, and score.
