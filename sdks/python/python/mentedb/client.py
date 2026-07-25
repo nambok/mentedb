@@ -119,6 +119,10 @@ class MenteDB:
         """
         return self._db.ingest_agent_file(content, agent_id, source_tag)
 
+    def recall_similar(self, embedding: list[float], k: int = 10) -> list[tuple[str, float]]:
+        """Nearest neighbours for an explicit embedding, any embedding space."""
+        return self._db.recall_similar(embedding, k)
+
     def recall_for_injection(self, query: str, k: int = 8,
                              agent_id: str | None = None) -> list[dict]:
         """Injection ready context for a turn: relevance, pins, mode rules.
