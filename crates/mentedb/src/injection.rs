@@ -57,6 +57,12 @@ pub struct InjectionConfig {
     /// section holding half the file dominates any head trivially and its
     /// siblings are arbitrary, not coherent.
     pub cluster_max_span: usize,
+    /// Score multiplier for memories owned by the querying agent. On an
+    /// agent scoped query the agent's own knowledge (its ingested rules,
+    /// its facts) must not be crowded out of the candidate ranking by the
+    /// account's shared nil owned memories; measured on a busy account,
+    /// shared memories otherwise flood the relevant slots. 1.0 disables.
+    pub own_agent_boost: f32,
     /// MMR relevance weight; the remainder weighs redundancy.
     pub mmr_lambda: f32,
     /// Consecutive score ratio treated as the relevance knee.
@@ -120,6 +126,7 @@ impl Default for InjectionConfig {
             cluster_dominant_fraction: 0.0,
             cluster_fill_max: 4,
             cluster_max_span: 12,
+            own_agent_boost: 1.25,
             mmr_lambda: 0.7,
             knee_gap_ratio: 2.0,
             demotion_shown_min: 5,
@@ -358,11 +365,17 @@ impl MenteDb {
             if shown >= cfg.demotion_drop_shown && used == 0 {
                 continue;
             }
-            let adjusted = if shown >= cfg.demotion_shown_min && used == 0 {
+            let mut adjusted = if shown >= cfg.demotion_shown_min && used == 0 {
                 score * cfg.demotion_factor
             } else {
                 score
             };
+            if let Some(agent) = query.agent_id
+                && node.agent_id == agent
+                && !agent.0.is_nil()
+            {
+                adjusted *= cfg.own_agent_boost;
+            }
             let cos = cosine_similarity(query.embedding, &node.embedding);
             candidates.push((node, adjusted, cos));
         }
