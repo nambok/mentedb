@@ -171,3 +171,31 @@ async fn exemplars_store_as_activation_anchors_not_rules() {
     let anchors = db.recall_for_action("git-commit", None, None, 10).unwrap();
     assert_eq!(anchors.len(), 1, "{anchors:?}");
 }
+
+#[tokio::test]
+async fn truncated_completion_recovers_complete_atoms() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+
+    // The output token cap cuts the array mid element: no closing bracket,
+    // a dangling half object. Every complete element must survive.
+    let provider = CannedProvider {
+        response: r#"[
+  {"content": "Refunds over 200 dollars require a manager approval note", "type": "procedural", "section": "Refund policy"},
+  {"content": "Escalate chargebacks to the payments team the same day", "type": "procedural", "section": "Refund policy"},
+  {"content": "Never share internal discount codes wi"#
+            .to_string(),
+        calls: AtomicUsize::new(0),
+    };
+    let opts = AgentFileIngestOptions::default();
+    let report = db
+        .ingest_agent_file_llm("# Support playbook\n", &opts, &provider)
+        .await
+        .unwrap();
+    assert_eq!(report.parsed_by, "llm", "{report:?}");
+    assert_eq!(report.stored, 2, "{report:?}");
+
+    // Section names land as section tags, the cluster signal for injection,
+    // and the report counts the distinct sections the model named.
+    assert_eq!(report.sections, 1, "{report:?}");
+}

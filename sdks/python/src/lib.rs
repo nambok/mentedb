@@ -376,6 +376,61 @@ impl MenteDB {
         })
     }
 
+    /// Injection ready context for a turn: relevance selection, pins, and
+    /// mode rules, exactly what get_injection_context serves in production.
+    /// Returns a list of dicts with content, reason, and score.
+    #[pyo3(signature = (query, k = 8, agent_id = None))]
+    fn recall_for_injection(
+        &self,
+        query: &str,
+        k: usize,
+        agent_id: Option<&str>,
+    ) -> PyResult<Py<PyAny>> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let aid = match agent_id {
+            Some(s) => Some(parse_agent_id(s)?),
+            None => None,
+        };
+        let embedding = db
+            .embed_text(query)
+            .map_err(to_pyerr)?
+            .unwrap_or_default();
+        let iq = mentedb::injection::InjectionQuery {
+            embedding: &embedding,
+            query_text: Some(query),
+            session_id: None,
+            exclude_ids: &[],
+            max_items: k,
+            max_episodic: 2,
+            agent_id: aid,
+            user_id: None,
+            current_project: None,
+        };
+        let out = db.recall_for_injection(&iq).map_err(to_pyerr)?;
+        Python::attach(|py| {
+            let list = pyo3::types::PyList::empty(py);
+            for c in out {
+                let dict = pyo3::types::PyDict::new(py);
+                dict.set_item("id", c.node.id.to_string())?;
+                dict.set_item("content", &c.node.content)?;
+                dict.set_item("score", c.score)?;
+                let reason = match c.reason {
+                    mentedb::injection::SelectionReason::Pinned => "pinned",
+                    mentedb::injection::SelectionReason::Relevant => "relevant",
+                    mentedb::injection::SelectionReason::ModeRule => "mode_rule",
+                };
+                dict.set_item("reason", reason)?;
+                let tags: Vec<&str> = c.node.tags.iter().map(|s| s.as_str()).collect();
+                dict.set_item("tags", tags)?;
+                list.append(dict)?;
+            }
+            Ok(list.into())
+        })
+    }
+
     /// Standing rules for a class of agent actions (memories tagged
     /// `trigger:<action>`), newest first, superseded rules excluded. The
     /// action cued recall channel; see the docs on action rules.

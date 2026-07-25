@@ -23,7 +23,7 @@
 //!   memory; chronically ignored memories are demoted at selection time and
 //!   used ones are reinforced.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use mentedb_core::error::MenteResult;
 use mentedb_core::memory::{AttributeValue, MemoryNode, MemoryType};
@@ -42,6 +42,21 @@ pub const ATTR_INJECTION_USED: &str = "injection_used";
 pub struct InjectionConfig {
     /// Retrieval pool fanned out before selection.
     pub candidate_pool: usize,
+    /// Cluster completion: when one section tag dominates the selected
+    /// head (at least this fraction of it, minimum two items), the query
+    /// lives inside that cluster, and the lowest ranked non cluster picks
+    /// are swapped for the section's best remaining siblings. A dense
+    /// cluster of sibling rules then arrives together instead of the top
+    /// sibling crowding the rest out. 0 disables. Off by default until the
+    /// offline sweep settles interactions with MMR and the knee and tail
+    /// gates; the mechanism is pinned by tests at 0.34.
+    pub cluster_dominant_fraction: f32,
+    /// Cap on siblings swapped in by cluster completion.
+    pub cluster_fill_max: usize,
+    /// Sections larger than this never count as clusters: a catch all
+    /// section holding half the file dominates any head trivially and its
+    /// siblings are arbitrary, not coherent.
+    pub cluster_max_span: usize,
     /// MMR relevance weight; the remainder weighs redundancy.
     pub mmr_lambda: f32,
     /// Consecutive score ratio treated as the relevance knee.
@@ -102,6 +117,9 @@ impl Default for InjectionConfig {
     fn default() -> Self {
         Self {
             candidate_pool: 48,
+            cluster_dominant_fraction: 0.0,
+            cluster_fill_max: 4,
+            cluster_max_span: 12,
             mmr_lambda: 0.7,
             knee_gap_ratio: 2.0,
             demotion_shown_min: 5,
@@ -349,6 +367,18 @@ impl MenteDb {
             candidates.push((node, adjusted, cos));
         }
 
+        // Pre gate snapshot of section tagged candidates: cluster completion
+        // may need siblings the knee and tail gates are about to drop.
+        let cluster_pool: Vec<(MemoryNode, f32)> = if cfg.cluster_dominant_fraction > 0.0 {
+            candidates
+                .iter()
+                .filter(|(node, _, _)| node.tags.iter().any(|t| t.starts_with("section:")))
+                .map(|(node, _, cos)| (node.clone(), *cos))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         // Gates are relative to the query's own best cosine, never an absolute
         // threshold, so they hold across embedders (RRF scores are rank
         // compressed and useless for this; the raw cosine is not).
@@ -426,6 +456,43 @@ impl MenteDb {
             }
         }
 
+        // Cluster dominance is read off the score ranking BEFORE MMR: MMR
+        // deliberately de clusters the head, hiding the very signal cluster
+        // completion needs.
+        let dominant_section: Option<String> = if cfg.cluster_dominant_fraction > 0.0 {
+            let head = scored.len().min(query.max_items.max(3));
+            let mut counts: HashMap<String, usize> = HashMap::new();
+            for (node, _) in &scored[..head] {
+                for tag in &node.tags {
+                    if let Some(sec) = tag.strip_prefix("section:") {
+                        *counts.entry(sec.to_string()).or_insert(0) += 1;
+                    }
+                }
+            }
+            // A section wider than cluster_max_span across the whole pool is
+            // a catch all, not a coherent cluster; it dominates any head
+            // trivially and its siblings are arbitrary.
+            let mut span: HashMap<&str, usize> = HashMap::new();
+            for (node, _) in &cluster_pool {
+                for tag in &node.tags {
+                    if let Some(sec) = tag.strip_prefix("section:") {
+                        *span.entry(sec).or_insert(0) += 1;
+                    }
+                }
+            }
+            let need = ((cfg.cluster_dominant_fraction * head as f32).ceil() as usize).max(2);
+            counts
+                .into_iter()
+                .filter(|(sec, n)| {
+                    *n >= need
+                        && span.get(sec.as_str()).copied().unwrap_or(0) <= cfg.cluster_max_span
+                })
+                .max_by_key(|(_, n)| *n)
+                .map(|(sec, _)| sec)
+        } else {
+            None
+        };
+
         // MMR selection with type quotas.
         let top_score = scored
             .first()
@@ -467,6 +534,50 @@ impl MenteDb {
                 score,
                 reason: SelectionReason::Relevant,
             });
+        }
+
+        // Cluster completion: when one section dominates the selected head,
+        // the turn lives inside that cluster of sibling rules, and embedding
+        // rank underestimates the rest of the cluster (the harness measured
+        // exactly this on a real 22KB agent file: two governing rules ranked
+        // below k=24 behind their own section siblings). Swap the weakest
+        // non cluster tail picks for the section's best remaining siblings,
+        // gates overridden deliberately, bounded by cluster_fill_max.
+        if selected.len() >= 3
+            && let Some(sec) = dominant_section
+        {
+            {
+                let sec_tag = format!("section:{sec}");
+                let mut siblings: Vec<(MemoryNode, f32)> = cluster_pool
+                    .into_iter()
+                    .filter(|(node, _)| {
+                        node.tags.iter().any(|t| t == &sec_tag)
+                            && !selected.iter().any(|c| c.node.id == node.id)
+                    })
+                    .collect();
+                siblings.sort_by(|a, b| b.1.total_cmp(&a.1));
+                siblings.truncate(cfg.cluster_fill_max);
+                // Evict the weakest non cluster picks, never the top pick.
+                // The span cap above keeps this to coherent clusters, where
+                // the cluster hypothesis says sibling relevance is
+                // underestimated by embedding rank.
+                let mut evict: Vec<usize> = (1..selected.len())
+                    .filter(|i| !selected[*i].node.tags.iter().any(|t| t == &sec_tag))
+                    .collect();
+                evict.sort_by(|a, b| {
+                    selected[*a]
+                        .score
+                        .partial_cmp(&selected[*b].score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                for (pos, (node, cos)) in evict.into_iter().zip(siblings) {
+                    selected[pos] = InjectionCandidate {
+                        node,
+                        score: cos,
+                        reason: SelectionReason::Relevant,
+                    };
+                }
+            }
         }
 
         // Pinned memories bypass every gate except the ledger, and lead the

@@ -119,6 +119,15 @@ class MenteDB:
         """
         return self._db.ingest_agent_file(content, agent_id, source_tag)
 
+    def recall_for_injection(self, query: str, k: int = 8,
+                             agent_id: str | None = None) -> list[dict]:
+        """Injection ready context for a turn: relevance, pins, mode rules.
+
+        The same selection get_injection_context serves in production, with
+        content, reason (relevant, pinned, mode_rule), score, and tags.
+        """
+        return self._db.recall_for_injection(query, k, agent_id)
+
     def recall_for_action(self, trigger: str, agent_id: str | None = None,
                           k: int = 6) -> list[dict]:
         """Standing rules for a class of agent actions.
