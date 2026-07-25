@@ -306,6 +306,81 @@ impl MenteDB {
             .collect())
     }
 
+    /// Ingest an agent instruction file (CLAUDE.md, AGENTS.md, .cursorrules)
+    /// as individual memories: atomic statements with section provenance,
+    /// action trigger tags where rules govern an action, nothing pinned to
+    /// every turn. Returns the ingest report as a dict.
+    #[pyo3(signature = (content, agent_id=None, source_tag=None))]
+    fn ingest_agent_file(
+        &self,
+        content: &str,
+        agent_id: Option<&str>,
+        source_tag: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let mut opts = mentedb::agent_file::AgentFileIngestOptions::default();
+        if let Some(a) = agent_id {
+            opts.agent_id = parse_agent_id(a)?;
+        }
+        if let Some(s) = source_tag {
+            opts.source_tag = s;
+        }
+        let report = db.ingest_agent_file(content, &opts).map_err(to_pyerr)?;
+        Python::attach(|py| {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("candidates", report.candidates)?;
+            dict.set_item("stored", report.stored)?;
+            dict.set_item("deduplicated", report.deduplicated)?;
+            dict.set_item("semantic", report.semantic)?;
+            dict.set_item("procedural", report.procedural)?;
+            dict.set_item("anti_pattern", report.anti_pattern)?;
+            dict.set_item("trigger_tagged", report.trigger_tagged)?;
+            dict.set_item("sections", report.sections)?;
+            dict.set_item("file_token_estimate", report.file_token_estimate)?;
+            dict.set_item("avg_memory_token_estimate", report.avg_memory_token_estimate)?;
+            Ok(dict.into())
+        })
+    }
+
+    /// Standing rules for a class of agent actions (memories tagged
+    /// `trigger:<action>`), newest first, superseded rules excluded. The
+    /// action cued recall channel; see the docs on action rules.
+    #[pyo3(signature = (trigger, agent_id=None, k=6))]
+    fn recall_for_action(
+        &self,
+        trigger: &str,
+        agent_id: Option<&str>,
+        k: usize,
+    ) -> PyResult<Py<PyAny>> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let aid = match agent_id {
+            Some(s) => Some(parse_agent_id(s)?),
+            None => None,
+        };
+        let rules = db
+            .recall_for_action(trigger, aid, None, k)
+            .map_err(to_pyerr)?;
+        Python::attach(|py| {
+            let list = pyo3::types::PyList::empty(py);
+            for node in rules {
+                let dict = pyo3::types::PyDict::new(py);
+                dict.set_item("id", node.id.to_string())?;
+                dict.set_item("content", &node.content)?;
+                dict.set_item("created_at", node.created_at)?;
+                let tags: Vec<&str> = node.tags.iter().map(|s| s.as_str()).collect();
+                dict.set_item("tags", tags)?;
+                list.append(dict)?;
+            }
+            Ok(list.into())
+        })
+    }
+
     /// Embed a single text with the configured provider (hash fallback when
     /// none is configured). Lets callers time embedding separately from the
     /// engine search, or precompute a vector to pass to `store(embedding=...)`.
