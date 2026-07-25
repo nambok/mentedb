@@ -106,6 +106,10 @@ pub struct AgentFileIngestReport {
     pub avg_memory_token_estimate: usize,
     /// Which parser produced the atoms: "llm" or "deterministic".
     pub parsed_by: &'static str,
+    /// The distinct action trigger names assigned, so callers can discover
+    /// the open vocabulary the parser chose ("order-refund",
+    /// "ticket-escalation") instead of guessing slugs.
+    pub triggers: Vec<String>,
     /// Number of chunks sent to the LLM (zero for the deterministic parser).
     pub llm_chunks: usize,
 }
@@ -224,6 +228,9 @@ fn segment(md: &str) -> Vec<(String, String)> {
     let mut buf_is_bullet = false;
     let mut in_code = false;
     let mut code_buf: Vec<String> = Vec::new();
+    // True when the line directly above the opening fence held text (no
+    // blank line between): only that text is a caption for the block.
+    let mut caption_adjacent = false;
 
     fn section_of(path: &[(usize, String)]) -> String {
         path.iter()
@@ -258,11 +265,31 @@ fn segment(md: &str) -> Vec<(String, String)> {
             if in_code {
                 let code = code_buf.join("\n").trim().to_string();
                 if !code.is_empty() {
-                    out.push((section_of(&path), format!("code: {code}")));
+                    // Fuse the block with the short caption right above it
+                    // ("Run these before committing:"), so the commands are
+                    // retrievable from natural language questions instead of
+                    // embedding as bare code.
+                    let caption = match out.last() {
+                        Some((sec, text))
+                            if caption_adjacent
+                                && *sec == section_of(&path)
+                                && text.len() <= 120
+                                && !text.starts_with("code: ") =>
+                        {
+                            Some(out.pop().expect("last exists").1)
+                        }
+                        _ => None,
+                    };
+                    let content = match caption {
+                        Some(c) => format!("{c} code: {code}"),
+                        None => format!("code: {code}"),
+                    };
+                    out.push((section_of(&path), content));
                 }
                 code_buf.clear();
                 in_code = false;
             } else {
+                caption_adjacent = !buf.is_empty();
                 flush(&mut buf, &mut buf_is_bullet, &mut out, &section_of(&path));
                 in_code = true;
             }
@@ -535,8 +562,11 @@ impl MenteDb {
                 MemoryType::AntiPattern => report.anti_pattern += 1,
                 _ => report.semantic += 1,
             }
-            if atom.tags.iter().any(|t| t.starts_with("trigger:")) {
+            if let Some(trigger) = atom.tags.iter().find_map(|t| t.strip_prefix("trigger:")) {
                 report.trigger_tagged += 1;
+                if !report.triggers.iter().any(|t| t == trigger) {
+                    report.triggers.push(trigger.to_string());
+                }
             }
         }
         let after = self.count_by_tag(&opts.source_tag);
@@ -737,6 +767,30 @@ mod tests {
         assert!(
             rejoined as f64 > text.len() as f64 * 0.95,
             "splitting must not lose content"
+        );
+    }
+
+    #[test]
+    fn code_blocks_fuse_with_adjacent_captions_only() {
+        // Adjacent caption, no blank line: fused into one retrievable atom.
+        let md = "# Ops\n\nRun these before committing:\n```bash\ncargo test\n```\n";
+        let segs = segment(md);
+        assert!(
+            segs.iter()
+                .any(|(_, t)| t.contains("before committing") && t.contains("code: cargo test")),
+            "adjacent caption must fuse with its code block: {segs:?}"
+        );
+        // Blank line between: the bullet is not a caption, the block stands
+        // alone.
+        let md = "# Ops\n\n- Use thiserror for error types\n\n```bash\ncargo test\n```\n";
+        let segs = segment(md);
+        assert!(
+            segs.iter().any(|(_, t)| t == "code: cargo test"),
+            "non adjacent block stays bare: {segs:?}"
+        );
+        assert!(
+            segs.iter().any(|(_, t)| t.contains("thiserror")),
+            "the bullet survives on its own: {segs:?}"
         );
     }
 

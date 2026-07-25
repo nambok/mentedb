@@ -369,6 +369,9 @@ impl MenteDB {
             dict.set_item("sections", report.sections)?;
             dict.set_item("file_token_estimate", report.file_token_estimate)?;
             dict.set_item("avg_memory_token_estimate", report.avg_memory_token_estimate)?;
+            dict.set_item("parsed_by", report.parsed_by)?;
+            dict.set_item("llm_chunks", report.llm_chunks)?;
+            dict.set_item("triggers", report.triggers.clone())?;
             Ok(dict.into())
         })
     }
