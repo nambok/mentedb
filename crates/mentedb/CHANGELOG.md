@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0](https://github.com/nambok/mentedb/compare/mentedb-v0.29.0...mentedb-v0.30.0) - 2026-07-25
+
+### Added
+
+- own agent boost in injection so an agent's rules survive busy accounts ([#377](https://github.com/nambok/mentedb/pull/377))
+
 ## [0.29.0](https://github.com/nambok/mentedb/compare/mentedb-v0.28.0...mentedb-v0.29.0) - 2026-07-25
 
 ### Added
