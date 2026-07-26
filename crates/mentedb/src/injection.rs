@@ -57,6 +57,11 @@ pub struct InjectionConfig {
     /// section holding half the file dominates any head trivially and its
     /// siblings are arbitrary, not coherent.
     pub cluster_max_span: usize,
+    /// Whether injection's hybrid recall includes the lexical (BM25) leg.
+    /// On rule stores the lexical leg can drown the vector signal: generic
+    /// task words match everywhere and rank fusion buries the semantically
+    /// right rule. Off sends vector only retrieval into the same pipeline.
+    pub use_lexical_leg: bool,
     /// Score multiplier for memories owned by the querying agent. On an
     /// agent scoped query the agent's own knowledge (its ingested rules,
     /// its facts) must not be crowded out of the candidate ranking by the
@@ -126,6 +131,7 @@ impl Default for InjectionConfig {
             cluster_dominant_fraction: 0.0,
             cluster_fill_max: 4,
             cluster_max_span: 12,
+            use_lexical_leg: true,
             own_agent_boost: 1.25,
             mmr_lambda: 0.7,
             knee_gap_ratio: 2.0,
@@ -319,7 +325,7 @@ impl MenteDb {
         let hits = self
             .recall_hybrid_scoped_at_mode(
                 query.embedding,
-                query.query_text,
+                query.query_text.filter(|_| cfg.use_lexical_leg),
                 cfg.candidate_pool,
                 now_us(),
                 None,

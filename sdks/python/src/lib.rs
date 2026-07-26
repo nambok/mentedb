@@ -144,13 +144,14 @@ struct MenteDB {
 #[pymethods]
 impl MenteDB {
     #[new]
-    #[pyo3(signature = (data_dir, embedding_provider=None, embedding_api_key=None, embedding_model=None, dimension=None))]
+    #[pyo3(signature = (data_dir, embedding_provider=None, embedding_api_key=None, embedding_model=None, dimension=None, injection_overrides=None))]
     fn new(
         data_dir: &str,
         embedding_provider: Option<&str>,
         embedding_api_key: Option<&str>,
         embedding_model: Option<&str>,
         dimension: Option<usize>,
+        injection_overrides: Option<std::collections::HashMap<String, f64>>,
     ) -> PyResult<Self> {
         let embedder: Option<Box<dyn EmbeddingProvider>> = match embedding_provider {
             Some("openai") => {
@@ -211,8 +212,33 @@ impl MenteDB {
             }
         };
 
-        let mut db = MenteDb::open_with_config(Path::new(data_dir), CognitiveConfig::default())
-            .map_err(to_pyerr)?;
+        // Sweep and benchmark support: named injection knobs applied to the
+        // config before open, so retrieval tuning can be proven locally
+        // against the real selection pipeline before any default changes.
+        let mut config = CognitiveConfig::default();
+        if let Some(ov) = injection_overrides {
+            let ic = &mut config.injection_config;
+            for (k, v) in ov {
+                match k.as_str() {
+                    "cluster_dominant_fraction" => ic.cluster_dominant_fraction = v as f32,
+                    "cluster_fill_max" => ic.cluster_fill_max = v as usize,
+                    "cluster_max_span" => ic.cluster_max_span = v as usize,
+                    "own_agent_boost" => ic.own_agent_boost = v as f32,
+                    "mode_trigger_gate" => ic.mode_trigger_gate = v as f32,
+                    "mode_rules_max" => ic.mode_rules_max = v as usize,
+                    "candidate_pool" => ic.candidate_pool = v as usize,
+                    "mmr_lambda" => ic.mmr_lambda = v as f32,
+                    "use_lexical_leg" => ic.use_lexical_leg = v > 0.5,
+                    other => {
+                        return Err(PyRuntimeError::new_err(format!(
+                            "unknown injection override: {other}"
+                        )));
+                    }
+                }
+            }
+        }
+        let mut db =
+            MenteDb::open_with_config(Path::new(data_dir), config).map_err(to_pyerr)?;
         // An explicit `dimension` lets callers bring their own embeddings at an
         // arbitrary size (for example a 4096-dim external embedder), overriding
         // the provider-derived or default 384 vector dimension.
@@ -395,12 +421,13 @@ impl MenteDB {
     /// Injection ready context for a turn: relevance selection, pins, and
     /// mode rules, exactly what get_injection_context serves in production.
     /// Returns a list of dicts with content, reason, and score.
-    #[pyo3(signature = (query, k = 8, agent_id = None))]
+    #[pyo3(signature = (query, k = 8, agent_id = None, query_embedding = None))]
     fn recall_for_injection(
         &self,
         query: &str,
         k: usize,
         agent_id: Option<&str>,
+        query_embedding: Option<Vec<f32>>,
     ) -> PyResult<Py<PyAny>> {
         let db = self
             .db
@@ -410,10 +437,13 @@ impl MenteDB {
             Some(s) => Some(parse_agent_id(s)?),
             None => None,
         };
-        let embedding = db
-            .embed_text(query)
-            .map_err(to_pyerr)?
-            .unwrap_or_default();
+        // An explicit embedding lets callers score injection in whatever
+        // space they stored with (for example the hosted Cohere 1024 space),
+        // independent of the engine's configured provider.
+        let embedding = match query_embedding {
+            Some(v) => v,
+            None => db.embed_text(query).map_err(to_pyerr)?.unwrap_or_default(),
+        };
         let iq = mentedb::injection::InjectionQuery {
             embedding: &embedding,
             query_text: Some(query),
