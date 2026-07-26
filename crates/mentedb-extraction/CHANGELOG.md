@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.30.0...mentedb-extraction-v0.31.0) - 2026-07-26
+
+### Other
+
+- agent file ingestion and rule delivery channels ([#381](https://github.com/nambok/mentedb/pull/381))
+
 ## [0.27.3](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.27.2...mentedb-extraction-v0.27.3) - 2026-07-24
 
 ### Other
