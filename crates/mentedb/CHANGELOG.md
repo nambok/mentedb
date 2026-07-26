@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0](https://github.com/nambok/mentedb/compare/mentedb-v0.30.0...mentedb-v0.31.0) - 2026-07-26
+
+### Added
+
+- section affinity completion, sweep bindings, standing directive parse guidance ([#380](https://github.com/nambok/mentedb/pull/380))
+
+### Other
+
+- agent file ingestion and rule delivery channels ([#381](https://github.com/nambok/mentedb/pull/381))
+
 ## [0.30.0](https://github.com/nambok/mentedb/compare/mentedb-v0.29.0...mentedb-v0.30.0) - 2026-07-25
 
 ### Added
