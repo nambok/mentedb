@@ -43,6 +43,7 @@ class MenteDB:
         embedding_api_key: str | None = None,
         embedding_model: str | None = None,
         dimension: int | None = None,
+        injection_overrides: dict[str, float] | None = None,
     ):
         self._db = _MenteDB(
             data_dir,
@@ -50,6 +51,7 @@ class MenteDB:
             embedding_api_key=embedding_api_key,
             embedding_model=embedding_model,
             dimension=dimension,
+            injection_overrides=injection_overrides,
         )
 
     def process_turn(
@@ -124,13 +126,14 @@ class MenteDB:
         return self._db.recall_similar(embedding, k)
 
     def recall_for_injection(self, query: str, k: int = 8,
-                             agent_id: str | None = None) -> list[dict]:
+                             agent_id: str | None = None,
+                             query_embedding: list[float] | None = None) -> list[dict]:
         """Injection ready context for a turn: relevance, pins, mode rules.
 
         The same selection get_injection_context serves in production, with
         content, reason (relevant, pinned, mode_rule), score, and tags.
         """
-        return self._db.recall_for_injection(query, k, agent_id)
+        return self._db.recall_for_injection(query, k, agent_id, query_embedding)
 
     def recall_for_action(self, trigger: str, agent_id: str | None = None,
                           k: int = 6) -> list[dict]:
