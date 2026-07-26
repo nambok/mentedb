@@ -1,0 +1,41 @@
+{
+  "description": "Ground truth rule labels for dev_claude.md. atom_match identifies the stored memory carrying the rule (case insensitive substring). checker is the mechanical compliance predicate applied to model output in the compliance layer.",
+  "rules": {
+    "commit-single-line": {
+      "atom_match": "single line",
+      "checker": {"type": "commit_single_line"}
+    },
+    "commit-conventional-prefix": {
+      "atom_match": "conventional style",
+      "checker": {"type": "regex_must_match", "pattern": "^(feat|fix|chore|docs|refactor|test|perf)(\\(.+\\))?: "}
+    },
+    "commit-no-emoji": {
+      "atom_match": "no emojis",
+      "checker": {"type": "no_emoji"}
+    },
+    "pr-sections": {
+      "atom_match": "Summary and Verification",
+      "checker": {"type": "contains_all", "needles": ["Summary", "Verification"]}
+    },
+    "errors-thiserror": {
+      "atom_match": "thiserror",
+      "checker": {"type": "contains_any", "needles": ["thiserror", "#[derive(Error"]}
+    },
+    "no-unwrap-lib": {
+      "atom_match": "unwrap",
+      "checker": {"type": "not_contains", "needles": [".unwrap()"]}
+    },
+    "config-no-magic-numbers": {
+      "atom_match": "magic numbers",
+      "checker": {"type": "contains_any", "needles": ["Config", "config"]}
+    },
+    "prose-no-emoji-dash": {
+      "atom_match": "em dashes",
+      "checker": {"type": "no_emoji_or_emdash"}
+    },
+    "gates-fmt-clippy-test": {
+      "atom_match": "cargo fmt",
+      "checker": {"type": "contains_all", "needles": ["fmt", "clippy", "test"]}
+    }
+  }
+}

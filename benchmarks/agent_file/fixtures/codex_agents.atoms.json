@@ -1,0 +1,820 @@
+[
+ {
+  "content": "Crate names in codex-rs are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:naming-conventions"
+  ]
+ },
+ {
+  "content": "When using format! in Rust code, always inline variables into {} placeholders instead of passing them as separate arguments.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-style",
+   "trigger:code-formatting"
+  ]
+ },
+ {
+  "content": "Install any commands the codex-rs repo relies on (such as `just`, `rg`, or `cargo-insta`) if they are not already available before running instructions.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:environment-setup",
+   "trigger:env-setup"
+  ]
+ },
+ {
+  "content": "Never add or modify any code related to `CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR` or `CODEX_SANDBOX_ENV_VAR`. The sandbox sets `CODEX_SANDBOX_NETWORK_DISABLED=1` when using the shell tool; existing code using these environment variables was authored with this limitation in mind. Similarly, when spawning a process using Seatbelt (`/usr/bin/sandbox-exec`), `CODEX_SANDBOX=seatbelt` will be set on the child process.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:sandbox-limitations"
+  ]
+ },
+ {
+  "content": "Always collapse nested if statements per https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:clippy-linting-rules",
+   "trigger:code-review"
+  ]
+ },
+ {
+  "content": "Always inline format! arguments when possible per https://rust-lang.github.io/rust-clippy/master/index.html#uninlined_format_args.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:clippy-linting-rules",
+   "trigger:code-review"
+  ]
+ },
+ {
+  "content": "Use method references over closures when possible per https://rust-lang.github.io/rust-clippy/master/index.html#redundant_closure_for_method_calls.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:clippy-linting-rules",
+   "trigger:code-review"
+  ]
+ },
+ {
+  "content": "Avoid bool or ambiguous `Option` parameters that force callers to write hard-to-read code such as `foo(false)` or `bar(None)`. Prefer enums, named methods, newtypes, or other idiomatic Rust API shapes when they keep the callsite self-documenting.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:api-design",
+   "trigger:api-design"
+  ]
+ },
+ {
+  "content": "When you cannot change an API and still need a small positional-literal callsite in Rust, follow the `argument_comment_lint` convention: use an exact `/*param_name*/` comment before opaque literal arguments such as `None`, booleans, and numeric literals when passing them by position. A method's sole non-self argument is exempt when the method and parameter names match, such as `.enabled(false)` for `fn enabled(&self, enabled: bool)`. Do not add these comments for string or char literals unless the comment adds real clarity. The parameter name in the comment must exactly match the callee signature.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:api-design"
+  ]
+ },
+ {
+  "content": "Run `just argument-comment-lint` to check the argument comment lint locally. This is powered by Bazel, so the first run can be slow if Bazel is not warmed up, though incremental invocations should take <15s. Most of the time, it is best to update the PR and let CI check it (or run it asynchronously in the background after submitting the PR).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:api-design"
+  ]
+ },
+ {
+  "content": "Make `match` statements exhaustive and avoid wildcard arms when possible.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-style"
+  ]
+ },
+ {
+  "content": "Newly added traits should include doc comments that explain their role and how implementations are expected to use them.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-style"
+  ]
+ },
+ {
+  "content": "Discourage both `#[async_trait]` and `#[allow(async_fn_in_trait)]` in Rust traits. Prefer native RPITIT trait methods with explicit `Send` bounds on the returned future in the shape: `fn foo(&self, ...) -> impl std::future::Future<Output = T> + Send;`. Implementations may still use `async fn foo(&self, ...) -> T` when they satisfy that contract. Do not use `#[allow(async_fn_in_trait)]` as a shortcut around spelling the future contract explicitly.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:async-traits"
+  ]
+ },
+ {
+  "content": "When writing tests, prefer comparing the equality of entire objects over fields one by one.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing",
+   "trigger:test-write"
+  ]
+ },
+ {
+  "content": "Do not add tests for values that are statically defined.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:testing"
+  ]
+ },
+ {
+  "content": "Do not add negative tests for logic that was removed.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:testing"
+  ]
+ },
+ {
+  "content": "Do not add general product or user-facing documentation to the `docs/` folder. The official Codex documentation lives elsewhere. The exception is app-server API documentation, which is covered by the app-server guidance.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:documentation"
+  ]
+ },
+ {
+  "content": "Prefer private modules and explicitly export public crate API.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:module-organization"
+  ]
+ },
+ {
+  "content": "If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `codex-rs/core/config.schema.json`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:configuration",
+   "trigger:config-change"
+  ]
+ },
+ {
+  "content": "When working with MCP tool calls, prefer using `codex-rs/codex-mcp/src/mcp_connection_manager.rs` to handle mutation of tools and tool calls. Aim to minimize the footprint of changes and leverage existing abstractions rather than plumbing code through multiple levels of function calls.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:mcp-integration"
+  ]
+ },
+ {
+  "content": "Do not call `reset_client_session` unnecessarily; let the incremental check logic decide whether to reuse the previous request.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:client-session-management"
+  ]
+ },
+ {
+  "content": "If you change Rust dependencies (`Cargo.toml` or `Cargo.lock`), run `just bazel-lock-update` from the repo root to refresh `MODULE.bazel.lock`, and include that lockfile update in the same change. CI verifies lockfile drift.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:dependencies",
+   "trigger:dependency-update"
+  ]
+ },
+ {
+  "content": "Bazel does not automatically make source-tree files available to compile-time Rust file access. If you add `include_str!`, `include_bytes!`, `sqlx::migrate!`, or similar build-time file or directory reads, update the crate's `BUILD.bazel` (`compile_data`, `build_script_data`, or test data) or Bazel may fail even when Cargo passes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:bazel-build-system"
+  ]
+ },
+ {
+  "content": "Do not create small helper methods that are referenced only once.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:code-design"
+  ]
+ },
+ {
+  "content": "For tracing async work, instrument the function or method definition with `#[tracing::instrument(...)]` instead of attaching spans to futures with `.instrument(...)` at call sites. Before adding instrumentation, check whether the callee\u2014or the implementation method it immediately delegates to\u2014is already instrumented.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tracing-and-instrumentation"
+  ]
+ },
+ {
+  "content": "Prefer adding new modules instead of growing existing ones. Target Rust modules under 500 LoC excluding tests. If a file exceeds roughly 800 LoC, add new functionality in a new module instead of extending the existing file unless there is a strong documented reason not to. This rule applies especially to high-touch files that already attract unrelated changes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:module-size"
+  ]
+ },
+ {
+  "content": "When extracting code from a large module, move the related tests and module/type docs toward the new implementation so the invariants stay close to the code that owns them.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:module-size"
+  ]
+ },
+ {
+  "content": "Avoid adding new standalone methods to `codex-rs/tui/src/chatwidget.rs` unless the change is trivial; prefer new modules/files and keep `chatwidget.rs` focused on orchestration.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:module-size"
+  ]
+ },
+ {
+  "content": "When running Rust commands (e.g. `just fix` or `just test`) be patient with the command and never try to kill them using the PID. Rust lock can make execution slow; this is expected.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:rust-commands"
+  ]
+ },
+ {
+  "content": "Run `just fmt` in the `codex-rs` directory automatically after finishing code changes anywhere in this repository; do not ask for approval to run it.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:formatting-and-testing",
+   "trigger:code-complete"
+  ]
+ },
+ {
+  "content": "Do not run `cargo test` directly. Use `just test` so test execution follows the repo defaults.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:formatting-and-testing"
+  ]
+ },
+ {
+  "content": "Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `just test -p codex-tui`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:formatting-and-testing",
+   "trigger:test-run"
+  ]
+ },
+ {
+  "content": "Once project-specific tests pass, if any changes were made in common, core, or protocol, run the complete test suite with `just test`. Avoid `--all-features` for routine local runs because it expands the build matrix and can significantly increase `target/` disk usage; use it only when you specifically need full feature coverage.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:formatting-and-testing"
+  ]
+ },
+ {
+  "content": "Before finalizing a large change to `codex-rs`, run `just fix -p <project>` in `codex-rs` directory to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace-wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:formatting-and-testing",
+   "trigger:code-complete"
+  ]
+ },
+ {
+  "content": "Resist adding code to codex-core crate. Before adding new code to codex-core, consider whether there is an existing crate that is an appropriate place, or whether it is time to introduce a new crate to the Cargo workspace. Refactor existing code as necessary to avoid bloating codex-core.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:codex-core-crate",
+   "trigger:code-addition-codex-core"
+  ]
+ },
+ {
+  "content": "When reviewing code, do not hesitate to push back on PRs that would unnecessarily add code to codex-core.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-review-rules",
+   "trigger:pr-review"
+  ]
+ },
+ {
+  "content": "Keep crate API surfaces as small as possible. Avoid proliferating test-only helpers in the public API.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-review-rules",
+   "trigger:pr-review"
+  ]
+ },
+ {
+  "content": "The context (history of messages) sent to the model in inference requests must be built up incrementally with no history rewrite.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:model-visible-context"
+  ]
+ },
+ {
+  "content": "Avoid frequent changes to model context that cause cache misses.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:model-visible-context"
+  ]
+ },
+ {
+  "content": "All items injected in the model context must have a bounded size and a hard cap. No unbounded items are allowed.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:model-visible-context"
+  ]
+ },
+ {
+  "content": "No items larger than 10K tokens may be injected in the model context.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:model-visible-context"
+  ]
+ },
+ {
+  "content": "Highlight new individual items that can cross >1k tokens as P0. These need an additional manual review.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:model-visible-context"
+  ]
+ },
+ {
+  "content": "All injected fragments must be defined as structs in core/context and implement the ContextualUserFragment trait.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:model-visible-context"
+  ]
+ },
+ {
+  "content": "Search for breaking changes in external integration surfaces during code review: app-server APIs, raw response item events (rawResponseItem/*) even while experimental, CLI parameters, configuration loading, and session resumption from existing rollouts.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:breaking-changes",
+   "trigger:pr-review"
+  ]
+ },
+ {
+  "content": "For agent changes prefer integration tests over unit tests. Integration tests are under core/suite and use test_codex to set up a test instance of codex.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:test-authoring-guidance"
+  ]
+ },
+ {
+  "content": "Features that change the agent logic MUST add an integration test. Provide a list of major logic changes and user-facing behaviors that need to be tested.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:test-authoring-guidance",
+   "trigger:agent-logic-change"
+  ]
+ },
+ {
+  "content": "If unit tests are needed, put them in a dedicated test file named *_tests.rs. Avoid test-only functions in the main implementation.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:test-authoring-guidance"
+  ]
+ },
+ {
+  "content": "Check whether there are existing helpers to make tests more streamlined and readable before writing new test code.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:test-authoring-guidance"
+  ]
+ },
+ {
+  "content": "Unless the change is mechanical, the total number of changed lines should not exceed 800 lines. For complex logic changes, the size should be under 500 lines.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:change-size-guidance"
+  ]
+ },
+ {
+  "content": "If a change is larger than 800 lines, explore whether it can be split into reviewable stages and identify the smallest coherent stage to land first, basing the staging suggestion on the actual diff, dependencies, and affected call sites.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:change-size-guidance"
+  ]
+ },
+ {
+  "content": "Use concise styling helpers from ratatui's Stylize trait for TUI code instead of constructing styles with Span::styled and Style directly. Examples: \"text\".red(), \"text\".green(), \"text\".magenta(), \"text\".dim().",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tui-code-conventions"
+  ]
+ },
+ {
+  "content": "For basic TUI spans, use \"text\".into(). For styled spans, use \"text\".red(), \"text\".green(), etc. Prefer these over constructing styles with Span::styled and Style directly.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tui-code-conventions"
+  ]
+ },
+ {
+  "content": "For TUI text wrapping, always use textwrap::wrap to wrap plain strings.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tui-code-conventions"
+  ]
+ },
+ {
+  "content": "If you have a ratatui Line and need to wrap it, use the helpers in tui/src/wrapping.rs, such as word_wrap_lines or word_wrap_line.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tui-code-conventions"
+  ]
+ },
+ {
+  "content": "If you need to indent wrapped TUI lines, use the initial_indent and subsequent_indent options from RtOptions if possible, rather than writing custom logic.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tui-code-conventions"
+  ]
+ },
+ {
+  "content": "If you have a list of TUI lines and need to prefix them all with some prefix (optionally different on the first vs subsequent lines), use the prefix_lines helper from line_utils.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tui-code-conventions"
+  ]
+ },
+ {
+  "content": "Prefer Stylize helpers for TUI styling: use \"text\".dim(), .bold(), .cyan(), .italic(), .underlined() instead of manual Style where possible.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tui-styling-ratatui"
+  ]
+ },
+ {
+  "content": "For TUI, prefer simple conversions: use \"text\".into() for spans and vec![\u2026].into() for lines. When inference is ambiguous (e.g., Paragraph::new/Cell::from), use Line::from(spans) or Span::from(text).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tui-styling-ratatui"
+  ]
+ },
+ {
+  "content": "For TUI computed styles that are determined at runtime, using Span::styled is OK. Alternatively, Span::from(text).set_style(style) is acceptable.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tui-styling-ratatui"
+  ]
+ },
+ {
+  "content": "Do not use .white() in TUI code. Prefer the default foreground (no color).",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:tui-styling-ratatui"
+  ]
+ },
+ {
+  "content": "For TUI, combine styling helpers by chaining for readability (e.g., url.cyan().underlined()).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tui-styling-ratatui"
+  ]
+ },
+ {
+  "content": "For TUI single items, prefer \"text\".into(). Use Line::from(text) or Span::from(text) only when the target type is not obvious from context, or when using .into() would require extra type annotations.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tui-styling-ratatui"
+  ]
+ },
+ {
+  "content": "When building TUI lines, use vec![\u2026].into() to construct a Line when the target type is obvious and no extra type annotations are needed. Otherwise use Line::from(vec![\u2026]).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tui-styling-ratatui"
+  ]
+ },
+ {
+  "content": "Do not refactor TUI code between equivalent forms (Span::styled \u2194 set_style, Line::from \u2194 .into()) without a clear readability or functional gain. Follow file-local conventions and do not introduce type annotations solely to satisfy .into().",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:tui-styling-ratatui"
+  ]
+ },
+ {
+  "content": "For TUI code compactness, prefer the form that stays on one line after rustfmt. If only one of Line::from(vec![\u2026]) or vec![\u2026].into() avoids wrapping, choose that. If both wrap, pick the one with fewer wrapped lines.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tui-styling-ratatui"
+  ]
+ },
+ {
+  "content": "When adding a new test module, define its contents in a separate sibling file rather than inline in the implementation file. Use an explicit #[path = \"..._tests.rs\"] attribute so the test filename is descriptive and easy to locate.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:test-module-organization"
+  ]
+ },
+ {
+  "content": "This convention of placing test modules in separate files applies only when introducing a new test module. Do not move or rewrite existing inline #[cfg(test)] mod tests { ... } modules solely to follow this convention.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:test-module-organization"
+  ]
+ },
+ {
+  "content": "Any change that affects user-visible UI (including adding new UI) must include corresponding insta snapshot coverage. Add a new snapshot test if one does not exist yet, or update the existing snapshot. Review and accept snapshot updates as part of the PR so UI impact is easy to review.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:snapshot-tests",
+   "trigger:ui-change"
+  ]
+ },
+ {
+  "content": "When UI or text output changes intentionally, update snapshots by running tests to generate updated snapshots with 'just test -p codex-tui', checking pending snapshots with 'cargo insta pending-snapshots -p codex-tui', reviewing changes in *.snap.new files or with 'cargo insta show -p codex-tui path/to/file.snap.new', and accepting with 'cargo insta accept -p codex-tui'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:snapshot-tests"
+  ]
+ },
+ {
+  "content": "The snapshot test tool is available via 'cargo install --locked cargo-insta' if not already installed.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:snapshot-tests"
+  ]
+ },
+ {
+  "content": "Run cargo benchmarks with `just bench`. Use the divan crate to write new benchmarks.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:benchmarks",
+   "trigger:benchmark-run"
+  ]
+ },
+ {
+  "content": "Before writing a new benchmark, dry-run it with `just bench-smoke` to verify it works for a single iteration.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:benchmarks",
+   "trigger:benchmark-write"
+  ]
+ },
+ {
+  "content": "Tests should use pretty_assertions::assert_eq for clearer diffs. Import this at the top of the test module if it isn't already.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:test-assertions",
+   "trigger:test-assertion"
+  ]
+ },
+ {
+  "content": "Prefer deep equals comparisons in tests. Perform assert_eq!() on entire objects, rather than individual fields.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:test-assertions",
+   "trigger:test-assertion"
+  ]
+ },
+ {
+  "content": "Avoid mutating process environment in tests; prefer passing environment-derived flags or dependencies from above.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:test-assertions"
+  ]
+ },
+ {
+  "content": "When tests need to spawn first-party binaries, prefer codex_utils_cargo_bin::cargo_bin(...) over assert_cmd::Command::cargo_bin(...) or escargot. Under Bazel, binaries and resources may live under runfiles; codex_utils_cargo_bin::cargo_bin resolves absolute paths that remain stable after chdir.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:spawning-workspace-binaries-in-tests-cargo-vs-ba",
+   "trigger:binary-spawn"
+  ]
+ },
+ {
+  "content": "When locating fixture files or test resources under Bazel, use codex_utils_cargo_bin::find_resource! instead of env!(\"CARGO_MANIFEST_DIR\") so paths resolve correctly under both Cargo and Bazel runfiles.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:spawning-workspace-binaries-in-tests-cargo-vs-ba"
+  ]
+ },
+ {
+  "content": "For codex_core integration testing, prefer utilities in core_test_support::responses when writing end-to-end Codex tests.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-tests"
+  ]
+ },
+ {
+  "content": "Use TestCodexBuilder::build_with_auto_env() by default in codex_core integration tests to ensure that new tests work with foreign app/exec OSes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-tests"
+  ]
+ },
+ {
+  "content": "All mount_sse* helpers return a ResponseMock; hold onto it so you can assert against outbound /responses POST bodies.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-tests"
+  ]
+ },
+ {
+  "content": "Use ResponseMock::single_request() when a test should only issue one POST, or ResponseMock::requests() to inspect every captured ResponsesRequest.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-tests"
+  ]
+ },
+ {
+  "content": "ResponsesRequest exposes helpers (body_json, input, function_call_output, custom_tool_call_output, call_output, header, path, query_param) so assertions can target structured payloads instead of manual JSON digging.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:integration-tests"
+  ]
+ },
+ {
+  "content": "Build SSE payloads with the provided ev_* constructors and the sse(...) helper.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-tests"
+  ]
+ },
+ {
+  "content": "Prefer wait_for_event over wait_for_event_with_timeout in codex_core integration tests.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-tests"
+  ]
+ },
+ {
+  "content": "Prefer mount_sse_once over mount_sse_once_match or mount_sse_sequence in codex_core integration tests.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-tests"
+  ]
+ },
+ {
+  "content": "For app-server integration testing, tests should exercise app-server's public JSON-RPC API.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-tests"
+  ]
+ },
+ {
+  "content": "Use TestAppServer::builder().build() and TestAppServer::send_thread_start_request_with_auto_env() by default in app-server integration tests to ensure that new tests work with foreign app/exec OSes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-tests"
+  ]
+ },
+ {
+  "content": "All active API development in app-server should happen in v2. Do not add new API surface area to v1.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "Follow payload naming consistently: *Params for request payloads, *Response for responses, and *Notification for notifications in app-server protocol.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "Expose RPC methods as <resource>/<method> and keep <resource> singular (for example, thread/read, app/list).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "Always expose fields as camelCase on the wire with #[serde(rename_all = \"camelCase\")] unless a tagged union or explicit compatibility requirement needs a targeted rename.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "Always expose string enum values as camelCase on the wire with matching serde and TS rename_all = \"camelCase\" annotations unless an explicit compatibility requirement needs targeted renames.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "Config RPC payloads are expected to use snake_case to mirror config.toml keys (see the config read/write/list APIs in app-server-protocol/src/protocol/v2.rs).",
+  "memory_type": "semantic",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "Always set #[ts(export_to = \"v2/\")] on v2 request/response/notification types so generated TypeScript lands in the correct namespace.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "Never use #[serde(skip_serializing_if = \"Option::is_none\")] for v2 API payload fields. Exception: client->server requests that intentionally have no params may use: params: #[ts(type = \"undefined\")] #[serde(skip_serializing_if = \"Option::is_none\")] Option<()>.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "Keep Rust and TS wire renames aligned. If a field or variant uses #[serde(rename = \"...\")], add matching #[ts(rename = \"...\")].",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "For discriminated unions, use explicit tagging in both serializers: #[serde(tag = \"type\", ...)] and #[ts(tag = \"type\", ...)].",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "Prefer plain String IDs at the API boundary (do UUID parsing/conversion internally if needed).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "Timestamps should be integer Unix seconds (i64) and named *_at (for example, created_at, updated_at, resets_at).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "For experimental API surface area, use #[experimental(\"method/or/field\")], derive ExperimentalApi when field-level gating is needed, and use inspect_params: true in common.rs when only some fields of a method are experimental.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "Every optional field in client->server request payloads (*Params) must be annotated with #[ts(optional = nullable)]. Do not use #[ts(optional = nullable)] outside client->server request payloads.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "Optional collection fields (for example Vec, HashMap) in client->server payloads must use Option<...> + #[ts(optional = nullable)]. Do not use #[serde(default)] to model optional collections, and do not use skip_serializing_if on v2 payload fields.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "When you want omission to mean false for boolean fields, use #[serde(default, skip_serializing_if = \"std::ops::Not::not\")] pub field: bool over Option<bool>.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "For new list methods, implement cursor pagination by default: request fields pub cursor: Option<String> and pub limit: Option<u32>, response fields pub data: Vec<...> and pub next_cursor: Option<String>.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:app-server-api-development-best-practices"
+  ]
+ },
+ {
+  "content": "When API behavior changes in app-server, update documentation at minimum in app-server/README.md.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:development-workflow",
+   "trigger:api-change"
+  ]
+ },
+ {
+  "content": "Regenerate schema fixtures when API shapes change by running: just write-app-server-schema",
+  "memory_type": "procedural",
+  "tags": [
+   "section:development-workflow",
+   "trigger:schema-update"
+  ]
+ },
+ {
+  "content": "When experimental API fixtures are affected, regenerate schema with: just write-app-server-schema --experimental",
+  "memory_type": "procedural",
+  "tags": [
+   "section:development-workflow",
+   "trigger:schema-update"
+  ]
+ },
+ {
+  "content": "Validate app-server protocol changes with: just test -p codex-app-server-protocol",
+  "memory_type": "procedural",
+  "tags": [
+   "section:development-workflow",
+   "trigger:validation-check"
+  ]
+ },
+ {
+  "content": "Do not write boilerplate tests that only assert experimental field markers for individual request fields in common.rs; rely on schema generation/tests and behavioral coverage instead.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:development-workflow"
+  ]
+ },
+ {
+  "content": "This project uses Python 3+. Do not use the __future__ module for Python 2 compatibility.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:python-development-best-practices"
+  ]
+ },
+ {
+  "content": "Check the closest pyproject.toml's requires-python field to determine the minimum Python runtime version supported before using version-specific features.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:python-development-best-practices"
+  ]
+ },
+ {
+  "content": "Tests and features must support Linux, macOS, and Windows unless the feature is explicitly documented as OS-specific.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:platform-support"
+  ]
+ },
+ {
+  "content": "Codex supports running connected app-server and exec-server on different operating systems; refer to the $remote-tests skill for details about integration testing these configurations.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:platform-support"
+  ]
+ }
+]

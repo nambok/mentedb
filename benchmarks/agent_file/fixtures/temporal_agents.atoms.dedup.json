@@ -1,0 +1,293 @@
+[
+ {
+  "content": "Rigorously adhere to existing project conventions when reading or modifying code. Always analyze surrounding code, tests, and configuration first before making changes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:core-mandates",
+   "trigger:code-change"
+  ]
+ },
+ {
+  "content": "Never assume a library or framework is available or appropriate. Verify its established usage within the Temporal project by checking imports and go.mod before employing it.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:core-mandates"
+  ]
+ },
+ {
+  "content": "When editing code, mimic the style (formatting, naming), structure, framework choices, typing, and architectural patterns of existing code in the project. Understand local context (imports, functions/classes) to ensure changes integrate naturally and idiomatically.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:core-mandates",
+   "trigger:code-change"
+  ]
+ },
+ {
+  "content": "Add code comments sparingly, focusing on why something is done rather than what is done, especially for complex logic. Only add high-value comments if necessary for clarity or if requested by the user.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:core-mandates",
+   "trigger:code-comment"
+  ]
+ },
+ {
+  "content": "Never edit comments that are separate from the code you are changing, and never describe your changes through comments.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:core-mandates"
+  ]
+ },
+ {
+  "content": "Fulfill the user's request thoroughly, including reasonable, directly implied follow-up actions that are within the clear scope of the request.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:core-mandates"
+  ]
+ },
+ {
+  "content": "Do not take significant actions beyond the clear scope of the request without confirming with the user. If asked how to do something, explain first before implementing.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:core-mandates"
+  ]
+ },
+ {
+  "content": "Do not revert changes to the codebase unless asked to do so by the user. Only revert changes made by you if they have resulted in an error or if the user has explicitly asked you to revert the changes.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:core-mandates"
+  ]
+ },
+ {
+  "content": "Adopt a professional, direct, and concise tone suitable for a chat environment. Aim for fewer than 3 lines of text output (excluding tool use/code generation) per response whenever practical.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tone-and-style"
+  ]
+ },
+ {
+  "content": "Avoid conversational filler, preambles like 'Okay, I will now...', or postambles like 'I have finished the changes...'. Get straight to the action or answer.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:tone-and-style"
+  ]
+ },
+ {
+  "content": "Use GitHub-flavored Markdown for formatting. Use tools for actions, text output only for communication, and do not add explanatory comments within tool calls or code blocks unless specifically part of the required code/command itself.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tone-and-style"
+  ]
+ },
+ {
+  "content": "If unable or unwilling to fulfill a request, state so briefly in 1-2 sentences without excessive justification and offer alternatives if appropriate.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:tone-and-style"
+  ]
+ },
+ {
+  "content": "The Temporal project is organized with /api for proto definitions, /chasm for Chasm library, /client for inter-service communication, /cmd for CLI commands, /common for shared modules, /components for nexus components, /config for configuration files, /docs for documentation, /proto for internal proto definitions, /schema for database schemas, and /service for main services (frontend, history, matching, worker, etc.).",
+  "memory_type": "semantic",
+  "tags": [
+   "section:project-structure"
+  ]
+ },
+ {
+  "content": "Run `make lint-code` to lint the Temporal project code.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-commands"
+  ]
+ },
+ {
+  "content": "Run `make fmt-imports` to format imports in the Temporal project.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-commands"
+  ]
+ },
+ {
+  "content": "Run `make proto` to generate code from proto definitions in the Temporal project.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-commands"
+  ]
+ },
+ {
+  "content": "Run `make update-go-api` to update API proto in the Temporal project.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-commands"
+  ]
+ },
+ {
+  "content": "Run `make unit-test` to run unit tests in the Temporal project.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-commands"
+  ]
+ },
+ {
+  "content": "Always include `-tags test_dep` when running tests in the Temporal project.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:best-practices",
+   "trigger:test-run"
+  ]
+ },
+ {
+  "content": "Include the `integration` tag only for integration tests in the Temporal project, not for unit tests.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:best-practices"
+  ]
+ },
+ {
+  "content": "Do not introduce new third party libraries to the Temporal project unless specifically requested.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:best-practices"
+  ]
+ },
+ {
+  "content": "Implement tests for both best-case scenarios and failure modes in the Temporal project.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:best-practices",
+   "trigger:test-write"
+  ]
+ },
+ {
+  "content": "Handle all errors appropriately in the Temporal project; errors must never be ignored.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:best-practices",
+   "trigger:error-handling"
+  ]
+ },
+ {
+  "content": "Leave `CONSIDER(name):` comments in the Temporal project for future design considerations.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:best-practices"
+  ]
+ },
+ {
+  "content": "Regenerate code in the Temporal project when interface definitions change by running `make proto`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:best-practices"
+  ]
+ },
+ {
+  "content": "Use `logger.Fatal` for core invariant violations in the Temporal project.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:error-handling"
+  ]
+ },
+ {
+  "content": "Use `logger.DPanic` for issues in the Temporal project that are important but should not crash production.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:error-handling"
+  ]
+ },
+ {
+  "content": "Write tests for new functionality in the Temporal project and run tests after altering code or tests.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing",
+   "trigger:test-write"
+  ]
+ },
+ {
+  "content": "Start with unit tests in the Temporal project for fastest feedback; prefer `require` over `assert` and avoid testify suites in unit tests (functional tests require suites for test cluster setup).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing",
+   "trigger:test-write"
+  ]
+ },
+ {
+  "content": "Use `require.Eventually` instead of `time.Sleep` in Temporal project tests (forbidden by linter).",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:testing"
+  ]
+ },
+ {
+  "content": "For float comparisons in Temporal project tests, use `InDelta` or `InEpsilon` instead of `Equal` (enforced by `testifylint`).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing",
+   "trigger:test-write"
+  ]
+ },
+ {
+  "content": "For error assertions in Temporal project testify suites, use `s.Require().NoError(err)` instead of `s.NoError(err)` (enforced by `testifylint`).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing",
+   "trigger:test-write"
+  ]
+ },
+ {
+  "content": "When performing software engineering tasks (fixing bugs, adding features, refactoring, explaining code), follow this sequence: Understand the user's request and relevant codebase context \u2192 Plan a coherent solution and share a concise plan with the user \u2192 Implement changes strictly adhering to project conventions \u2192 Regenerate code if you alter files annotated with //go:generate or .proto files \u2192 Verify changes using project testing procedures \u2192 Execute project-specific build, linting and type-checking commands (make lint-code).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:software-engineering-tasks",
+   "trigger:code-task"
+  ]
+ },
+ {
+  "content": "When planning a software engineering task, break it down into smaller manageable tasks, identify potential challenges for each task and how to address them, provide a high-level outline of code structure with function names and purposes, list specific test cases to implement, state error handling approaches for different scenarios, and discuss trade-offs including performance, scalability, complexity, and security.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:software-engineering-tasks"
+  ]
+ },
+ {
+  "content": "As part of the planning phase for software engineering tasks, use a self-verification loop by writing unit tests if relevant to the task and using output logs or debug statements to arrive at a solution.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:software-engineering-tasks"
+  ]
+ },
+ {
+  "content": "When implementing code changes for software engineering tasks, strictly adhere to the project's established conventions detailed under 'Core Mandates'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:software-engineering-tasks"
+  ]
+ },
+ {
+  "content": "After altering any files annotated with //go:generate or .proto files during implementation, you must regenerate code.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:software-engineering-tasks"
+  ]
+ },
+ {
+  "content": "When verifying software engineering task changes, identify the correct test commands and frameworks by examining README files, build/package configuration (e.g., Makefile), or existing test execution patterns; never assume standard test commands.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:software-engineering-tasks"
+  ]
+ },
+ {
+  "content": "After making code changes, execute project-specific build, linting and type-checking commands; make lint-code is the primary verification command for standards compliance.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:software-engineering-tasks"
+  ]
+ },
+ {
+  "content": "When reasoning about failure modes of a design during planning, consider how it handles crashes and a 10x increase in load.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:planning"
+  ]
+ }
+]

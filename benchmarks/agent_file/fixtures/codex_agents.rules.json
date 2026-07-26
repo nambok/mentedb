@@ -1,0 +1,108 @@
+{
+  "description": "Ground truth for fixtures/codex_agents.md, the AGENTS.md of github.com/openai/codex (main branch, fetched 2026-07-25, Apache 2.0). File copied verbatim, zero edits. atom_match strings are verbatim quotes from the file.",
+  "rules": {
+    "use-just-test": {
+      "atom_match": [
+        "Do not run `cargo test` directly",
+        "just test -p codex-"
+      ],
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "just test"
+        ]
+      }
+    },
+    "no-cargo-test": {
+      "atom_match": "Do not run `cargo test` directly",
+      "checker": {
+        "type": "not_contains",
+        "needles": [
+          "cargo test"
+        ]
+      }
+    },
+    "wire-camelcase": {
+      "atom_match": "rename_all = \"camelCase\"",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "rename_all = \"camelCase\""
+        ]
+      }
+    },
+    "ts-export-v2": {
+      "atom_match": "export_to = \"v2/\"",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "export_to = \"v2/\""
+        ]
+      }
+    },
+    "no-skip-serializing": {
+      "atom_match": "Never use `#[serde(skip_serializing_if",
+      "checker": {
+        "type": "not_contains",
+        "needles": [
+          "skip_serializing_if"
+        ]
+      }
+    },
+    "test-module-sibling": {
+      "atom_match": "_tests.rs",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "#[path",
+          "_tests.rs"
+        ]
+      }
+    },
+    "pretty-assertions": {
+      "atom_match": "pretty_assertions::assert_eq",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "pretty_assertions"
+        ]
+      }
+    },
+    "rpc-singular": {
+      "atom_match": "singular",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "thread/list"
+        ]
+      }
+    },
+    "py-no-future": {
+      "atom_match": "__future__",
+      "checker": {
+        "type": "not_contains",
+        "needles": [
+          "__future__"
+        ]
+      }
+    },
+    "textwrap-wrap": {
+      "atom_match": "textwrap::wrap",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "textwrap::wrap"
+        ]
+      }
+    },
+    "fmt-after-changes": {
+      "atom_match": "just fmt",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "just fmt"
+        ]
+      }
+    }
+  }
+}

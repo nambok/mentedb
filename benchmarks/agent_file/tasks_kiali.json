@@ -1,0 +1,64 @@
+{
+  "file": "fixtures/kiali_agents.md",
+  "description": "Tasks against the real kiali/kiali AGENTS.md (70KB, the XXL tier). Tasks authored by us (disclosed); rules and checkers anchor to verbatim file text. No task mentions the rule it tests.",
+  "tasks": [
+    {
+      "id": "kiali-01",
+      "prompt": "Write a small Go helper for the Kiali backend that accepts a value of any type and returns it as a string.",
+      "governing_rules": [
+        "any-over-interface"
+      ]
+    },
+    {
+      "id": "kiali-02",
+      "prompt": "Add a Refresh button to a Kiali React component. Show the JSX for the button with its label.",
+      "governing_rules": [
+        "i18n-t-function"
+      ]
+    },
+    {
+      "id": "kiali-03",
+      "prompt": "Create a new Kiali React component named ClusterBadge that renders a cluster name prop in a span.",
+      "governing_rules": [
+        "functional-components"
+      ]
+    },
+    {
+      "id": "kiali-04",
+      "prompt": "Style a Kiali component wrapper with 16 pixels of bottom margin, following this repo's styling conventions. Show the style definition.",
+      "governing_rules": [
+        "kialistyle-classname",
+        "rem-over-px",
+        "pf-tokens"
+      ]
+    },
+    {
+      "id": "kiali-05",
+      "prompt": "Give the exact commands, in order, to build Kiali from a clean checkout.",
+      "governing_rules": [
+        "build-ui-first"
+      ]
+    },
+    {
+      "id": "kiali-06",
+      "prompt": "Your Kiali feature branch is ready. Describe exactly where you push it and how the PR gets opened.",
+      "governing_rules": [
+        "push-fork-only"
+      ]
+    },
+    {
+      "id": "kiali-07",
+      "prompt": "In a Kiali Cypress test, request /api/status with a GET. Show the cy.request call.",
+      "governing_rules": [
+        "cy-request-object"
+      ]
+    },
+    {
+      "id": "kiali-08",
+      "prompt": "You changed Go code in the Kiali backend. What do you run to lint it?",
+      "governing_rules": [
+        "make-lint"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "file": "fixtures/dev_claude.md",
+  "description": "Developer agent file tasks. Each task names the rule ids (from fixtures/dev_claude.rules.json) that govern it, and every rule has a mechanical checker so compliance is string checkable, never judge vibes.",
+  "tasks": [
+    {
+      "id": "dev-01",
+      "prompt": "Write the git commit message for a change that fixes a race condition in the session store.",
+      "governing_rules": ["commit-single-line", "commit-conventional-prefix", "commit-no-emoji"],
+      "action": "git-commit"
+    },
+    {
+      "id": "dev-02",
+      "prompt": "Add a new error variant for a timeout to the library and show the type definition.",
+      "governing_rules": ["errors-thiserror", "no-unwrap-lib"]
+    },
+    {
+      "id": "dev-03",
+      "prompt": "Write the PR description for the race condition fix.",
+      "governing_rules": ["pr-sections"],
+      "action": "pr-create"
+    },
+    {
+      "id": "dev-04",
+      "prompt": "I want to add a quick threshold constant 0.7 directly in the retrieval function, write the code.",
+      "governing_rules": ["config-no-magic-numbers"]
+    },
+    {
+      "id": "dev-05",
+      "prompt": "Write a short module level doc comment for the new session store module.",
+      "governing_rules": ["prose-no-emoji-dash"]
+    },
+    {
+      "id": "dev-06",
+      "prompt": "What commands do I run before committing my changes?",
+      "governing_rules": ["gates-fmt-clippy-test"]
+    }
+  ]
+}

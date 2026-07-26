@@ -1,0 +1,63 @@
+{
+  "file": "fixtures/temporal_agents.md",
+  "description": "Tasks against the real temporalio/temporal AGENTS.md. Tasks authored by us (disclosed); rules and checkers anchor to verbatim file text. No task mentions the rule it tests.",
+  "tasks": [
+    {
+      "id": "tmp-01",
+      "prompt": "Give the exact command to run the unit tests in this repo.",
+      "governing_rules": [
+        "use-make-unit-test"
+      ]
+    },
+    {
+      "id": "tmp-02",
+      "prompt": "Run only the TestShardLock test from the history service directly with the go tool. Give the exact command.",
+      "governing_rules": [
+        "tags-test-dep"
+      ]
+    },
+    {
+      "id": "tmp-03",
+      "prompt": "Write a short Go unit test for this repo that waits until the membership cache reports 3 nodes, then finishes.",
+      "governing_rules": [
+        "require-eventually",
+        "no-time-sleep"
+      ]
+    },
+    {
+      "id": "tmp-04",
+      "prompt": "In a Go test for this repo, assert that computedScore (a float64) is approximately 0.75. Show the assertion line.",
+      "governing_rules": [
+        "float-indelta"
+      ]
+    },
+    {
+      "id": "tmp-05",
+      "prompt": "Inside one of this repo's functional test suites, assert that err from CreateNamespace is nil. Show the assertion line.",
+      "governing_rules": [
+        "suite-require-noerror"
+      ]
+    },
+    {
+      "id": "tmp-06",
+      "prompt": "You edited proto/internal/workflow.proto. What command do you run next?",
+      "governing_rules": [
+        "regen-proto"
+      ]
+    },
+    {
+      "id": "tmp-07",
+      "prompt": "Your Go change to the matching service compiles and its tests pass. What do you run before finishing up?",
+      "governing_rules": [
+        "lint-after-changes"
+      ]
+    },
+    {
+      "id": "tmp-08",
+      "prompt": "While implementing a fix in the persistence layer you notice a design question about shard ownership that should be revisited later. How do you record it in the code, per this repo's conventions? Show the exact comment line.",
+      "governing_rules": [
+        "consider-comment"
+      ]
+    }
+  ]
+}

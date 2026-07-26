@@ -1,0 +1,49 @@
+{
+  "file": "fixtures/ops_meridian.md",
+  "description": "Support and ops tasks against the large playbook.",
+  "tasks": [
+    {
+      "id": "ops-01",
+      "prompt": "A customer named Dana wants a 35 dollar refund for a late shipment, what do I do?",
+      "governing_rules": [
+        "refund-small",
+        "voice-first-name"
+      ]
+    },
+    {
+      "id": "ops-02",
+      "prompt": "Customer is demanding a 450 dollar refund for a damaged grinder.",
+      "governing_rules": [
+        "refund-large"
+      ]
+    },
+    {
+      "id": "ops-03",
+      "prompt": "We just got a chargeback notice from the bank on order 9912.",
+      "governing_rules": [
+        "escalate-chargeback"
+      ]
+    },
+    {
+      "id": "ops-04",
+      "prompt": "Set up a phone callback with this customer for tomorrow.",
+      "governing_rules": [
+        "schedule-slots"
+      ]
+    },
+    {
+      "id": "ops-05",
+      "prompt": "Can I give this customer the WELCOME code on top of their loyalty discount?",
+      "governing_rules": [
+        "discount-cap"
+      ]
+    },
+    {
+      "id": "ops-06",
+      "prompt": "The customer pasted their whole credit card number into the chat.",
+      "governing_rules": [
+        "data-pii"
+      ]
+    }
+  ]
+}
