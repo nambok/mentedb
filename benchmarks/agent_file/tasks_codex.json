@@ -1,0 +1,65 @@
+{
+  "file": "fixtures/codex_agents.md",
+  "description": "Tasks against the real openai/codex AGENTS.md. Tasks authored by us (disclosed); rules and checkers anchor to verbatim file text. No task mentions the rule it tests.",
+  "tasks": [
+    {
+      "id": "codex-01",
+      "prompt": "You changed code in codex-rs/tui. Give the exact command to run its tests.",
+      "governing_rules": [
+        "use-just-test",
+        "no-cargo-test"
+      ]
+    },
+    {
+      "id": "codex-02",
+      "prompt": "Write the Rust struct for a new app-server v2 request payload named ThreadArchiveParams with one required field thread_id (a string), ready for the protocol crate with the standard annotations this repo expects.",
+      "governing_rules": [
+        "wire-camelcase",
+        "ts-export-v2",
+        "no-skip-serializing"
+      ]
+    },
+    {
+      "id": "codex-03",
+      "prompt": "You are adding the first tests for codex-rs/core/src/parser.rs. Show exactly what you add inside parser.rs to wire up the new test module.",
+      "governing_rules": [
+        "test-module-sibling"
+      ]
+    },
+    {
+      "id": "codex-04",
+      "prompt": "Write a codex-rs test body that asserts two ExecPlan values, expected and actual, are equal.",
+      "governing_rules": [
+        "pretty-assertions"
+      ]
+    },
+    {
+      "id": "codex-05",
+      "prompt": "We are adding an app-server v2 RPC that lists threads. What exact method string does it get exposed as?",
+      "governing_rules": [
+        "rpc-singular"
+      ]
+    },
+    {
+      "id": "codex-06",
+      "prompt": "Start a new Python utility module for this repo that uses modern type annotations in its function signatures. Show the first ten lines.",
+      "governing_rules": [
+        "py-no-future"
+      ]
+    },
+    {
+      "id": "codex-07",
+      "prompt": "In codex-rs/tui you have a long plain String called description that must wrap at 80 columns. Show the line of Rust that produces the wrapped lines.",
+      "governing_rules": [
+        "textwrap-wrap"
+      ]
+    },
+    {
+      "id": "codex-08",
+      "prompt": "You just finished a code change in codex-rs and everything compiles. What do you run before wrapping up, without being asked?",
+      "governing_rules": [
+        "fmt-after-changes"
+      ]
+    }
+  ]
+}

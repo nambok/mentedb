@@ -1,0 +1,88 @@
+{
+  "description": "HELD-OUT ground truth for fixtures/freerouting_agents.md (github.com/freerouting/freerouting AGENTS.md, 51KB, fetched 2026-07-26, verbatim). Written AFTER the pipeline was frozen; no tuning against this file is permitted. atom_match strings are verbatim quotes.",
+  "rules": {
+    "spelling-freerouting": {
+      "atom_match": "always written **\"Freerouting\"",
+      "checker": {
+        "type": "not_contains",
+        "needles": [
+          "freerouting "
+        ]
+      }
+    },
+    "interactive-obtain": {
+      "atom_match": "InteractiveSettings.getOrCreate",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "InteractiveSettings.getOrCreate"
+        ]
+      }
+    },
+    "no-headless-interactive": {
+      "atom_match": "never** be referenced from `HeadlessBoardManager",
+      "checker": {
+        "type": "not_contains",
+        "needles": [
+          "InteractiveSettings"
+        ]
+      }
+    },
+    "drc-entry": {
+      "atom_match": "getAllClearanceViolations",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "getAllClearanceViolations"
+        ]
+      }
+    },
+    "nullable-type": {
+      "atom_match": "nullable reference types",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "Integer maxPasses"
+        ]
+      }
+    },
+    "no-default-init": {
+      "atom_match": "no default initializers",
+      "checker": {
+        "type": "not_contains",
+        "needles": [
+          "maxPasses = "
+        ]
+      }
+    },
+    "analytics-4arg": {
+      "atom_match": "4-arg overload",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "userId"
+        ]
+      }
+    },
+    "fixture-tests": {
+      "atom_match": "reproduction tests on actual PCB design files",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          ".dsn",
+          "RoutingFixtureTest",
+          "fixtures"
+        ]
+      }
+    },
+    "no-cache-merge": {
+      "atom_match": "Do not cache the result",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "merge()"
+        ]
+      }
+    }
+  }
+}

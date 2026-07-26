@@ -1,0 +1,87 @@
+{
+  "description": "Ground truth for fixtures/temporal_agents.md, the AGENTS.md of github.com/temporalio/temporal (main, fetched 2026-07-25, MIT). Verbatim copy, zero edits. atom_match strings are verbatim quotes.",
+  "rules": {
+    "use-make-unit-test": {
+      "atom_match": "make unit-test",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "make unit-test"
+        ]
+      }
+    },
+    "tags-test-dep": {
+      "atom_match": "-tags test_dep",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "-tags test_dep"
+        ]
+      }
+    },
+    "require-eventually": {
+      "atom_match": "require.Eventually",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "require.Eventually"
+        ]
+      }
+    },
+    "no-time-sleep": {
+      "atom_match": "require.Eventually",
+      "checker": {
+        "type": "not_contains",
+        "needles": [
+          "time.Sleep"
+        ]
+      }
+    },
+    "float-indelta": {
+      "atom_match": "InDelta",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "InDelta",
+          "InEpsilon"
+        ]
+      }
+    },
+    "suite-require-noerror": {
+      "atom_match": "s.Require().NoError(err)",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "Require().NoError"
+        ]
+      }
+    },
+    "regen-proto": {
+      "atom_match": "make proto",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "make proto"
+        ]
+      }
+    },
+    "lint-after-changes": {
+      "atom_match": "make lint-code",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "make lint-code"
+        ]
+      }
+    },
+    "consider-comment": {
+      "atom_match": "CONSIDER(name):",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "CONSIDER("
+        ]
+      }
+    }
+  }
+}

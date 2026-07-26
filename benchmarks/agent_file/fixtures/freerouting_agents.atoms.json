@@ -1,0 +1,1429 @@
+[
+ {
+  "content": "You are a Senior Java Engineer specialized in Computational Geometry and EDA (Electronic Design Automation). Your core mission on this project is advanced PCB auto-routing. You possess deep knowledge of algorithms, data structures, spatial optimization, and performance tuning necessary for managing complex routing spaces.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:project-persona-goal"
+  ]
+ },
+ {
+  "content": "The project is built with Java 25, Gradle 9, and key dependencies include Jetty (embedded server), Jersey (JAX-RS for API), Log4j (logging), Gson, Jakarta EE APIs, Google Cloud & Sheets APIs, and Swagger/OpenAPI.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:tech-stack-environment"
+  ]
+ },
+ {
+  "content": "A Python client library is maintained outside this repository for headless interactions and REST API integrations. Release workflow reference is in `docs/developer.md`.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:tech-stack-environment"
+  ]
+ },
+ {
+  "content": "EDA integration assets exist under `integrations/` for KiCad, Autodesk EAGLE, Target3001!, and EasyEDA. `README.md` and `docs/integrations.md` also document tscircuit and pcb-rnd workflows.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:tech-stack-environment"
+  ]
+ },
+ {
+  "content": "The authoritative architecture overview lives in `docs/architecture.md` and includes a Mermaid diagram of the full system, a package glossary, and navigation guidance.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "Keep `docs/architecture.md` up-to-date whenever structural changes are made\u2014for example, when packages are added or reorganised, when a new interface (GUI mode, API version, CLI flag) is introduced, or when the boundary between the routing pipeline and the orchestration layer shifts. The in-repo diagram is the first document contributors read; a stale diagram misleads more than no diagram at all.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards",
+   "trigger:architecture-update"
+  ]
+ },
+ {
+  "content": "This is an algorithmic-heavy project. The complexity lies in spatial data structures, pathfinding (e.g., modified A*, Lee algorithm, maze routing), and geometric calculations.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "The UI/Visualizer and the Routing Engine are distinct domains. Always maintain a strict boundary between visual representation and core algorithmic logic. UI concerns should not bleed into the geometric models.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "Architectural package boundaries are enforced by ArchUnit tests in `src/test/java/app/freerouting/architecture/ModuleBoundariesArchTest.java` and `src/test/java/app/freerouting/io/SpecctraPackageArchTest.java`. Keep strict rules green. For known legacy boundary debt, use frozen rules (`FreezingArchRule`) and never relax strict rules to hide regressions.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "Keep routing/data logic in `src/main/java/app/freerouting/{autoroute,board,geometry,drc,core,rules}`; keep UI/editor flow in `src/main/java/app/freerouting/{gui,interactive,boardgraphics}`; keep REST/API server concerns in `src/main/java/app/freerouting/{api,management}`; keep file-format I/O in `src/main/java/app/freerouting/io/{specctra,specctra/parser}` \u2014 the public entry points live in `io.specctra` and grammar internals in `io.specctra.parser`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "Adhere strictly to Clean Code principles and standard Java naming conventions (e.g., CamelCase for classes/methods). Prioritize readability and maintainability without sacrificing algorithmic performance.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards",
+   "trigger:code-review"
+  ]
+ },
+ {
+  "content": "The source code of the original v1.9 implementation is available in the `src_v19/` directory. It serves as a reference and benchmark baseline to compare against when refactoring or optimizing routing logic.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "Use the v1.9 source code to understand the original algorithmic decisions and to ensure that any new implementation maintains or improves upon the original performance and correctness.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "Do not refactor or optimize the v1.9 code directly. Instead, use it as a reference for the current development branch. The source code should be modified only when more gradual trace logging is needed to understand the original algorithm's behavior in specific scenarios.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "Use the `FRLogger` class for logging. The method `trace(String method, String operation, String message, String impactedItems, Point[] impactedPoints)` should be used for detailed algorithmic steps, especially in routing logic, to facilitate debugging and performance analysis.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards",
+   "trigger:algorithm-trace"
+  ]
+ },
+ {
+  "content": "Logs should be structured and informative, including impacted nets and impacted points in the routing process. These logs should be maintained in both the current implementation and the v1.9 reference to allow for side-by-side comparisons when analyzing routing behavior and performance.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "You can leave the trace log method calls in place in the v1.9 code and in the current code as well to help future developers understand the routing process and identify any regressions or improvements in the new implementation.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "For parity investigations, keep diagnostic payloads synchronized between current and v1.9. If current emits a debug marker (for example `[assign_raw]` with section/door identity), add the same marker fields to v1.9 before drawing conclusions from log diffs.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards",
+   "trigger:parity-investigation"
+  ]
+ },
+ {
+  "content": "`InteractiveSettings` extends `GuiSettings` (which implements `SettingsSource` at priority 50) and is the sole live source of GUI state in the `SettingsMerger` pipeline.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "`InteractiveSettings` is a singleton within a GUI session. Always obtain it via `InteractiveSettings.getOrCreate(board)` and reset it on every board load with `InteractiveSettings.reset(board)`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards",
+   "trigger:gui-session-init"
+  ]
+ },
+ {
+  "content": "`InteractiveSettings` must never be referenced from `HeadlessBoardManager` or any `api`/`management` code path. `HeadlessBoardManager.getInteractiveSettings()` always returns `null` by design.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "`InteractiveSettings.getSettings()` returns a live snapshot of the current GUI state and is what `SettingsMerger` reads at priority 50. Do not cache the result; always call `merger.merge()` to get an up-to-date `RouterSettings`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "All fields in `InteractiveSettings` (own and inherited) are `private`; external access must go through getters/setters so that `PropertyChangeEvent`s fire correctly.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "`HeadlessBoardManager` is the headless/API base; `GuiBoardManager` extends it and adds all GUI concerns (Swing panels, `InteractiveSettings`, serialisation of `.frb` binary files). Code that must work in both modes lives in `HeadlessBoardManager`; code that requires a display or user interaction lives in `GuiBoardManager`.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-standards"
+  ]
+ },
+ {
+  "content": "When registering a `GuiSettings`-subtype source (e.g., the `InteractiveSettings` singleton) with `SettingsMerger.addOrReplaceSources(SettingsSource)`, pass the concrete instance \u2014 the merger uses subtype matching to find and replace any existing `GuiSettings` entry at priority 50. Never register a plain `GuiSettings` instance after the singleton has been registered or it will silently shadow the live GUI state.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:architecture-standards",
+   "trigger:settings-registration"
+  ]
+ },
+ {
+  "content": "Be extremely careful when modifying the routing algorithms. Even minor changes can lead to severe regressions in trace optimization, clearance violations, or routing completion rates.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:specific-constraints-logic",
+   "trigger:routing-algorithm-change"
+  ]
+ },
+ {
+  "content": "Before refactoring any core routing logic, you must verify your changes against the existing test suite to prevent trace regressions. Always run reproduction tests on actual PCB design files (.dsn) if an issue is reported. Reference src/test/java/app/freerouting/fixtures/RoutingFixtureTest.java and fixtures in fixtures/.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:specific-constraints-logic",
+   "trigger:routing-algorithm-change"
+  ]
+ },
+ {
+  "content": "I want to optimize the net ordering in the router",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:routing-algorithm-change"
+  ]
+ },
+ {
+  "content": "Should I refactor the trace expansion logic?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:routing-algorithm-change"
+  ]
+ },
+ {
+  "content": "I found a way to speed up clearance checking",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:routing-algorithm-change"
+  ]
+ },
+ {
+  "content": "Can I change how the router prioritizes connections?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:routing-algorithm-change"
+  ]
+ },
+ {
+  "content": "The original v1.9 implementation serves as a performance and correctness baseline. Any new implementation should aim to match or exceed the routing quality and efficiency of the v1.9 version.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:specific-constraints-logic"
+  ]
+ },
+ {
+  "content": "To compare routing performance between versions, use the script scripts/tests/compare-versions.ps1 which runs both versions on a PCB design and outputs key metrics. TRACE level logs are written to logs/ folder with freerouting-v190.log and freerouting-current.log filenames for easy comparison.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:specific-constraints-logic",
+   "trigger:performance-comparison"
+  ]
+ },
+ {
+  "content": "Log files from version comparisons can become huge. Use the compare-versions.ps1 script's filtering capabilities to focus on specific nets using -DebugFilterByNet command line argument, or limit routing passes with max_passes or items with max_items when analyzing performance differences between versions.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:specific-constraints-logic",
+   "trigger:performance-comparison"
+  ]
+ },
+ {
+  "content": "For deterministic parity work, locate the first meaningful mismatch in normalized routing streams (for example RAW_SECTION selection records) and treat that position as the investigation anchor for both versions.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:specific-constraints-logic",
+   "trigger:parity-investigation"
+  ]
+ },
+ {
+  "content": "Classify divergence before fixing: distinguish numeric-only drift from behavioral ordering/tie-break divergence by suppressing volatile values (for example expansion_value and sorting_value) and comparing decision continuity.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:specific-constraints-logic",
+   "trigger:parity-investigation"
+  ]
+ },
+ {
+  "content": "Preferred remediation sequence for parity investigations: (1) synchronize instrumentation payloads in current and v1.9, (2) diff around the first normalized mismatch with stable identifiers (section, door, from_door, net), (3) apply the smallest possible ordering/tie-break fix in current (for example in expand_to_door_section(...) path), (4) rerun comparisons to confirm the mismatch moves later or disappears without introducing violations.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:specific-constraints-logic",
+   "trigger:parity-investigation"
+  ]
+ },
+ {
+  "content": "Exit criteria for parity investigations: no new clearance violations, no regression in routing completion, and stable or improved compare-versions metrics across repeated runs and at least two max_items checkpoints.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:specific-constraints-logic"
+  ]
+ },
+ {
+  "content": "When optimizing routing algorithms, the critical priority metric is Clearance Violations. Ensure that no routing changes introduce new clearance violations.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:algorithm-performance-metrics"
+  ]
+ },
+ {
+  "content": "Routing Completion Rate (percentage of successfully routed nets) is a high priority performance metric when optimizing routing algorithms.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:algorithm-performance-metrics"
+  ]
+ },
+ {
+  "content": "Execution Time is a medium priority performance metric for routing algorithm optimization. Aim to reduce the time taken for routing without compromising clearance violations or routing completion rate.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:algorithm-performance-metrics"
+  ]
+ },
+ {
+  "content": "Memory Usage is a medium priority performance metric for routing algorithm optimization. Ensure that any optimizations do not lead to excessive memory consumption, especially for large PCB designs.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:algorithm-performance-metrics"
+  ]
+ },
+ {
+  "content": "The phrase 'the job allocated X GB of memory so far' in router memory log lines is the cumulative total of all JVM heap allocations since the job started (a GC throughput metric). It grows monotonically regardless of GC activity and is NOT the current heap size.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:algorithm-performance-metrics"
+  ]
+ },
+ {
+  "content": "The authoritative live-memory figure in routing logs is 'peak heap usage: Y MB' printed at the end of the session. When investigating memory reports from users, always ask for or measure peak heap, not cumulative allocated.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:algorithm-performance-metrics",
+   "trigger:memory-investigation"
+  ]
+ },
+ {
+  "content": "Expected memory profile for a multi-pass routing job: Working-set typically grows in a staircase pattern (each pass plateau, then a GC trim) up to a board-size-dependent peak, then drops sharply when the routing thread pool winds down and releases per-pass board state.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:algorithm-performance-metrics"
+  ]
+ },
+ {
+  "content": "The optimizer phase in routing normally runs at a significantly lower and flat memory footprint compared to routing passes. Sustained growth during the optimizer (not routing) is the signal that indicates a genuine GC-root retention leak.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:algorithm-performance-metrics"
+  ]
+ },
+ {
+  "content": "Trace Length Optimization (minimizing the total length of traces while respecting design rules) is a low priority performance metric when optimizing routing algorithms.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:algorithm-performance-metrics"
+  ]
+ },
+ {
+  "content": "Always write comprehensive unit tests for any new routing logic or optimizations. Use the existing test suite as a reference and ensure that all tests pass before merging changes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing-validation",
+   "trigger:code-change"
+  ]
+ },
+ {
+  "content": "For any new features or optimizations to routing, add specific test cases that validate the expected behavior and performance improvements.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing-validation",
+   "trigger:code-change"
+  ]
+ },
+ {
+  "content": "For a quick check on a small routing change, run only the Issue508Test_BM01_first_2_nets unit test, which is one of the quickest routing tests. Use ./gradlew test for the default (fast) unit-test set and ./gradlew check for the full integration testing suite.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing-validation",
+   "trigger:unit-test-run"
+  ]
+ },
+ {
+  "content": "How do I quickly verify my routing change?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:unit-test-run"
+  ]
+ },
+ {
+  "content": "What's a fast test to validate my algorithm fix?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:unit-test-run"
+  ]
+ },
+ {
+  "content": "I need to run a quick smoke test",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:unit-test-run"
+  ]
+ },
+ {
+  "content": "Should I run the full test suite?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:unit-test-run"
+  ]
+ },
+ {
+  "content": "Tag long-running fixture and benchmark tests with @Tag(\"slow\"). The default test task excludes these tests unless explicitly enabled (-PincludeSlowTests=true). Use ./gradlew testSlow to run only slow tests, and ./gradlew testAll to run both fast + slow sets before releases or merge-critical validation.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing-validation",
+   "trigger:slow-test-tagging"
+  ]
+ },
+ {
+  "content": "I wrote a new fixture test that takes 2 minutes",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:slow-test-tagging"
+  ]
+ },
+ {
+  "content": "How should I mark long-running benchmarks?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:slow-test-tagging"
+  ]
+ },
+ {
+  "content": "I need to run all tests before release",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:slow-test-tagging"
+  ]
+ },
+ {
+  "content": "Should my new integration test run in the default test task?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:slow-test-tagging"
+  ]
+ },
+ {
+  "content": "The Gradle unit-test task timeout is 30 minutes to accommodate fanout-enabled routing fixtures on slower hardware.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:testing-validation"
+  ]
+ },
+ {
+  "content": "Boards with >500 nets can take several minutes per routing pass. Use TestingSettings.setMaxItems(n) (e.g. 100\u2013200) to slice off a bounded chunk of work that runs in under 30 seconds while still exercising the target code path.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing-validation",
+   "trigger:large-board-test"
+  ]
+ },
+ {
+  "content": "Do not rely on a short jobTimeoutString alone for large PCB boards in CI tests \u2014 the timeout fires after the pass completes, so a single slow pass can still blow the budget. Use TestingSettings.setMaxItems() to bound the work.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:testing-validation",
+   "trigger:large-board-test"
+  ]
+ },
+ {
+  "content": "Full-scale OOM and stress tests that cannot be bounded to CI time belong in scripts/tests/ as standalone PowerShell scripts. Reference run_test_Issue420_oom.ps1 as the pattern: build the executable JAR, run it headlessly with -XX:+HeapDumpOnOutOfMemoryError, sample the JVM working-set every 30 s via a Start-Job background sampler, and print a pass/fail summary with the memory trend at the end.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing-validation",
+   "trigger:stress-test-script"
+  ]
+ },
+ {
+  "content": "Before calling any method that accesses interactiveSettings, always check getInteractiveSettings() != null or restrict the call to GuiBoardManager only.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:gui-vs-headless-guard",
+   "trigger:gui-guard"
+  ]
+ },
+ {
+  "content": "Shared interactive-package code (e.g., routing states like RouteState, DragState) may access hdlg.interactiveSettings directly \u2014 ensure those code paths are only reachable when hdlg is a GuiBoardManager instance.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:gui-vs-headless-guard",
+   "trigger:gui-guard"
+  ]
+ },
+ {
+  "content": "Issue-regression and full-pipeline tests should be placed in src/test/java/app/freerouting/fixtures/ and extend RoutingFixtureTest.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:test-placement-conventions"
+  ]
+ },
+ {
+  "content": "Unit and integration tests scoped to a specific package should be placed in the matching test package directory (e.g., tests for app.freerouting.interactive go in src/test/java/app/freerouting/interactive/).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:test-placement-conventions"
+  ]
+ },
+ {
+  "content": "DSN fixture files live in fixtures/; reference them by filename (e.g., 'Issue508-DAC2020_bm01.dsn'). The quickest fixture for smoke-checks is Dac2020Bm01RoutingTest.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:test-placement-conventions"
+  ]
+ },
+ {
+  "content": "Bound long-running routing tests with TestingSettings.setMaxPasses(n), setMaxItems(m), and setJobTimeoutString(\"HH:MM:SS\") to keep CI fast.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:test-placement-conventions",
+   "trigger:test-bounding"
+  ]
+ },
+ {
+  "content": "Detailed per-issue specifications live in docs/issues/. Each file documents the problem, sub-issues (with \u2705 when done), proposed/actual implementation, and acceptance criteria. Keep these files up-to-date as sub-issues are resolved so future agents have accurate context without re-reading the full conversation history.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:issue-tracking",
+   "trigger:issue-documentation"
+  ]
+ },
+ {
+  "content": "Architecture boundary debt is tracked in docs/issues/Architecture-boundary-debt-tracker.md. Update it whenever frozen ArchUnit baselines change or when a frozen rule is promoted to strict.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:issue-tracking",
+   "trigger:issue-documentation"
+  ]
+ },
+ {
+  "content": "Temporary analysis artifacts (draft GitHub replies, one-off log extracts, heap-dump notes) should be written to logs/<IssueNNN>/ \u2014 this directory is git-ignored and will not clutter the repository.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:issue-tracking"
+  ]
+ },
+ {
+  "content": "This project is open-source under the GPLv3 license. Ensure all dependencies and contributions respect this license.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:licensing"
+  ]
+ },
+ {
+  "content": "RouterSettings and its nested classes RouterOptimizerSettings and RouterScokerSettings must use nullable reference types with no default initializers for all fields. If a field is initialized to a non-null value (e.g. public Integer maxPasses = 9999;), the SettingsMerger cannot distinguish whether a source sets the field or has no opinion, causing low-priority sources to silently override higher-priority ones.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:settings-configuration-system"
+  ]
+ },
+ {
+  "content": "All hardcoded defaults for RouterSettings must be placed exclusively in DefaultSettings.getSettings(), which is always applied first as the base layer (priority 0). Do not initialize fields in RouterSettings itself.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:settings-configuration-system"
+  ]
+ },
+ {
+  "content": "SettingsMerger layers nine SettingsSource implementations in ascending priority order: DefaultSettings (0), JsonFileSettings (10), DsnFileSettings (20), SesFileSettings (30), RulesFileSettings (40), GuiSettings (50), EnvironmentVariablesSource (55), CliSettings (60), ApiSettings (70). RouterSettings.applyNewValuesFrom(source) uses ReflectionUtil.copyFields() to copy a field only when the source value is non-null and not the Java language default for that type.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:settings-configuration-system"
+  ]
+ },
+ {
+  "content": "The copper-to-edge clearance default in Freerouting is 500.0 \u00b5m (0.5 mm), set in DefaultSettings via RouterSettings.copperToEdgeClearanceUm. Keep this field nullable in RouterSettings with no initializer so higher-priority sources can override it.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:settings-configuration-system"
+  ]
+ },
+ {
+  "content": "When writing tests for the edge-clearance override path, set copperToEdgeClearanceUm to a non-default value to verify source precedence and override behavior, not just default propagation.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:settings-configuration-system",
+   "trigger:test-settings-override"
+  ]
+ },
+ {
+  "content": "Execute tests using the Gradle Wrapper from the root directory: ./gradlew test (fast tests), ./gradlew testSlow (slow tests only), ./gradlew testAll (fast + slow), ./gradlew check (full verification suite).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:workflow-commands",
+   "trigger:run-tests"
+  ]
+ },
+ {
+  "content": "Build the executable JAR for Freerouting using ./gradlew executableJar; the result is located in build/libs/freerouting-current-executable.jar.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:workflow-commands",
+   "trigger:build-jar"
+  ]
+ },
+ {
+  "content": "Build both the current development version and v1.9 compatibility version of Freerouting using ./gradlew buildBothVersions.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:workflow-commands"
+  ]
+ },
+ {
+  "content": "Run the current Freerouting development environment using ./gradlew run from the root directory.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:workflow-commands",
+   "trigger:dev-run"
+  ]
+ },
+ {
+  "content": "Run the v1.9 compatibility build of Freerouting using ./gradlew runV19 from the root directory.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:workflow-commands"
+  ]
+ },
+ {
+  "content": "Apply project-wide cleanup and formatting recipes using ./gradlew rewriteRun from the root directory.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:workflow-commands",
+   "trigger:format-code"
+  ]
+ },
+ {
+  "content": "The product name is always written as 'Freerouting' with a capital F. Never write 'freerouting' in prose, documentation, or user-facing messages.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:communication-style",
+   "trigger:product-naming"
+  ]
+ },
+ {
+  "content": "Communication style for Freerouting development should be direct, professional, and technically precise. Acknowledge and respect the inherent complexity of PCB routing logic. Do not oversimplify geometric problems; provide thorough, algorithmically-sound justifications for any proposed code changes. Output complete and correct code when finalizing solutions.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:communication-style",
+   "trigger:response-style"
+  ]
+ },
+ {
+  "content": "DesignRulesChecker.getAllClearanceViolations() is the comprehensive DRC method that iterates all board item pairs and must be used when a complete violation count is needed. The shortcut board.get_outline().clearance_violation_count() only checks violations from the BoardOutline's perspective and is incomplete.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:drc-clearance-architecture",
+   "trigger:check-clearance"
+  ]
+ },
+ {
+  "content": "BoardStatistics.clearanceViolations.totalCount is currently incomplete because it calls board.get_outline().clearance_violation_count() instead of DesignRulesChecker.getAllClearanceViolations(). Do not treat this count as a definitive 'no violations' signal without understanding this limitation (see Issue 558).",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:drc-clearance-architecture"
+  ]
+ },
+ {
+  "content": "A routing fixture test that asserts clearanceViolations.totalCount == 0 may pass because the internal DRC is checking the wrong threshold, not because the routing is actually correct. Always verify that the DRC is checking the same clearance values that the final EDA tool (e.g. KiCad) will check.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:drc-clearance-architecture"
+  ]
+ },
+ {
+  "content": "KiCad's DSN export does not include copper-to-edge clearance in the Specctra .dsn file. Freerouting assigns the BoardOutline the default conductor-to-conductor clearance class and routes traces at that smaller distance from the board edge. KiCad's own DRC will flag violations after import. The Specctra format supports (clearance_class ...) inside (boundary ...) and Freerouting already parses it; the fix requires KiCad to emit it. See docs/issues/Issue558-copper-to-edge-clearance.md for analysis and workaround plan.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:drc-clearance-architecture"
+  ]
+ },
+ {
+  "content": "The BoardOutline item's clearance class is set during HeadlessBoardManager.create_board() from p_outline_clearance_class_name. When this is null (the KiCad case), it falls back to ItemClass.AREA = class 1 = 'default'. The ShapeSearchTree then uses this class's compensation value to determine how close routing can approach the board edge.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:drc-clearance-architecture"
+  ]
+ },
+ {
+  "content": "Copper pours are represented as board.ConductionArea (extends ObstacleArea, implements Connectable). A ConductionArea belongs to exactly one net (e.g. GND) and occupies one PCB layer.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:copper-pour-power-plane-architecture"
+  ]
+ },
+ {
+  "content": "ConductionArea.is_obstacle controls whether a copper pour blocks foreign-net traces. When false (the default for fills), foreign traces may pass through the pour geometrically, which is normal for a poured plane. Use RoutingBoard.change_conduction_is_obstacle(boolean) to toggle this in bulk; note that the method is only reachable from GuiBoardManager, not headless code.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:copper-pour-power-plane-architecture"
+  ]
+ },
+ {
+  "content": "rules.Net.contains_plane is the critical flag that switches the autorouter into plane-routing mode for a given net. When true, BatchAutorouter.autoroute_item() routes from the already-connected group toward the ConductionArea (short stub + via pattern), rather than routing pad-to-pad. An early-exit CONNECTED_TO_PLANE state is returned as soon as the connected set already touches a ConductionArea.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:copper-pour-power-plane-architecture"
+  ]
+ },
+ {
+  "content": "The contains_plane flag is set via Path A (Network.java, reliable for standard KiCad exports): At net-creation time, LayerStructure.contains_plane(netName) is called. If the DSN structure section includes explicit plane layer-type information (KiCad's (plane <netname> ...) declaration), the flag is set immediately. This works correctly for outer-layer pours (B.Cu, F.Cu) and inner-layer pours (In1.Cu).",
+  "memory_type": "semantic",
+  "tags": [
+   "section:copper-pour-power-plane-architecture"
+  ]
+ },
+ {
+  "content": "Path B for setting contains_plane (DsnFile.adjustPlaneAutorouteSettings(), heuristic fallback) is only invoked when the DSN has no (autoroute ...) scope. It uses a \u2265 50% board-area threshold and skips outer layers (index 0 and last). This latent outer-layer guard is a bug for non-KiCad DSN files, but Path A fires first for well-formed KiCad exports so it is not normally encountered.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:copper-pour-power-plane-architecture"
+  ]
+ },
+ {
+  "content": "When contains_plane is true, BatchAutorouter.autoroute_item() passes settings.get_plane_via_costs() (cheaper than the regular via cost) to AutorouteControl. This incentivises dropping vias onto the plane rather than routing traces across the board.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:copper-pour-power-plane-architecture"
+  ]
+ },
+ {
+  "content": "OptViaAlgo.opt_plane_or_fanout_via() handles post-routing via repositioning for the stub-to-plane case. It verifies the new location is inside the ConductionArea before moving.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:copper-pour-power-plane-architecture"
+  ]
+ },
+ {
+  "content": "BasicBoard.connectable_item_count() counts ConductionArea as a connectable item, causing quadratic false-work for a GND net with N pads + 1 pour where every pad with fewer than N+1 connected members is enqueued even if already touching the plane. Fix applied: BatchAutorouter.getAutorouteItems() now skips items already connected to a ConductionArea for plane nets (i.e., net.contains_plane() && connected_set.anyMatch(ConductionArea)). This eliminates repeated normalize_traces failures and ensures autoroute_pass() returns false once all plane-net items are connected, letting the routing loop exit cleanly.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:copper-pour-power-plane-architecture"
+  ]
+ },
+ {
+  "content": "Plane routing in Freerouting introduces clearance violations (Issue 093): routing Issue093-interf_u.dsn (bottom-copper GND pour) with the current code introduces 62 clearance violations and logs an internal error in BatchAutorouter.autoroute_pass. The plane-routing code path is active when this occurs. This is a safety-critical open bug tracked in docs/issues/Issue152-copper-pour-plane-awareness.md.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:copper-pour-power-plane-architecture"
+  ]
+ },
+ {
+  "content": "Freerouting does not detect disconnected copper regions when a foreign-net trace cuts through a pour layer, creating an isolated copper island. The RatsNest and exported .ses file will show the net as fully routed even though part of the pour is electrically floating. This is long-term future work.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:copper-pour-power-plane-architecture"
+  ]
+ },
+ {
+  "content": "Use DsnReader.readBoard(InputStream, BoardObservers, IdentificationNumberGenerator, String) directly to load boards and check plane flags without routing. This is faster than running the routing scheduler and avoids timeout issues in tests.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:copper-pour-power-plane-architecture",
+   "trigger:load-board-no-route"
+  ]
+ },
+ {
+  "content": "API analytics pipeline has three stages: (1) API controller calls FRAnalytics.apiEndpointCalled(method, request, response, userId) on every successful 2xx response; (2) FRAnalytics.trackAnonymousAction builds a Properties map and calls FreeroutingAnalyticsClient.track(...) which POSTs JSON Payload asynchronously to https://api.freerouting.app/v1/analytics/track; (3) AnalyticsControllerV1.trackAction receives the POST and writes to BigQuery table freerouting-analytics.freerouting_application.api_endpoint_called via singleton BigQueryClient.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:pipeline-overview"
+  ]
+ },
+ {
+  "content": "FRAnalytics.permanent_user_id is always null in headless/API mode because FRAnalytics.setUserId() is only called from GUI startup path. Always pass the per-request userId UUID from AuthenticateUser() to the 4-arg overload FRAnalytics.apiEndpointCalled(method, request, response, userId) so that callers can be identified in BigQuery.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:key-invariants",
+   "trigger:analytics-track-api-call"
+  ]
+ },
+ {
+  "content": "Never call FRAnalytics.setUserId() from a request-handling thread because it writes static state shared across all concurrent requests, causing race conditions.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:key-invariants"
+  ]
+ },
+ {
+  "content": "FRAnalytics.apiEndpointCalled has two overloads: the 3-arg overload (no userId) is for unauthenticated endpoints where no caller UUID is available (e.g. GET /v1/system/status); all authenticated controller methods must use the 4-arg overload passing the return value of AuthenticateUser().",
+  "memory_type": "procedural",
+  "tags": [
+   "section:key-invariants",
+   "trigger:analytics-track-api-call"
+  ]
+ },
+ {
+  "content": "user calls GET /v1/jobs with auth token",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:analytics-track-api-call"
+  ]
+ },
+ {
+  "content": "client hits POST /v1/sessions with profile ID",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:analytics-track-api-call"
+  ]
+ },
+ {
+  "content": "system status endpoint called without authentication",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:analytics-track-api-call"
+  ]
+ },
+ {
+  "content": "authenticated session update request",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:analytics-track-api-call"
+  ]
+ },
+ {
+  "content": "public system health check",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:analytics-track-api-call"
+  ]
+ },
+ {
+  "content": "Error responses with status \u2265 400 are tracked by ApiAnalyticsFilter, not by controller methods. ApiAnalyticsFilter is a JAX-RS ContainerResponseFilter registered in FreeroutingApplication that fires for every \u2265 400 response including 401 Unauthorized responses aborted by ApiKeyValidationFilter before the controller runs.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:key-invariants"
+  ]
+ },
+ {
+  "content": "Successful 2xx responses are intentionally skipped by ApiAnalyticsFilter to avoid double-tracking with the richer controller-level calls.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:key-invariants"
+  ]
+ },
+ {
+  "content": "BigQueryClient is a singleton. Use BigQueryClient.getInstance(libraryVersion, serviceAccountKey) \u2014 never new BigQueryClient(...) \u2014 in AnalyticsControllerV1. Constructing a new instance on every request re-authenticates against GCP's token endpoint causing network I/O overhead.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:key-invariants",
+   "trigger:bigquery-client-init"
+  ]
+ },
+ {
+  "content": "BigQueryClient singleton is recreated automatically if the service-account key value changes for key rotation.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:key-invariants"
+  ]
+ },
+ {
+  "content": "FreeroutingAnalyticsClient delivery failures are aggregated via AnalyticsErrorAggregator.recordFailure(endpoint, e), not logged per-failure. Calling FRLogger.debug/warn inside the async send thread floods logs when the analytics endpoint is unreachable.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:key-invariants"
+  ]
+ },
+ {
+  "content": "Analytics error aggregation: the first failure in each window is logged immediately at WARN; subsequent failures are counted silently. A daemon thread named 'analytics-error-reporter' flushes a per-error-type summary every 60 minutes at WARN if total \u2264 50, or at ERROR if > 50 indicating sustained outage.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:key-invariants"
+  ]
+ },
+ {
+  "content": "All analytics events land in freerouting-analytics.freerouting_application.<event_name> where the table name is the event string lowercased with spaces and hyphens replaced by underscores (e.g. 'API Endpoint Called' \u2192 api_endpoint_called).",
+  "memory_type": "semantic",
+  "tags": [
+   "section:bigquery-table-and-column-conventions"
+  ]
+ },
+ {
+  "content": "Standard columns present on all BigQuery analytics rows: id, received_at, sent_at, timestamp, loaded_at, uuid_ts, user_id, anonymous_id, event, event_text, context_library_name, context_library_version.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:bigquery-table-and-column-conventions"
+  ]
+ },
+ {
+  "content": "API-call-specific BigQuery columns are: api_method (e.g. 'GET v1/jobs/\u2026'), api_request, api_response.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:bigquery-table-and-column-conventions"
+  ]
+ },
+ {
+  "content": "For authenticated API calls, both user_id and anonymous_id are set to the caller's Freerouting-Profile-ID UUID. Both are null for unauthenticated endpoints (system status, environment) and for any legacy events fired before fix #1 was applied.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:bigquery-table-and-column-conventions"
+  ]
+ },
+ {
+  "content": "File management/analytics/FRAnalytics.java is the static facade where apiEndpointCalled(\u2026, UUID userId) is the primary call site for API analytics.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:relevant-source-files"
+  ]
+ },
+ {
+  "content": "File management/analytics/FreeroutingAnalyticsClient.java is the HTTP client that POSTs to api.freerouting.app/v1/analytics/track.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:relevant-source-files"
+  ]
+ },
+ {
+  "content": "File management/analytics/AnalyticsErrorAggregator.java aggregates delivery failures and emits first-failure WARN plus hourly summary.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:relevant-source-files"
+  ]
+ },
+ {
+  "content": "File management/analytics/BigQueryClient.java is the singleton GCP BigQuery writer where getInstance() avoids per-request re-authentication.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:relevant-source-files"
+  ]
+ },
+ {
+  "content": "File api/ApiAnalyticsFilter.java is a JAX-RS dual filter that tracks all \u2265 400 responses centrally.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:relevant-source-files"
+  ]
+ },
+ {
+  "content": "File api/FreeroutingApplication.java registers ApiAnalyticsFilter alongside existing filters.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:relevant-source-files"
+  ]
+ },
+ {
+  "content": "Freerouting runs MCP as a separate server with its own settings block: mcp_server. This block is independent from the REST API configuration.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:server-separation-and-settings"
+  ]
+ },
+ {
+  "content": "mcp_server has independent lifecycle flags and network config: enabled, running, http_allowed, endpoints, cors_origins.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:server-separation-and-settings"
+  ]
+ },
+ {
+  "content": "MCP authentication config is independent from REST API config: mcp_server.authentication. Changing API authentication must not silently change MCP authentication.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:server-separation-and-settings"
+  ]
+ },
+ {
+  "content": "MCP tools execute against the REST API using mcp_server.target_api_base_url.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:server-separation-and-settings"
+  ]
+ },
+ {
+  "content": "The public discovery endpoint is GET /.well-known/agent.json and returns an A2A Agent Card.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:protocol-surface-v2-3"
+  ]
+ },
+ {
+  "content": "The JSON-RPC endpoint is POST /v1/mcp and handles initialize, tools/list, and tools/call methods.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:protocol-surface-v2-3"
+  ]
+ },
+ {
+  "content": "Realtime channels are provided via GET /v1/mcp/events (Server-Sent Events) and GET /v1/mcp/ws (WebSocket).",
+  "memory_type": "semantic",
+  "tags": [
+   "section:protocol-surface-v2-3"
+  ]
+ },
+ {
+  "content": "Tool inventory is generated from OpenAPI at /openapi/openapi.json and exposes nearly all /v1/* routes except MCP routes themselves.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:protocol-surface-v2-3"
+  ]
+ },
+ {
+  "content": "mcp_server.target_api_base_url must point to the REST API base URL and must never point to MCP routes (for example /v1/mcp or /.well-known/*), otherwise tool calls are rejected with a configuration error.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:target-api-guard"
+  ]
+ },
+ {
+  "content": "MCP request authentication uses Authorization: Bearer <API_KEY> header when auth is enabled.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:authentication-and-headers"
+  ]
+ },
+ {
+  "content": "MCP request authentication uses Freerouting-Profile-ID or Freerouting-Profile-Email header.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:authentication-and-headers"
+  ]
+ },
+ {
+  "content": "MCP request authentication uses Freerouting-Environment-Host header in <ToolName>/<Version> format.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:authentication-and-headers"
+  ]
+ },
+ {
+  "content": "Both API and MCP support configurable fixed-window rate limits: api_server.rate_limit and mcp_server.rate_limit.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:operational-hardening-invariants"
+  ]
+ },
+ {
+  "content": "MCP and REST responses include X-Correlation-ID header for request tracing.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operational-hardening-invariants"
+  ]
+ },
+ {
+  "content": "MCP tool bridge must forward X-Correlation-ID to underlying REST API calls so logs can be cross-linked.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operational-hardening-invariants"
+  ]
+ },
+ {
+  "content": "Update docs/API/MCP.md with concrete startup, verification, and troubleshooting steps whenever MCP changes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:required-docs-updates-when-mcp-changes"
+  ]
+ },
+ {
+  "content": "Update docs/API/API_v1.md MCP endpoint tables and examples whenever MCP changes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:required-docs-updates-when-mcp-changes"
+  ]
+ },
+ {
+  "content": "Update docs/settings.md whenever mcp_server fields change.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:required-docs-updates-when-mcp-changes"
+  ]
+ },
+ {
+  "content": "Update docs/architecture.md if package boundaries or data flow changes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:required-docs-updates-when-mcp-changes"
+  ]
+ },
+ {
+  "content": "Docker release images are built and published by .github/workflows/docker-release.yml triggered on every GitHub release; images are tagged with semver version and latest.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:docker-multi-platform-build"
+  ]
+ },
+ {
+  "content": "Docker nightly images are built and published by .github/workflows/docker-nightly.yml triggered on every push to master; images are tagged as nightly.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:docker-multi-platform-build"
+  ]
+ },
+ {
+  "content": "Both Docker build workflows build a multi-platform manifest image using Docker Buildx and QEMU for platforms: linux/amd64 (x86-64 servers, PCs, most cloud VMs) and linux/arm64 (Apple Silicon, AWS Graviton, Raspberry Pi 4/5 64-bit OS).",
+  "memory_type": "semantic",
+  "tags": [
+   "section:docker-multi-platform-build"
+  ]
+ },
+ {
+  "content": "linux/arm/v7 (32-bit ARM) support was dropped when the project moved to Java 25 because eclipse-temurin:25 no longer publishes an arm/v7 image. Raspberry Pi users running a 32-bit OS should switch to a 64-bit OS image to use the official Docker image.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:docker-multi-platform-build"
+  ]
+ },
+ {
+  "content": "provenance: false is set on both Docker build workflows so that the manifest does not contain build-attestation entries.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:docker-multi-platform-build"
+  ]
+ },
+ {
+  "content": "Gradle tests are run on the native ubuntu-latest runner before the multi-platform Docker build step to avoid QEMU network/loopback unreliability inside the cross-compiled build container.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:docker-multi-platform-build"
+  ]
+ },
+ {
+  "content": "See docs/self-hosting.md for end-user self-hosting instructions.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:docker-multi-platform-build"
+  ]
+ },
+ {
+  "content": "Windows installer jlink --add-modules list must include: java.desktop,java.logging,java.management,java.net.http,java.sql,java.xml,jdk.crypto.ec,jdk.crypto.mscapi,jdk.management",
+  "memory_type": "semantic",
+  "tags": [
+   "section:installer-jlink-module-requirements"
+  ]
+ },
+ {
+  "content": "Linux installer jlink --add-modules list must include: java.desktop,java.logging,java.management,java.net.http,java.sql,java.xml,jdk.crypto.ec,jdk.management",
+  "memory_type": "semantic",
+  "tags": [
+   "section:installer-jlink-module-requirements"
+  ]
+ },
+ {
+  "content": "macOS installer jlink --add-modules list must include: java.desktop,java.logging,java.management,java.net.http,java.sql,java.xml,jdk.crypto.ec,jdk.management",
+  "memory_type": "semantic",
+  "tags": [
+   "section:installer-jlink-module-requirements"
+  ]
+ },
+ {
+  "content": "jdk.crypto.mscapi is Windows-only and provides SunMSCAPI for the Windows OS certificate store. Do not add it to Linux/macOS jlink scripts.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:installer-jlink-module-requirements"
+  ]
+ },
+ {
+  "content": "java.management is required for ManagementFactory used in SystemControllerV1, BatchAutorouterThread, RoutingJobSchedulerActionThread, Log4j2 startup, and Jersey-server. Missing this module causes NoClassDefFoundError on startup and crashes the /v1/system/status endpoint.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:installer-jlink-module-requirements"
+  ]
+ },
+ {
+  "content": "jdk.management is required for com.sun.management.ThreadMXBean.getThreadAllocatedBytes() and com.sun.management.OperatingSystemMXBean.getCpuLoad() and transitively brings in java.management.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:installer-jlink-module-requirements"
+  ]
+ },
+ {
+  "content": "jdk.crypto.ec is required for EC crypto provider (SunEC) needed for TLS 1.3 / ECDHE key exchange. Without it, all HTTPS connections to Google APIs (OAuth2, BigQuery, Sheets) fail at the SSL handshake.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:installer-jlink-module-requirements"
+  ]
+ },
+ {
+  "content": "jdk.crypto.mscapi is required for Windows native certificate store access. Without it, Java uses only its own bundled cacerts, which is usually sufficient but may miss system-level certificates.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:installer-jlink-module-requirements"
+  ]
+ },
+ {
+  "content": "Do not add java.instrument to jlink --add-modules. Javassist references it but HK2/Jersey proxy generation uses ClassLoader.defineClass(), not bytecode redefining.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:installer-jlink-module-requirements"
+  ]
+ },
+ {
+  "content": "Do not add jdk.attach or jdk.jdi to jlink --add-modules. These are javassist debugging tools and are not needed for runtime proxy generation.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:installer-jlink-module-requirements"
+  ]
+ },
+ {
+  "content": "Do not add jdk.httpserver to jlink --add-modules. It is referenced in jersey-server module-info but Freerouting uses Jetty, not the JDK HTTP server.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:installer-jlink-module-requirements"
+  ]
+ },
+ {
+  "content": "Do not add java.naming to jlink --add-modules. Log4j-core requires it static (optional) for JNDI lookups, but Freerouting does not use JNDI lookups. Instead, System.setProperty(\"log4j2.disableJndi\", \"true\") is set at the very start of the Log4j2 property-setup block in Freerouting.main() before LogManager.getContext() is first called so Log4j2 skips its JNDI plugin registration entirely.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:installer-jlink-module-requirements"
+  ]
+ },
+ {
+  "content": "Do not add java.rmi to jlink --add-modules. Log4j-core requires it for remote JMX, but Freerouting does not need it for local embedded logging.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:installer-jlink-module-requirements"
+  ]
+ },
+ {
+  "content": "All ManagementFactory call sites must be wrapped in try/catch (Throwable) to degrade gracefully (return -1 / skip stats) rather than crash when running on a custom or stripped JRE where java.management or jdk.management modules are not available.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:defensive-coding-pattern-for-managementfactory",
+   "trigger:management-factory-call"
+  ]
+ },
+ {
+  "content": "To check what JDK modules a jar requires, use: jdeps --ignore-missing-deps -q --print-module-deps <jar-file>",
+  "memory_type": "procedural",
+  "tags": [
+   "section:analysing-module-requirements",
+   "trigger:jar-module-analysis"
+  ]
+ },
+ {
+  "content": "To inspect a named module's requires declarations, use: jar --describe-module --file <jar-file> | grep requires",
+  "memory_type": "procedural",
+  "tags": [
+   "section:analysing-module-requirements",
+   "trigger:jar-module-analysis"
+  ]
+ },
+ {
+  "content": "ApiKeyValidationFilter must skip all validation when authentication is disabled by calling ApiKeyValidationService.getInstance() first, checking if !validationService.isAuthenticationEnabled(), and returning early before checking for the Authorization header. Do not reject requests lacking the Authorization header before calling ApiKeyValidationService.validateApiKey().",
+  "memory_type": "procedural",
+  "tags": [
+   "section:api-authentication-filter-architecture",
+   "trigger:api-auth-filter"
+  ]
+ },
+ {
+  "content": "ApiAuthenticationSettings.isEnabled defaults to true (secure-by-default); authentication is on by default.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:api-authentication-filter-architecture"
+  ]
+ },
+ {
+  "content": "ApiServerSettings.endpoints defaults to http://127.0.0.1:37864 (localhost-only); do not default to 0.0.0.0 or https:// (HTTPS not implemented).",
+  "memory_type": "semantic",
+  "tags": [
+   "section:api-authentication-filter-architecture"
+  ]
+ },
+ {
+  "content": "For local EDA plugin use (KiCad, EasyEDA), the server binds to 127.0.0.1 only by default. To allow seamless plugin operation, explicitly disable authentication by passing --api_server.authentication.enabled=false when starting freerouting-executable.jar.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:api-authentication-filter-architecture"
+  ]
+ },
+ {
+  "content": "For remote or cloud deployments, keep authentication.enabled=true (the default) and configure a provider (e.g. GoogleSheets). To expose to a network interface, explicitly set --api_server.endpoints=http://0.0.0.0:37864.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:api-authentication-filter-architecture"
+  ]
+ },
+ {
+  "content": "All GitHub Actions jobs must declare an explicit permissions block with least-privilege. Use contents: read for read-only jobs and contents: write only on jobs that upload release assets or push packages. Never rely on the default contents: write permission.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:github-actions-ci-architecture",
+   "trigger:workflow-job"
+  ]
+ },
+ {
+  "content": "All GitHub Actions jobs must have a timeout-minutes value to prevent runaway billable-minutes consumption: Gradle build/test jobs 30 min, Docker multi-platform build jobs 60 min, Gemini dispatch/comment/fallthrough jobs 10 min, Stale/pages jobs 10 min.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:github-actions-ci-architecture",
+   "trigger:workflow-job"
+  ]
+ },
+ {
+  "content": "Before any ./gradlew call on Linux or macOS GitHub-hosted runners, add a chmod +x gradlew step to restore file permissions from fresh checkouts.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:github-actions-ci-architecture",
+   "trigger:gradle-workflow"
+  ]
+ },
+ {
+  "content": "In create-snapshot.yml, platform build jobs (build-jar, build-ubuntu-x64, build-windows-x64, build-macos-arm64) must declare needs: [ build-and-test, delete-old-snapshot-assets ]. Never depend on delete-old-snapshot-assets alone, because if build-and-test fails, the old assets must not be deleted and no broken artifacts should be published.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:github-actions-ci-architecture",
+   "trigger:snapshot-build-dependency"
+  ]
+ },
+ {
+  "content": "Every step that uses `google-github-actions/run-gemini-cli@v0` must set the environment variable `GEMINI_CLI_TRUST_WORKSPACE='true'`, otherwise the CLI exits with 'Gemini CLI is not running in a trusted directory' (exit code 1). The failure is intermittent because runner environment state varies between jobs, so set it unconditionally in the step or job env block.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:gemini-cli-workflow-invariants",
+   "trigger:gemini-cli-setup"
+  ]
+ },
+ {
+  "content": "For security-sensitive triage/analysis steps where untrusted issue body is in scope, keep `GITHUB_TOKEN: ''` (blank). The `GEMINI_CLI_TRUST_WORKSPACE=true` flag only grants filesystem trust to the CLI itself, not GitHub API credentials, so blanking the token prevents accidental credential exposure through Gemini CLI tool calls.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:gemini-cli-workflow-invariants",
+   "trigger:gemini-cli-setup"
+  ]
+ },
+ {
+  "content": "Workflows using `actions/github-script@v7` must set `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'` at the top-level workflow `env:` block (not job level) so the flag applies to all jobs. This is required because Node.js 20 is deprecated on GitHub Actions runners and will be forced to Node.js 24 from June 2026 and removed September 2026. This currently affects: gemini-dispatch.yml, gemini-triage.yml, gemini-scheduled-triage.yml. Do not set this flag for gemini-invoke.yml and gemini-review.yml as they do not use actions/github-script directly.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:gemini-cli-workflow-invariants",
+   "trigger:workflow-setup"
+  ]
+ },
+ {
+  "content": "Use `gradle/actions/setup-gradle@v4` (not v3). v4 is the current stable version with improved caching and Gradle 9 compatibility.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:dependency-action-versions",
+   "trigger:gradle-setup"
+  ]
+ },
+ {
+  "content": "Use `actions/stale@v9`. v5 (previously used) ran on Node.js 16 which is EOL. Do not downgrade. Do not pin to a commit SHA \u2014 the SHA has historically broken when the upstream repository rebased its release tags.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:dependency-action-versions",
+   "trigger:stale-action-setup"
+  ]
+ },
+ {
+  "content": "`PolylineTrace.MAX_NORMALIZATION_DEPTH` (= 34) caps the recursion depth in the private `normalize(IntOctagon, int)` method. Prior to the fix, exceeding the cap threw an exception that was silently swallowed by a try-catch in `InsertFoundConnectionAlgo` and logged as a WARNING. The fix replaced the throw with `FRLogger.debug(\u2026) + return false`; `return false` is safe because the outer while-loop in `normalize_traces` treats it as 'no change for this trace' and continues to the next trace, terminating normally.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:trace-normalisation-routing-loop-architecture"
+  ]
+ },
+ {
+  "content": "Both `public normalize(IntOctagon)` and `private normalize(IntOctagon, int)` in PolylineTrace no longer declare `throws Exception`, and all callers (in `InsertFoundConnectionAlgo`, `PullTightAlgo`, and `Wiring.java`) have had their try-catch wrappers removed.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:trace-normalisation-routing-loop-architecture"
+  ]
+ },
+ {
+  "content": "`PolylineTrace.combine_at_end()` has two code paths: (1) full remove + re-insert when `joined_polyline.arr.length != new_line_count` (parallel lines were skipped at the join), and (2) optimised merge via `merge_entries_at_end` that reuses existing search-tree leaf nodes. Path 2 calls `p_to_trace.get_search_tree_entries(tree)` and `p_from_trace.get_search_tree_entries(tree)`, which can return null if the trace has no entries in the given search tree (e.g. it was freshly inserted or its entries were cleared).",
+  "memory_type": "semantic",
+  "tags": [
+   "section:trace-normalisation-routing-loop-architecture"
+  ]
+ },
+ {
+  "content": "In `PolylineTrace.combine_at_end()`, before choosing the optimised path 2, check whether both `this` and `other_trace` have entries in the default search tree by calling `board.search_tree_manager.get_default_tree()`. If either returns null, fall back to path 1 (full remove + re-insert). This guard prevents NullPointerException at `ShapeSearchTree.merge_entries_at_end()` line 237. The default tree check is sufficient because all traces are always inserted into the default tree; compensated trees are built on top of it, so if a trace is missing from the default tree it is definitionally not in any compensated tree either.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:trace-normalisation-routing-loop-architecture"
+  ]
+ },
+ {
+  "content": "`BatchAutorouter.runBatchLoop()` must maintain an `alreadyRoutedBoardHashes` HashSet<String> to detect same-board-hash stop conditions. Before each pass, compute the current board hash and check if it has already been seen; if so, log an explanatory message and call `thread.request_stop_auto_router()` to prevent endless looping when GND plane items keep being queued without changing board state. Clear the set whenever a previous board state is restored (ripup + retry cycle) so that the restored state can be routed again with a higher ripup cost.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:trace-normalisation-routing-loop-architecture"
+  ]
+ },
+ {
+  "content": "In BoardStatistics.getNormalizedScore(), add a guard `if (maximumScore <= 0f) return 0f;` before dividing by maximumScore to prevent NaN when a board is fully routed (maximumCount == 0, making getMaximumScore() return 0).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:boardstatistics-bug-fixes",
+   "trigger:normalize-score"
+  ]
+ },
+ {
+  "content": "In PolylineTrace.normalize(), replace the throw statement with `return false` when max recursion depth is exceeded, to prevent WARNING log spam about net normalization failures.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:polylinetrace-bug-fixes",
+   "trigger:polyline-normalize"
+  ]
+ },
+ {
+  "content": "In PolylineTrace.combine_at_end(), add a null guard before accessing path 2 to prevent NullPointerException when trace entries are missing from the search tree.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:polylinetrace-bug-fixes",
+   "trigger:combine-paths"
+  ]
+ },
+ {
+  "content": "In BatchAutorouter.runBatchLoop(), maintain an alreadyRoutedBoardHashes set to track board states and detect stagnation, preventing the router from looping endlessly on the same board.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:batchautorouter-bug-fixes",
+   "trigger:stagnation-detection"
+  ]
+ },
+ {
+  "content": "When getNormalizedScore() receives a board with maximumScore of 0 or less (fully routed state), it must return 0 rather than attempting division, because NaN fails all comparison-based stagnation checks and causes score to appear as 0.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:boardstatistics-bug-fixes"
+  ]
+ },
+ {
+  "content": "PolylineTrace.normalize() throwing an exception at max recursion depth causes repeated WARNING log entries for net normalization failures; the exception must be caught and converted to a false return instead.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:polylinetrace-bug-fixes"
+  ]
+ },
+ {
+  "content": "PolylineTrace.combine_at_end() can encounter null trace entries when the search tree is incomplete; path 2 must be null-guarded before use to prevent NullPointerException during merge operations.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:polylinetrace-bug-fixes"
+  ]
+ },
+ {
+  "content": "BatchAutorouter.runBatchLoop() must track routed board hashes to detect when the same board state is encountered repeatedly, indicating stagnation and preventing infinite loops.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:batchautorouter-bug-fixes"
+  ]
+ }
+]

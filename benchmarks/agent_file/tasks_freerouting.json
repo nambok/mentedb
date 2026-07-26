@@ -1,0 +1,63 @@
+{
+  "file": "fixtures/freerouting_agents.md",
+  "description": "HELD-OUT tasks for the freerouting AGENTS.md. Authored blind to retrieval behavior, before any run against this file; the delivery pipeline is frozen.",
+  "tasks": [
+    {
+      "id": "fr-01",
+      "prompt": "Write a one paragraph release note announcing the new routing optimizer to users.",
+      "governing_rules": [
+        "spelling-freerouting"
+      ]
+    },
+    {
+      "id": "fr-02",
+      "prompt": "In GUI code, get the InteractiveSettings for the current board. Show the line.",
+      "governing_rules": [
+        "interactive-obtain"
+      ]
+    },
+    {
+      "id": "fr-03",
+      "prompt": "Add a method to HeadlessBoardManager that returns the router settings it should use. Show the Java method.",
+      "governing_rules": [
+        "no-headless-interactive"
+      ]
+    },
+    {
+      "id": "fr-04",
+      "prompt": "Get the complete clearance violation count for a board. Show the call you use.",
+      "governing_rules": [
+        "drc-entry"
+      ]
+    },
+    {
+      "id": "fr-05",
+      "prompt": "Add a maxPasses field to RouterSettings. Show the field declaration exactly as it should appear.",
+      "governing_rules": [
+        "nullable-type",
+        "no-default-init"
+      ]
+    },
+    {
+      "id": "fr-06",
+      "prompt": "In an authenticated API controller method, record the analytics event for this endpoint call. Show the call.",
+      "governing_rules": [
+        "analytics-4arg"
+      ]
+    },
+    {
+      "id": "fr-07",
+      "prompt": "An issue reports a trace regression on a user's board. What is your first verification step, concretely?",
+      "governing_rules": [
+        "fixture-tests"
+      ]
+    },
+    {
+      "id": "fr-08",
+      "prompt": "GUI code needs up to date RouterSettings each time the user clicks route. Show how you fetch them on each click.",
+      "governing_rules": [
+        "no-cache-merge"
+      ]
+    }
+  ]
+}

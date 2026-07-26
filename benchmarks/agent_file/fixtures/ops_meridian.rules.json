@@ -1,0 +1,72 @@
+{
+  "description": "Ground truth for ops_meridian.md",
+  "rules": {
+    "voice-first-name": {
+      "atom_match": "RULE-VOICE-NAME",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "first name"
+        ]
+      }
+    },
+    "refund-small": {
+      "atom_match": "RULE-REFUND-SMALL",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "50"
+        ]
+      }
+    },
+    "refund-large": {
+      "atom_match": "RULE-REFUND-LARGE",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "manager"
+        ]
+      }
+    },
+    "escalate-chargeback": {
+      "atom_match": "RULE-ESCALATE-CHARGEBACK",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "billing team",
+          "same day"
+        ]
+      }
+    },
+    "schedule-slots": {
+      "atom_match": "RULE-SCHEDULE-SLOTS",
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "three",
+          "timezone"
+        ]
+      }
+    },
+    "discount-cap": {
+      "atom_match": "RULE-DISCOUNT-CAP",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "30",
+          "one code"
+        ]
+      }
+    },
+    "data-pii": {
+      "atom_match": "RULE-DATA-PII",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "last four",
+          "mask"
+        ]
+      }
+    }
+  }
+}

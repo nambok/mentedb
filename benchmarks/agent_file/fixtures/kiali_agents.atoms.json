@@ -1,0 +1,4460 @@
+[
+ {
+  "content": "For Kiali project, supported release branches that receive backports and security fixes are: OSSM 3.4 \u2192 v2.27, OSSM 3.3 \u2192 v2.22, OSSM 3.2 \u2192 v2.17, OSSM 3.1 \u2192 v2.11, OSSM 3.0 \u2192 v2.4. Master branch is the active development branch for the next release.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:supported-branches"
+  ]
+ },
+ {
+  "content": "Kiali source code should be organized in a kiali_sources/ directory with three repositories cloned together: kiali/ (main server and UI), kiali-operator/ (operator), and helm-charts/ (Helm charts). Create a symbolic link from kiali/operator to kiali-operator/ for proper structure.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:quick-reference",
+   "trigger:repo-setup"
+  ]
+ },
+ {
+  "content": "How should I set up my Kiali development environment with all repositories?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:repo-setup"
+  ]
+ },
+ {
+  "content": "Where do I clone the operator and helm-charts repositories?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:repo-setup"
+  ]
+ },
+ {
+  "content": "What is the correct directory structure for Kiali source code?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:repo-setup"
+  ]
+ },
+ {
+  "content": "Use `any` instead of `interface{}` for empty interfaces in Go code.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:go-code"
+  ]
+ },
+ {
+  "content": "How should I type an empty interface in Go?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "Should I use interface{} or any?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "What is the preferred way to handle generic types in Kiali Go code?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "Remove all trailing whitespace (end-of-line spaces) from any line added or modified in Go code.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:go-code"
+  ]
+ },
+ {
+  "content": "Sort struct fields alphabetically when adding or modifying Go structs in the Kiali project.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:go-code"
+  ]
+ },
+ {
+  "content": "How should I order fields in a Go struct?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "What is the field ordering convention for new structs?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "Should struct fields be sorted?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "Sort YAML keys alphabetically when adding or modifying YAML schemas or files in the Kiali project.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:yaml-edit"
+  ]
+ },
+ {
+  "content": "How should I organize keys in YAML files?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:yaml-edit"
+  ]
+ },
+ {
+  "content": "What is the preferred key ordering for YAML?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:yaml-edit"
+  ]
+ },
+ {
+  "content": "Should YAML keys be sorted?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:yaml-edit"
+  ]
+ },
+ {
+  "content": "Write comments in Go code that explain 'why', not 'what'. Focus on the purpose and usage of abstractions, not what the code literally does.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:go-code"
+  ]
+ },
+ {
+  "content": "How should I write comments in Go code?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "What makes a good comment in Kiali?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "Should comments describe what the code does or why it exists?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "Organize Go imports in three groups separated by blank lines: (1) standard library imports, (2) third-party imports, (3) Kiali imports. Within each group, imports should be alphabetically sorted.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:go-code"
+  ]
+ },
+ {
+  "content": "How should I organize imports in Go files?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "What is the correct import grouping order?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "How do I structure import blocks in Kiali code?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "Use `gofmt` for formatting Go code in the Kiali project. This is automatically applied by running `make format`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:go-code"
+  ]
+ },
+ {
+  "content": "How do I format Go code?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "What tool formats Go files?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "How is code formatting enforced in Kiali?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "Use `golangci-lint` for linting Go code in the Kiali project. Run linting via `make lint` command. Install linting tools with `make lint-install`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:go-code"
+  ]
+ },
+ {
+  "content": "How do I lint Go code?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "What linter does Kiali use?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "How do I check my Go code for issues?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "The Kiali project requires a specific Go version defined in go.mod. Verify your Go version matches the project requirement by running `make go-check`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:go-code"
+  ]
+ },
+ {
+  "content": "What Go version should I use for Kiali development?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "How do I check if my Go version is correct?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "What is the Go version requirement?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-code"
+  ]
+ },
+ {
+  "content": "For TypeScript/React files in Kiali: most files should use PascalCase naming (e.g., ServiceList.ts). General purpose files like routing or utility files should use camelCase naming (e.g., routes.ts).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:typescript-file"
+  ]
+ },
+ {
+  "content": "How should I name TypeScript component files?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:typescript-file"
+  ]
+ },
+ {
+  "content": "Should I use PascalCase or camelCase for file names?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:typescript-file"
+  ]
+ },
+ {
+  "content": "What is the file naming convention for utility files?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:typescript-file"
+  ]
+ },
+ {
+  "content": "For TypeScript variables and functions in Kiali: use camelCase for general variables and functions, PascalCase for Redux actions (e.g., GraphActions), UPPER_SNAKE_CASE for global constants (e.g., TIMER_REQUEST_PER_SECOND_MIN), and camelCase for local constants.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:typescript-code"
+  ]
+ },
+ {
+  "content": "How should I name variables and functions?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:typescript-code"
+  ]
+ },
+ {
+  "content": "What naming convention should Redux actions follow?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:typescript-code"
+  ]
+ },
+ {
+  "content": "How should I name global constants?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:typescript-code"
+  ]
+ },
+ {
+  "content": "For TypeScript enums in Kiali: enum values should be named in UPPER_SNAKE_CASE (e.g., LARGE, SMALL) while the enum name itself uses PascalCase.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:typescript-code"
+  ]
+ },
+ {
+  "content": "How should I name enum values?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:typescript-code"
+  ]
+ },
+ {
+  "content": "What naming convention do enum values follow?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:typescript-code"
+  ]
+ },
+ {
+  "content": "For event handlers in Kiali React components: use consistent naming with 'handle' prefix for handler methods (e.g., handleClick, handleChange), 'on' prefix for event props (e.g., onSelect, onChange), use present tense, and avoid clashing with native events.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:event-handler"
+  ]
+ },
+ {
+  "content": "How should I name event handler methods?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:event-handler"
+  ]
+ },
+ {
+  "content": "What naming convention should event handler props follow?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:event-handler"
+  ]
+ },
+ {
+  "content": "What is the standard for naming onClick and onChange handlers?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:event-handler"
+  ]
+ },
+ {
+  "content": "In Kiali React components, prefer arrow functions over regular functions. Use arrow functions for class methods and inline callbacks, especially in array methods like map().",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:typescript-code"
+  ]
+ },
+ {
+  "content": "Should I use arrow functions or regular functions?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:typescript-code"
+  ]
+ },
+ {
+  "content": "How should I structure callbacks in JSX?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:typescript-code"
+  ]
+ },
+ {
+  "content": "What is the preferred function syntax in Kiali components?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:typescript-code"
+  ]
+ },
+ {
+  "content": "For Redux integration in Kiali React components: use the `typesafe-actions` library for type-safe Redux. Separate `ReduxProps` type (containing Redux-provided props) from component-specific props, with all props alphabetically sorted.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:redux-component"
+  ]
+ },
+ {
+  "content": "How should I type Redux props in a component?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:redux-component"
+  ]
+ },
+ {
+  "content": "Should I separate ReduxProps from component props?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:redux-component"
+  ]
+ },
+ {
+  "content": "What library should I use for type-safe Redux actions?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:redux-component"
+  ]
+ },
+ {
+  "content": "For URL state management in Kiali pages: store page state in Redux, make pages bookmarkable via URL parameters, on component construction allow URL parameters to override Redux state, and after construction update the URL to reflect Redux state changes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality-standards",
+   "trigger:page-routing"
+  ]
+ },
+ {
+  "content": "How should I manage page state and URL parameters?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:page-routing"
+  ]
+ },
+ {
+  "content": "Should page state be in Redux or URL?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:page-routing"
+  ]
+ },
+ {
+  "content": "How do I make a Kiali page bookmarkable?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:page-routing"
+  ]
+ },
+ {
+  "content": "Build Kiali UI and backend with: `make build-ui build test`. Build and push development images to a cluster with: `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=ci build-ui build test cluster-push`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:quick-reference",
+   "trigger:build-deploy"
+  ]
+ },
+ {
+  "content": "How do I build Kiali?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:build-deploy"
+  ]
+ },
+ {
+  "content": "How do I build and deploy to a cluster?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:build-deploy"
+  ]
+ },
+ {
+  "content": "What make targets build the UI and backend?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:build-deploy"
+  ]
+ },
+ {
+  "content": "Run Kiali locally with hot-reload by executing `make build-ui` once, then in one terminal run `make run-backend` and in another terminal run `make run-frontend`. This allows live code changes without full rebuilds.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:quick-reference",
+   "trigger:local-dev"
+  ]
+ },
+ {
+  "content": "How do I run Kiali locally with hot-reload?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:local-dev"
+  ]
+ },
+ {
+  "content": "How do I set up live development with auto-refresh?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:local-dev"
+  ]
+ },
+ {
+  "content": "What commands enable frontend and backend hot-reload?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:local-dev"
+  ]
+ },
+ {
+  "content": "Deploy to a Kiali cluster by setting CLUSTER_TYPE environment variable and running: `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=minikube cluster-push` to push images, `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=minikube operator-create` to deploy operator, and `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=minikube kiali-create` to deploy Kiali.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:quick-reference",
+   "trigger:cluster-deploy"
+  ]
+ },
+ {
+  "content": "How do I deploy to a Kiali cluster?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cluster-deploy"
+  ]
+ },
+ {
+  "content": "What are the cluster deployment commands?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cluster-deploy"
+  ]
+ },
+ {
+  "content": "How do I push images and create operator/Kiali instances?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cluster-deploy"
+  ]
+ },
+ {
+  "content": "Format and lint Kiali code with: `make format` for code formatting and `make lint` for linting checks.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:quick-reference",
+   "trigger:code-quality"
+  ]
+ },
+ {
+  "content": "How do I format my code?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:code-quality"
+  ]
+ },
+ {
+  "content": "How do I lint my changes?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:code-quality"
+  ]
+ },
+ {
+  "content": "What make targets enforce code quality?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:code-quality"
+  ]
+ },
+ {
+  "content": "Run Kiali tests with: `make test` for unit tests, `make cypress-gui` for frontend integration tests with GUI, and `make cypress-run` for frontend integration tests in headless mode.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:quick-reference",
+   "trigger:testing"
+  ]
+ },
+ {
+  "content": "How do I run unit tests?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:testing"
+  ]
+ },
+ {
+  "content": "How do I run frontend integration tests?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:testing"
+  ]
+ },
+ {
+  "content": "What test commands are available?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:testing"
+  ]
+ },
+ {
+  "content": "Always use the `t` function from 'utils/I18nUtils' (not from 'i18next') for translatable strings. Example: `title = t('Traffic Graph');`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:internationalization-i18n",
+   "trigger:ui-text"
+  ]
+ },
+ {
+  "content": "add a label to the component",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:ui-text"
+  ]
+ },
+ {
+  "content": "display an error message to users",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:ui-text"
+  ]
+ },
+ {
+  "content": "set button text",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:ui-text"
+  ]
+ },
+ {
+  "content": "show a tooltip",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:ui-text"
+  ]
+ },
+ {
+  "content": "render a section heading",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:ui-text"
+  ]
+ },
+ {
+  "content": "For components that don't re-render on language change, add language to Redux props to ensure translations update.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:internationalization-i18n"
+  ]
+ },
+ {
+  "content": "New components must use functional components with hooks. Do not introduce class components (React.Component); they are legacy. Existing class components can be refactored to functional components when making significant changes to them.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:components",
+   "trigger:component-create"
+  ]
+ },
+ {
+  "content": "create a new React component",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:component-create"
+  ]
+ },
+ {
+  "content": "build a new feature component",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:component-create"
+  ]
+ },
+ {
+  "content": "add a modal component",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:component-create"
+  ]
+ },
+ {
+  "content": "implement a form component",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:component-create"
+  ]
+ },
+ {
+  "content": "write a new layout component",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:component-create"
+  ]
+ },
+ {
+  "content": "Add `data-test` attributes to interactive or identifiable elements for Cypress testability. Example: `<Button data-test=\"confirm-delete\">`. Tests use `cy.getBySel('name')` to select these.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:components",
+   "trigger:ui-testing"
+  ]
+ },
+ {
+  "content": "add a button to a component",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:ui-testing"
+  ]
+ },
+ {
+  "content": "create an interactive element",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:ui-testing"
+  ]
+ },
+ {
+  "content": "build a form input",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:ui-testing"
+  ]
+ },
+ {
+  "content": "add a clickable link",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:ui-testing"
+  ]
+ },
+ {
+  "content": "implement a selectable item",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:ui-testing"
+  ]
+ },
+ {
+  "content": "`kialiStyle` (from styles/StyleUtils.ts) is the standard way to define component styles. Use it to generate class names applied via `className`. SCSS Modules are only for global CSS variable definitions or large third-party CSS.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:styling",
+   "trigger:styling"
+  ]
+ },
+ {
+  "content": "style a new component",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:styling"
+  ]
+ },
+ {
+  "content": "add custom styling to a button",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:styling"
+  ]
+ },
+ {
+  "content": "create a wrapper with spacing",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:styling"
+  ]
+ },
+ {
+  "content": "apply margins and padding",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:styling"
+  ]
+ },
+ {
+  "content": "design a custom layout",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:styling"
+  ]
+ },
+ {
+  "content": "Always prefer `className` (via `kialiStyle`) over the React inline `style` prop.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:styling",
+   "trigger:styling"
+  ]
+ },
+ {
+  "content": "Use PatternFly design token enums for styling: `PFSpacer` (styles/PfSpacer.ts) for spacing, `PFFontSize`/`PFFontWeight` (styles/PfTypography.ts) for typography, and `PFColors` (components/Pf/PfColors.tsx) for colors. Prefer these over raw `var(--pf-...)` strings or hardcoded values.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:styling",
+   "trigger:styling"
+  ]
+ },
+ {
+  "content": "set spacing between elements",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:styling"
+  ]
+ },
+ {
+  "content": "apply font sizes and weights",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:styling"
+  ]
+ },
+ {
+  "content": "choose colors for text or backgrounds",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:styling"
+  ]
+ },
+ {
+  "content": "add consistent margins",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:styling"
+  ]
+ },
+ {
+  "content": "style typography",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:styling"
+  ]
+ },
+ {
+  "content": "When no PatternFly token fits, use `rem` for margin, padding, gap, and font sizes. Use `px` only for large fixed layout dimensions (e.g., `height: 300px`).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:styling",
+   "trigger:styling"
+  ]
+ },
+ {
+  "content": "Build UI before building backend using `make build-ui`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:building-and-testing",
+   "trigger:build"
+  ]
+ },
+ {
+  "content": "prepare for a build",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:build"
+  ]
+ },
+ {
+  "content": "build the full project",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:build"
+  ]
+ },
+ {
+  "content": "set up the development environment",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:build"
+  ]
+ },
+ {
+  "content": "compile the application",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:build"
+  ]
+ },
+ {
+  "content": "prepare for deployment",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:build"
+  ]
+ },
+ {
+  "content": "Build backend using `make build`. For specific architecture: `make build-linux-multi-arch`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:building-and-testing",
+   "trigger:build"
+  ]
+ },
+ {
+  "content": "Clean builds: use `make clean` to clean backend build artifacts, `make clean-ui` to clean UI build artifacts, and `make clean-all` to clean everything including _output dir.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:building-and-testing",
+   "trigger:build"
+  ]
+ },
+ {
+  "content": "Run all backend tests using `make test`. Run specific tests with flags using `make -e GO_TEST_FLAGS=\"-race -v -run=\\\"TestName\\\"\" test`. Run integration tests using `make test-integration`. Run controller integration tests using `make test-integration-controller`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:building-and-testing",
+   "trigger:backend-test"
+  ]
+ },
+ {
+  "content": "run unit tests",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:backend-test"
+  ]
+ },
+ {
+  "content": "execute test suite",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:backend-test"
+  ]
+ },
+ {
+  "content": "validate backend changes",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:backend-test"
+  ]
+ },
+ {
+  "content": "run integration tests",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:backend-test"
+  ]
+ },
+ {
+  "content": "check for regressions",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:backend-test"
+  ]
+ },
+ {
+  "content": "Build UI and run frontend tests using `make build-ui-test`. Run Cypress tests in GUI mode using `make cypress-gui`. Run Cypress tests headlessly using `make cypress-run`. Run performance tests using `make perf-tests-gui` or `make perf-tests-run`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:building-and-testing",
+   "trigger:frontend-test"
+  ]
+ },
+ {
+  "content": "run Cypress tests",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:frontend-test"
+  ]
+ },
+ {
+  "content": "execute UI tests",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:frontend-test"
+  ]
+ },
+ {
+  "content": "test frontend changes",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:frontend-test"
+  ]
+ },
+ {
+  "content": "validate UI interactions",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:frontend-test"
+  ]
+ },
+ {
+  "content": "check frontend performance",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:frontend-test"
+  ]
+ },
+ {
+  "content": "Cypress environment variables can be set when running tests: CYPRESS_BASE_URL (defaults to http://localhost:3001), CYPRESS_USERNAME (defaults to jenkins, opt. kubeadmin), CYPRESS_PASSWD (no defaults), CYPRESS_AUTH_PROVIDER (defaults to my_htpasswd_provider), CYPRESS_ALLOW_INSECURE_KIALI_API (useful when running tests locally against an insecure endpoint like crc), CYPRESS_STERN (defaults to false).",
+  "memory_type": "semantic",
+  "tags": [
+   "section:building-and-testing"
+  ]
+ },
+ {
+  "content": "Test requirements: Istio must be installed, Kiali must be deployed, Bookinfo demo app must be deployed, and Error rates demo app must be deployed. Install demo apps using `./hack/istio/install-testing-demos.sh -c kubectl`.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:building-and-testing"
+  ]
+ },
+ {
+  "content": "To run tests against local environment: start Kiali backend in terminal 1 using `make run-backend`, start frontend dev server in terminal 2 using `make -e KIALI_PROXY_URL=http://localhost:20001/kiali yarn-start`, and run Cypress tests in terminal 3 using `make cypress-gui`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:building-and-testing",
+   "trigger:local-dev-test"
+  ]
+ },
+ {
+  "content": "develop and test locally",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:local-dev-test"
+  ]
+ },
+ {
+  "content": "run tests against local Kiali",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:local-dev-test"
+  ]
+ },
+ {
+  "content": "test frontend changes locally",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:local-dev-test"
+  ]
+ },
+ {
+  "content": "debug frontend interactions",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:local-dev-test"
+  ]
+ },
+ {
+  "content": "validate local changes",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:local-dev-test"
+  ]
+ },
+ {
+  "content": "The `hack/run-integration-tests.sh` script is the main entrypoint for setting up clusters and running end-to-end integration tests. It can create a KinD cluster, install Istio, deploy demo apps, deploy Kiali, and run the test suite in one command.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:building-and-testing"
+  ]
+ },
+ {
+  "content": "Prerequisites for `hack/run-integration-tests.sh`: `kind` and `docker` must be installed, `make build` is required (kiali binary required for `local` and `offline` suites), and `make build-ui` is required (Cypress must be installed for all frontend suites).",
+  "memory_type": "semantic",
+  "tags": [
+   "section:building-and-testing"
+  ]
+ },
+ {
+  "content": "Use `hack/run-integration-tests.sh --test-suite <suite>` for full run (setup cluster + run tests), `hack/run-integration-tests.sh --test-suite <suite> --setup-only true` for setup only, and `hack/run-integration-tests.sh --test-suite <suite> --tests-only true` for tests only against existing cluster.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:building-and-testing",
+   "trigger:integration-test"
+  ]
+ },
+ {
+  "content": "run full integration tests",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:integration-test"
+  ]
+ },
+ {
+  "content": "set up test environment",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:integration-test"
+  ]
+ },
+ {
+  "content": "run tests against existing cluster",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:integration-test"
+  ]
+ },
+ {
+  "content": "validate end-to-end scenarios",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:integration-test"
+  ]
+ },
+ {
+  "content": "test in different configurations",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:integration-test"
+  ]
+ },
+ {
+  "content": "Available test suites for `hack/run-integration-tests.sh`: `backend` (Go backend integration tests, default), `backend-external-controlplane` (backend tests with external control plane), `frontend` (all frontend Cypress tests), `frontend-core-1` (frontend core test group 1), `frontend-core-2` (frontend core test group 2), `frontend-core-optional` (CRD validation and Perses tests), `frontend-ambient` (frontend tests with Istio ambient mode), `frontend-primary-remote` (frontend multicluster primary-remote tests), `frontend-multi-primary` (frontend multicluster multi-primary tests), `frontend-multi-mesh` (frontend multi-mesh tests), `frontend-external-kiali` (frontend tests with external Kiali), `frontend-tempo` (frontend tracing tests with Tempo), `local` (runs Kiali locally not in-cluster with smoke Cypress tests), `offline` (runs Kiali in offline mode with must-gather data).",
+  "memory_type": "semantic",
+  "tags": [
+   "section:building-and-testing"
+  ]
+ },
+ {
+  "content": "The `local` test suite is recommended for local development. It creates a KinD cluster with Istio via Sail but does not deploy Kiali in-cluster, installs demo applications, runs the Kiali binary directly from $GOPATH/bin/kiali, and executes the cypress:run:smoke test suite against the locally-running Kiali.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:building-and-testing"
+  ]
+ },
+ {
+  "content": "Build the Kiali binary and frontend UI by running `make build-ui build` before running integration tests.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-testing",
+   "trigger:build-kiali"
+  ]
+ },
+ {
+  "content": "Set up a test cluster for integration testing by running `hack/run-integration-tests.sh --test-suite local --setup-only true`. This takes approximately 5 minutes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-testing",
+   "trigger:cluster-setup"
+  ]
+ },
+ {
+  "content": "Run integration tests against an existing cluster by executing `make build` to rebuild after code changes, then run `hack/run-integration-tests.sh --test-suite local --tests-only true`. This is repeatable after making code changes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-testing",
+   "trigger:run-integration-tests"
+  ]
+ },
+ {
+  "content": "Start Kiali locally for interactive test debugging by running: `$(go env GOPATH)/bin/kiali -c hack/ci-yaml/ci-test-config-no-cache.yaml run --cluster-name-overrides kind-ci=cluster-default --port-forward-tracing --enable-tracing --port-forward-prom --port-forward-grafana --no-browser`. Kiali will be available at http://localhost:20001.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-testing",
+   "trigger:start-kiali-local"
+  ]
+ },
+ {
+  "content": "Cypress tests use Gherkin `.feature` files with `@tags` for grouping. Feature files are located in `frontend/cypress/integration/featureFiles/` with corresponding step definitions in `frontend/cypress/integration/common/`.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "Run a specific Cypress test by tag using `yarn cypress run -e TAGS=\"@tag-name\"` from the frontend directory. Common tags include @smoke, @core-1, @core-2, @crd-validation, @perses, @multi-cluster, @multi-primary, @multi-mesh, @ambient, @tracing, @offline, and @selected.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-testing",
+   "trigger:cypress-run-tag"
+  ]
+ },
+ {
+  "content": "run smoke tests",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-run-tag"
+  ]
+ },
+ {
+  "content": "run core-1 tests",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-run-tag"
+  ]
+ },
+ {
+  "content": "run @perses tests",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-run-tag"
+  ]
+ },
+ {
+  "content": "test @multi-cluster",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-run-tag"
+  ]
+ },
+ {
+  "content": "run @offline tests",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-run-tag"
+  ]
+ },
+ {
+  "content": "Run a specific Cypress feature file using `npx cypress run --spec \"cypress/integration/featureFiles/services.feature\"` from the frontend directory.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-testing",
+   "trigger:cypress-run-spec"
+  ]
+ },
+ {
+  "content": "Run a specific Cypress feature file with a specific tag using `npx cypress run --spec \"cypress/integration/featureFiles/services.feature\" -e TAGS=\"@smoke\"` from the frontend directory.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "Open the Cypress GUI to interactively pick and run tests using `yarn cypress open -e TAGS=\"@core-1\"` from the frontend directory.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-testing",
+   "trigger:cypress-gui"
+  ]
+ },
+ {
+  "content": "open cypress GUI",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-gui"
+  ]
+ },
+ {
+  "content": "launch cypress interactive mode",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-gui"
+  ]
+ },
+ {
+  "content": "debug cypress tests",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-gui"
+  ]
+ },
+ {
+  "content": "pick tests to run",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-gui"
+  ]
+ },
+ {
+  "content": "run tests interactively",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-gui"
+  ]
+ },
+ {
+  "content": "Use make targets in the frontend directory: `make cypress-gui` opens the GUI with core tests, `make cypress-run` runs headless core tests, and `make cypress-selected` runs @selected tagged tests for debugging.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "The `@smoke` tag groups quick smoke tests (~30 scenarios) and is part of the `local` integration test suite.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "The `@core-1` tag groups core UI tests group 1 (~130 scenarios) and is part of the `frontend-core-1` test suite.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "The `@core-2` tag groups core UI tests group 2 (~155 scenarios) and is part of the `frontend-core-2` test suite.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "The `@crd-validation` tag groups CRD validation tests and is part of the `frontend-core-optional` test suite.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "The `@perses` tag groups Perses dashboard tests and is part of the `frontend-core-optional` test suite.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "The `@multi-cluster` tag groups primary-remote multicluster tests and is part of the `frontend-primary-remote` test suite.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "The `@multi-primary` tag groups multi-primary multicluster tests and is part of the `frontend-multi-primary` test suite.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "The `@multi-mesh` tag groups multi-mesh tests and is part of the `frontend-multi-mesh` test suite.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "The `@ambient` tag groups ambient mesh tests and is part of the `frontend-ambient` test suite.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "The `@tracing` tag groups distributed tracing (Tempo) tests and is part of the `frontend-tempo` test suite.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "The `@offline` tag groups offline mode tests and is part of the `offline` test suite.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-testing"
+  ]
+ },
+ {
+  "content": "The `@selected` tag is used for manual selection of tests for debugging. Add the @selected tag to a single scenario in a `.feature` file, then run `make cypress-selected` to run only that scenario.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-testing",
+   "trigger:debug-single-scenario"
+  ]
+ },
+ {
+  "content": "The project includes a `.mcp.json` file at the repo root with a `cypress-debugger` MCP server that connects to the Cypress Chrome browser on port 9222. No manual setup is needed; the `cypress-debugger` MCP tools become available automatically when Claude Code loads the project.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Before using the Cypress debug browser with MCP, ensure: (1) Chrome is installed (--browser chrome requires a Chrome/Chromium binary), (2) a cluster with Istio and demo apps is running (check with `kind get clusters` for a cluster named `ci`), and (3) Kiali is running locally (verify with `curl -s http://localhost:20001/kiali/api`).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "If the test cluster doesn't exist, set it up by running: `make build-ui build` followed by `hack/run-integration-tests.sh --test-suite local --setup-only true`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "If Kiali isn't running, start it using: `$(go env GOPATH)/bin/kiali -c hack/ci-yaml/ci-test-config-no-cache.yaml run --cluster-name-overrides kind-ci=cluster-default --port-forward-tracing --enable-tracing --port-forward-prom --port-forward-grafana --no-browser`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Run Cypress with Chrome on a fixed CDP port for MCP debugging using: `cd frontend && CYPRESS_BASE_URL=http://localhost:20001 CYPRESS_REMOTE_DEBUGGING_PORT=9222 npx cypress run --browser chrome --headed --no-exit -e TAGS=\"@smoke\" --spec \"cypress/integration/featureFiles/kiali_about.feature\"`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging",
+   "trigger:cypress-debug-chrome"
+  ]
+ },
+ {
+  "content": "debug cypress tests with CDP",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-debug-chrome"
+  ]
+ },
+ {
+  "content": "run tests with chrome debugging",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-debug-chrome"
+  ]
+ },
+ {
+  "content": "enable browser inspection for tests",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-debug-chrome"
+  ]
+ },
+ {
+  "content": "debug failing test",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-debug-chrome"
+  ]
+ },
+ {
+  "content": "inspect test runner state",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-debug-chrome"
+  ]
+ },
+ {
+  "content": "When running Cypress for MCP debugging, use the flag `CYPRESS_REMOTE_DEBUGGING_PORT=9222` to expose the Chrome browser on a fixed CDP port so the `cypress-debugger` MCP can connect.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "When running Cypress for MCP debugging, use the flag `--browser chrome` to use Chrome instead of Electron (required for CDP).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "When running Cypress for MCP debugging, use the flag `--headed` to show the browser window.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "When running Cypress for MCP debugging, use the flag `--no-exit` to keep the browser open after tests finish so you can inspect the state.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Once Cypress is running with the Chrome browser on port 9222, the `cypress-debugger` MCP tools (`mcp__cypress-debugger__browser_snapshot`, `mcp__cypress-debugger__browser_click`, etc.) connect directly to the Cypress Chrome instance, allowing inspection of the test runner and the Kiali app DOM.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Use the `cypress-debugger` MCP tools to inspect the Cypress test runner, see test results, passed/failed steps, and error messages.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Use the `cypress-debugger` MCP tools to inspect the Kiali UI app under test by taking snapshots of the actual DOM state, which is rendered inside the Cypress runner iframe.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Debug failing Cypress assertions by reading the step definition (in `frontend/cypress/integration/common/*.ts`), understanding the DOM selector it uses (e.g., `td[data-label=\"Details\"]`, `data-test=\"namespace-dropdown\"`), and using `browser_evaluate` to run the same query against the live page.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Re-run a Cypress spec via the MCP tools by pressing `Ctrl+R`: call `browser_press_key({ key: \"Control+r\" })` to reload the Cypress runner page and trigger a full re-run of the current spec.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Verify the CDP endpoint is reachable by running `curl -s http://127.0.0.1:9222/json/list`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Pressing just `r` via `browser_press_key` does not trigger a Cypress re-run; use `Ctrl+R` instead. Clicking the spec file link and using `browser_navigate` also do not trigger re-runs.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Important: `Ctrl+R` does NOT pick up code changes. Cypress caches compiled step definitions and feature files. If you modify a `.ts` step definition or `.feature` file, you must kill the Cypress process and restart it for the changes to take effect. `Ctrl+R` only re-runs the previously compiled spec.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "To restart Cypress cleanly after code changes: (1) Kill all Cypress and associated Chrome processes with `pkill -9 -f cypress; pkill -9 -f \"chrome.*9222\"`, (2) Wait 2-3 seconds for ports to be released, (3) Verify port 9222 is free with `curl -s http://127.0.0.1:9222/json/list` (should fail), (4) Re-launch Cypress with the same command, (5) After the new browser opens, use `browser_close` then `browser_navigate` to reconnect the MCP to the new browser instance.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "The `browser_snapshot` tool accepts an optional `depth` parameter to control output size: depth 3-4 for a quick overview of page structure and test runner controls, depth 5-6 for a detailed view including the Kiali app inside the iframe, or no depth limit (default) for the full DOM tree (can be 50KB+, useful for detailed inspection).",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "The Cypress runner page snapshot contains two main areas: the test runner panel (left side) with element refs like `e13`, `e17` containing the spec name, pass/fail stats, test steps, and timing; and the app under test iframe (right side) with element refs like `f1e3`, `f1e7` (prefixed with `f<N>e`) containing the actual Kiali UI being tested.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Use `browser_evaluate` with `() => { const stats = document.querySelectorAll('[aria-label=\"Stats\"] li'); return Array.from(stats).map(s => s.textContent?.trim()); }` to quickly check pass/fail/pending counts in the Cypress runner.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Use `browser_evaluate` with `() => { const items = document.querySelectorAll('.command-wrapper'); return Array.from(items).slice(-10).map(el => el.textContent?.trim()).join('\\n'); }` to check the last 10 Cypress command log entries, which is most useful for debugging.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Use `browser_evaluate` with `() => { const el = document.querySelector('.runnable-err-message'); return el ? el.textContent : 'no error'; }` to check for error messages in the Cypress runner.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Inspect the Kiali app DOM inside the iframe using `browser_evaluate` with `() => { const iframe = document.querySelector('iframe'); if (!iframe?.contentDocument) return 'no iframe'; return iframe.contentDocument.querySelector('#target-panel-control-plane')?.textContent?.substring(0, 200); }`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cypress-debugging"
+  ]
+ },
+ {
+  "content": "Cypress feature files are located in `frontend/cypress/integration/featureFiles/*.feature` and use Gherkin BDD syntax with `@tags`.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-test-structure"
+  ]
+ },
+ {
+  "content": "Cypress step definitions are TypeScript files located in `frontend/cypress/integration/common/*.ts` that implement each Given/When/Then statement from feature files.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-test-structure"
+  ]
+ },
+ {
+  "content": "Key Cypress selectors used in Kiali tests: `cy.getBySel('namespace-dropdown')` returns `[data-test=\"namespace-dropdown\"]`, `cy.get('th[data-label=\"Name\"]')` targets table column headers, `cy.get('td[data-label=\"Details\"]')` targets table column cells, `getColWithRowText(rowText, colName)` finds a cell by row content and column name, and `a[href$=\"...\"]` is used for link assertions with endsWith matching.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:cypress-test-structure"
+  ]
+ },
+ {
+  "content": "Use `gh run list --repo kiali/kiali --status failure --limit 10` with JSON filtering to identify failed Kiali CI runs by job name and branch.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:debugging-ci-test-failures-locally",
+   "trigger:ci-failure-lookup"
+  ]
+ },
+ {
+  "content": "Use `gh run view <RUN_ID> --repo kiali/kiali --json jobs` to extract failing job IDs and names from a specific CI run.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:debugging-ci-test-failures-locally",
+   "trigger:ci-failure-lookup"
+  ]
+ },
+ {
+  "content": "Extract failure details by running `gh run view <RUN_ID> --repo kiali/kiali --log --job <JOB_ID>` and piping through grep for 'failing', 'AssertionError', 'CypressError', or 'Error:' keywords; use `-B5` flag to get context around AssertionError.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:debugging-ci-test-failures-locally",
+   "trigger:ci-failure-lookup"
+  ]
+ },
+ {
+  "content": "Download Cypress failure screenshots from CI artifacts using `gh run download <RUN_ID> --repo kiali/kiali --dir /tmp/ci-artifacts --pattern \"*cypress*\"` to visually inspect the test runner state and Kiali UI at time of failure.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:debugging-ci-test-failures-locally",
+   "trigger:ci-failure-lookup"
+  ]
+ },
+ {
+  "content": "Map CI job names to test suites and feature file tags: 'Run frontend core 1 integration tests' \u2192 @core-1, 'Run frontend core 2 integration tests' \u2192 @core-2, 'Run Ambient frontend integration tests' \u2192 @ambient/@waypoint, 'Run frontend multicluster multi-primary' \u2192 @multi-primary, 'Run frontend multicluster primary-remote' \u2192 @multi-cluster, 'Run frontend local and offline mode' \u2192 @smoke/@offline, 'Run backend integration tests' \u2192 Go tests in tests/integration/.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:debugging-ci-test-failures-locally"
+  ]
+ },
+ {
+  "content": "To reproduce a CI test failure locally: checkout the failing branch with `git checkout <branch-name>`, run `make build-ui build`, use `hack/run-integration-tests.sh --test-suite <suite> --setup-only true` to setup the cluster, start Kiali with `$(go env GOPATH)/bin/kiali -c hack/ci-yaml/ci-test-config-no-cache.yaml run --cluster-name-overrides kind-ci=cluster-default --port-forward-tracing --enable-tracing --port-forward-prom --port-forward-grafana --no-browser &`, then run the test with `cd frontend && CYPRESS_BASE_URL=http://localhost:20001 CYPRESS_REMOTE_DEBUGGING_PORT=9222 npx cypress run --browser chrome --headed --no-exit --spec \"cypress/integration/featureFiles/<failing-feature>.feature\"`.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:debugging-ci-test-failures-locally",
+   "trigger:ci-test-reproduce"
+  ]
+ },
+ {
+  "content": "After reproducing a CI test failure locally with Cypress running on port 9222 with `--no-exit`, use the cypress-debugger MCP tools to inspect the Chrome browser, examine DOM state, and understand assertion failures; use `Ctrl+R` to re-run the test after making fixes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:debugging-ci-test-failures-locally",
+   "trigger:ci-test-debug"
+  ]
+ },
+ {
+  "content": "Cypress e2e test files use Gherkin BDD format (.feature files in frontend/cypress/integration/featureFiles/) paired with TypeScript step definitions (in frontend/cypress/integration/common/); step definition files are globally loaded for all feature files via the 'stepDefinitions' config in package.json.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:writing-new-e2e-tests"
+  ]
+ },
+ {
+  "content": "Step definition files in frontend/cypress/integration/common/ are organized by domain: table.ts for table assertions (getColWithRowText, colExists), navigation.ts for page navigation steps, transition.ts for loading state helpers, services.ts for service-specific steps, apps.ts for app-specific steps, workloads.ts for workload-specific steps, and hooks.ts for Before/After setup.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:writing-new-e2e-tests"
+  ]
+ },
+ {
+  "content": "When adding a new test scenario to a Gherkin .feature file, tag it with the appropriate demo app tag (@bookinfo-app, @error-rates-app, @sleep-app) to ensure the app is installed via hooks, and tag it with the CI suite tag (@core-1, @core-2, @smoke, @ambient, @waypoint, @multi-primary, @multi-cluster) to specify which CI suite runs the test.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:writing-new-e2e-tests",
+   "trigger:e2e-test-write"
+  ]
+ },
+ {
+  "content": "Use @selected tag temporarily on a single scenario during e2e test development to run only that test for faster iteration.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:writing-new-e2e-tests",
+   "trigger:e2e-test-write"
+  ]
+ },
+ {
+  "content": "Before writing new step definitions for an e2e test, check for existing reusable steps: navigation.ts provides 'user is at the {string} page' and 'user is at administrator perspective'; table.ts provides 'user selects the {string} namespace', 'user sees {string} in the table', 'table length should be {int}', 'the {string} column on the {string} row has a link ending in {string}'; transition.ts provides ensureKialiFinishedLoading() and openTab(tabName); domain-specific steps exist in services.ts, apps.ts, workloads.ts.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:writing-new-e2e-tests",
+   "trigger:e2e-test-write"
+  ]
+ },
+ {
+  "content": "When writing new step definitions in Cypress, use the pattern `cy.getBySel('name')` to select elements with `[data-test=\"name\"]` (custom Kiali command), use `cy.get('td[data-label=\"Column\"]')` to select table cells by column header, use `getColWithRowText(rowText, colName)` from table.ts to find a cell by row content and column name, use `ensureKialiFinishedLoading()` from transition.ts to wait for Kiali loading spinners, use `openTab(tabName)` from transition.ts to click tabs, and rely on `data-test` attributes on React components for reliable selectors.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:writing-new-e2e-tests",
+   "trigger:e2e-step-def"
+  ]
+ },
+ {
+  "content": "Cypress tests must work in both standalone Kiali and OSSMC (OpenShift Service Mesh Console). Use `cy.request({ url: '/api/config' })` with object format instead of `cy.request('/api/config')` because OSSMC proxies API calls and only the object form allows Cypress to resolve the base URL correctly.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:writing-new-e2e-tests",
+   "trigger:e2e-ossmc"
+  ]
+ },
+ {
+  "content": "In OSSMC e2e tests, use `cy.intercept('**/api/namespaces')` with a leading `**` wildcard glob in the intercept pattern instead of `cy.intercept('/api/namespaces')` because OSSMC prefixes API paths via the console proxy, and the wildcard matches both standalone `/api/namespaces` and proxied `/proxy/.../api/namespaces` paths.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:writing-new-e2e-tests",
+   "trigger:e2e-ossmc"
+  ]
+ },
+ {
+  "content": "For Kiali navigation links in e2e tests, use `cy.get(linkSelector('/namespaces/bookinfo/services'))` instead of `cy.get('a[href*=\"/namespaces/bookinfo/services\"]')` because in OSSMC kiosk mode, KialiLink renders `<button data-href=\"...\">` instead of `<a href=\"...\">`. The linkSelector utility from utils.ts builds a CSS selector that matches both standalone `<a href>` and OSSMC `<button data-href>` elements; use linkSelector with 'endsWith' for partial path matching or no pattern for any link-like element.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:writing-new-e2e-tests",
+   "trigger:e2e-ossmc"
+  ]
+ },
+ {
+  "content": "To check if a Kind cluster is already running before setup, run: `kind get clusters`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-test-setup"
+  ]
+ },
+ {
+  "content": "To set up a local Kind cluster for Kiali integration tests, run: `hack/run-integration-tests.sh --test-suite local --setup-only true`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-test-setup"
+  ]
+ },
+ {
+  "content": "To check if Kiali is already running before starting it, run: `curl -s http://localhost:20001/kiali/api`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-test-setup"
+  ]
+ },
+ {
+  "content": "Start Kiali with the full development environment by running: `$(go env GOPATH)/bin/kiali -c hack/ci-yaml/ci-test-config-no-cache.yaml run --cluster-name-overrides kind-ci=cluster-default --port-forward-tracing --enable-tracing --port-forward-prom --port-forward-grafana --no-browser &` This command enables tracing, Prometheus, and Grafana port forwarding without opening a browser.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:integration-test-setup"
+  ]
+ },
+ {
+  "content": "For fast test iteration during development, tag tests with `@selected` and run them individually before running the full suite.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:frontend-testing",
+   "trigger:test-iteration"
+  ]
+ },
+ {
+  "content": "I want to debug a single failing test quickly",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:test-iteration"
+  ]
+ },
+ {
+  "content": "How do I iterate on a test without running the whole suite?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:test-iteration"
+  ]
+ },
+ {
+  "content": "Can I run just one test with the debug browser?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:test-iteration"
+  ]
+ },
+ {
+  "content": "To run Cypress tests with debug browser, use: `cd frontend && CYPRESS_BASE_URL=http://localhost:20001 CYPRESS_REMOTE_DEBUGGING_PORT=9222 npx cypress run --browser chrome --headed --no-exit -e TAGS=\"@selected\" --spec \"cypress/integration/featureFiles/<your-feature>.feature\"` This allows cypress-debugger MCP tools to connect and re-run tests with Ctrl+R.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:frontend-testing",
+   "trigger:cypress-debug"
+  ]
+ },
+ {
+  "content": "I need to debug a Cypress test failure",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-debug"
+  ]
+ },
+ {
+  "content": "How do I run a test with the debug browser?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-debug"
+  ]
+ },
+ {
+  "content": "Can I inspect the browser state during test execution?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:cypress-debug"
+  ]
+ },
+ {
+  "content": "To run Cypress tests headless for quick pass/fail without debug browser, run: `cd frontend && CYPRESS_BASE_URL=http://localhost:20001 npx cypress run -e TAGS=\"@selected\"`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:frontend-testing"
+  ]
+ },
+ {
+  "content": "Cypress test iteration workflow: (1) Write or modify the test, (2) Run with debug browser flags, (3) Examine error messages and use cypress-debugger MCP tools to inspect state if unclear, (4) Determine if failure is a test issue (wrong selector, assertion) or code issue (feature not working), (5) Fix accordingly, (6) Re-run with Ctrl+R if debug browser open or re-launch cypress command, (7) Remove @selected tag and verify with real suite tag before committing.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:frontend-testing",
+   "trigger:test-iteration"
+  ]
+ },
+ {
+  "content": "How do I debug a flaky test?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:test-iteration"
+  ]
+ },
+ {
+  "content": "What's the process for fixing a failing Cypress test?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:test-iteration"
+  ]
+ },
+ {
+  "content": "How do I iterate efficiently on test development?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:test-iteration"
+  ]
+ },
+ {
+  "content": "Before committing Cypress tests, remove the `@selected` tag and ensure the test has the correct suite tag (e.g., `@core-1`, `@core-2`) and correct demo app tag (e.g., `@bookinfo-app`, `@error-rates-app`) if it depends on demo apps.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:frontend-testing"
+  ]
+ },
+ {
+  "content": "Before committing Cypress tests, verify the test passes headless by running: `npx cypress run -e TAGS=\"@your-suite-tag\" --spec \"your-feature.feature\"`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:frontend-testing"
+  ]
+ },
+ {
+  "content": "After modifying Go code, run `make format lint` to ensure code quality before committing.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:development-practices",
+   "trigger:go-commit"
+  ]
+ },
+ {
+  "content": "I've changed some Go code, what should I do before committing?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-commit"
+  ]
+ },
+ {
+  "content": "How do I format and lint my Go changes?",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:go-commit"
+  ]
+ },
+ {
+  "content": "To specify a custom Istio version for integration tests, run: `hack/run-integration-tests.sh --test-suite frontend --istio-version 1.29.1`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:common-integration-test-options"
+  ]
+ },
+ {
+  "content": "To use minikube instead of kind for integration tests, run: `hack/run-integration-tests.sh --test-suite backend --cluster-type minikube`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:common-integration-test-options"
+  ]
+ },
+ {
+  "content": "To record video during Cypress tests for debugging failures, run: `hack/run-integration-tests.sh --test-suite frontend --with-video true`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:common-integration-test-options"
+  ]
+ },
+ {
+  "content": "To enable ambient mode for multi-primary cluster testing, run: `hack/run-integration-tests.sh --test-suite frontend-multi-primary --ambient true`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:common-integration-test-options"
+  ]
+ },
+ {
+  "content": "For complete integration test options and help, run: `hack/run-integration-tests.sh --help`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:common-integration-test-options"
+  ]
+ },
+ {
+  "content": "For fastest local development without a cluster, use hot reload by running `make build-ui && make run-backend` in one terminal and `make run-frontend` in another terminal. The frontend automatically opens at http://localhost:3001 and both backend and frontend hot-reload on code changes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:local-development-with-hot-reload"
+  ]
+ },
+ {
+  "content": "To run the backend with debug logging during local development, use: `make KIALI_RUN_ARGS=\"--log-level debug\" run-backend`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:local-development-with-hot-reload"
+  ]
+ },
+ {
+  "content": "To run the backend in multi-cluster mode during local development, use: `make KIALI_RUN_ARGS=\"--remote-cluster-contexts kind-mesh --cluster-name-overrides kind-mesh=mesh\" run-backend`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:local-development-with-hot-reload"
+  ]
+ },
+ {
+  "content": "Set environment variable for Minikube development: `export CLUSTER_TYPE=minikube`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-minikube"
+  ]
+ },
+ {
+  "content": "Set environment variable for Minikube profile: `export MINIKUBE_PROFILE=minikube` (use any profile name; 'ci' is used in examples)",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-minikube"
+  ]
+ },
+ {
+  "content": "Set environment variable for container runtime: `export DORP=docker` (or 'podman')",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-minikube"
+  ]
+ },
+ {
+  "content": "Set environment variable for Kubernetes client: `export CLIENT_EXE=kubectl` (or 'oc' for OpenShift clusters)",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-minikube"
+  ]
+ },
+ {
+  "content": "Optional: Set `export HELM_CHARTS_REPO_PULL=false` if your local helm-charts repo has a branch with no remote.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-minikube"
+  ]
+ },
+ {
+  "content": "To start a basic Minikube cluster, run: `./hack/k8s-minikube.sh -mp ${MINIKUBE_PROFILE} start`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-minikube"
+  ]
+ },
+ {
+  "content": "To start a Minikube cluster with Hydra enabled for auth testing (required for some molecule tests), run: `./hack/k8s-minikube.sh --hydra-enabled true -mp ${MINIKUBE_PROFILE} start`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-minikube"
+  ]
+ },
+ {
+  "content": "For all available Minikube startup options, run: `./hack/k8s-minikube.sh --help`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-minikube"
+  ]
+ },
+ {
+  "content": "After cluster is ready, install Istio by running: `./hack/istio/install-istio-via-istioctl.sh --client-exe ${CLIENT_EXE}`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-minikube"
+  ]
+ },
+ {
+  "content": "To check Minikube cluster status, run: `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} cluster-status`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-minikube"
+  ]
+ },
+ {
+  "content": "To open the Kubernetes dashboard for Minikube, run: `./hack/k8s-minikube.sh -mp ${MINIKUBE_PROFILE} dashboard`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-minikube"
+  ]
+ },
+ {
+  "content": "To build UI, backend, test, and push images to Minikube cluster, run: `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} build-ui build test cluster-push`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:building-and-deploying-to-minikube"
+  ]
+ },
+ {
+  "content": "To deploy the Kiali operator to Minikube, run: `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} operator-create`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:building-and-deploying-to-minikube"
+  ]
+ },
+ {
+  "content": "To deploy Kiali to Minikube, run: `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} kiali-create`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:building-and-deploying-to-minikube"
+  ]
+ },
+ {
+  "content": "For fast iteration after code changes on Minikube, rebuild and reload just Kiali by running: `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} build cluster-push-kiali kiali-reload-image`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:quick-iteration-on-minikube"
+  ]
+ },
+ {
+  "content": "For fast iteration after code changes on Minikube, rebuild and reload the operator by running: `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} cluster-push-operator operator-reload-image`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:quick-iteration-on-minikube"
+  ]
+ },
+ {
+  "content": "To install the Bookinfo demo application on Minikube, run: `./hack/k8s-minikube.sh -mp ${MINIKUBE_PROFILE} bookinfo`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:installing-demo-applications"
+  ]
+ },
+ {
+  "content": "To install the Bookinfo demo application using the dedicated script, run: `./hack/istio/install-bookinfo-demo.sh -c ${CLIENT_EXE}`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:installing-demo-applications"
+  ]
+ },
+ {
+  "content": "To install the error rates demo application for testing on Minikube, run: `./hack/istio/install-testing-demos.sh -c ${CLIENT_EXE}`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:installing-demo-applications"
+  ]
+ },
+ {
+  "content": "To access Kiali on Minikube, port forward to Kiali by running: `./hack/k8s-minikube.sh -mp ${MINIKUBE_PROFILE} port-forward`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:accessing-kiali"
+  ]
+ },
+ {
+  "content": "To get the ingress URL for Kiali on Minikube, run: ./hack/k8s-minikube.sh -mp ${MINIKUBE_PROFILE} ingress",
+  "memory_type": "procedural",
+  "tags": [
+   "section:minikube-setup",
+   "trigger:access-kiali-url"
+  ]
+ },
+ {
+  "content": "To port forward to Kiali service on Minikube, use: kubectl port-forward -n istio-system svc/kiali 20001:20001",
+  "memory_type": "procedural",
+  "tags": [
+   "section:minikube-setup",
+   "trigger:port-forward-kiali"
+  ]
+ },
+ {
+  "content": "To delete Kiali from Minikube cluster, run: make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} kiali-delete",
+  "memory_type": "procedural",
+  "tags": [
+   "section:minikube-cleanup",
+   "trigger:cleanup-kiali"
+  ]
+ },
+ {
+  "content": "To delete the Kiali operator from Minikube, run: make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} operator-delete",
+  "memory_type": "procedural",
+  "tags": [
+   "section:minikube-cleanup",
+   "trigger:cleanup-operator"
+  ]
+ },
+ {
+  "content": "To completely purge Kiali from the cluster, run: ./hack/purge-kiali-from-cluster.sh -c ${CLIENT_EXE}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:minikube-cleanup",
+   "trigger:cleanup-complete"
+  ]
+ },
+ {
+  "content": "To stop Minikube while preserving the cluster state, run: ./hack/k8s-minikube.sh -mp ${MINIKUBE_PROFILE} stop",
+  "memory_type": "procedural",
+  "tags": [
+   "section:minikube-cleanup",
+   "trigger:stop-minikube"
+  ]
+ },
+ {
+  "content": "To completely delete a Minikube cluster, run: ./hack/k8s-minikube.sh -mp ${MINIKUBE_PROFILE} delete",
+  "memory_type": "procedural",
+  "tags": [
+   "section:minikube-cleanup",
+   "trigger:delete-minikube"
+  ]
+ },
+ {
+  "content": "For KinD cluster setup, required environment variables are: CLUSTER_TYPE=kind, KIND_NAME for cluster name, DORP=docker for container runtime, and CLIENT_EXE=kubectl",
+  "memory_type": "semantic",
+  "tags": [
+   "section:kind-setup"
+  ]
+ },
+ {
+  "content": "Optional KinD environment variable: HELM_CHARTS_REPO_PULL=false if local helm-charts repo has a branch with no remote tracking",
+  "memory_type": "semantic",
+  "tags": [
+   "section:kind-setup"
+  ]
+ },
+ {
+  "content": "To start a basic KinD cluster with MetalLB, run: ./hack/start-kind.sh -n ${KIND_NAME}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-setup",
+   "trigger:start-kind-cluster"
+  ]
+ },
+ {
+  "content": "To start KinD with a custom load balancer IP range, run: ./hack/start-kind.sh -n ${KIND_NAME} --load-balancer-range \"255.70-255.84\"",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-setup",
+   "trigger:start-kind-cluster"
+  ]
+ },
+ {
+  "content": "To start KinD with image registry enabled, run: ./hack/start-kind.sh -n ${KIND_NAME} --enable-image-registry true",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-setup",
+   "trigger:start-kind-cluster"
+  ]
+ },
+ {
+  "content": "To start KinD with Hydra for auth testing, run: ./hack/start-kind.sh -n ${KIND_NAME} --enable-hydra true",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-setup",
+   "trigger:start-kind-cluster"
+  ]
+ },
+ {
+  "content": "To see all available KinD startup options, run: ./hack/start-kind.sh --help",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-setup",
+   "trigger:start-kind-cluster"
+  ]
+ },
+ {
+  "content": "After KinD cluster is running, install Istio via: ./hack/istio/install-istio-via-istioctl.sh --client-exe ${CLIENT_EXE}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-setup"
+  ]
+ },
+ {
+  "content": "To list all KinD clusters, run: kind get clusters",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-status"
+  ]
+ },
+ {
+  "content": "To verify KinD cluster accessibility, run: kubectl cluster-info --context kind-${KIND_NAME}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-status"
+  ]
+ },
+ {
+  "content": "To check if KinD cluster is ready for Kiali, run: make CLUSTER_TYPE=kind KIND_NAME=${KIND_NAME} cluster-status",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-status",
+   "trigger:check-cluster-ready"
+  ]
+ },
+ {
+  "content": "To build UI and backend for KinD, then push images to cluster, run: make CLUSTER_TYPE=kind KIND_NAME=${KIND_NAME} build-ui build test cluster-push",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-build-and-deploy",
+   "trigger:build-deploy-kiali"
+  ]
+ },
+ {
+  "content": "To deploy Kiali operator on KinD, run: make CLUSTER_TYPE=kind KIND_NAME=${KIND_NAME} operator-create",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-build-and-deploy",
+   "trigger:deploy-operator"
+  ]
+ },
+ {
+  "content": "To deploy Kiali on KinD, run: make CLUSTER_TYPE=kind KIND_NAME=${KIND_NAME} kiali-create",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-build-and-deploy",
+   "trigger:deploy-kiali"
+  ]
+ },
+ {
+  "content": "For faster iteration on KinD after code changes to Kiali, run: make CLUSTER_TYPE=kind KIND_NAME=${KIND_NAME} build cluster-push-kiali kiali-reload-image",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-build-and-deploy",
+   "trigger:build-deploy-kiali"
+  ]
+ },
+ {
+  "content": "For faster iteration on KinD after operator code changes, run: make CLUSTER_TYPE=kind KIND_NAME=${KIND_NAME} cluster-push-operator operator-reload-image",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-build-and-deploy",
+   "trigger:build-deploy-operator"
+  ]
+ },
+ {
+  "content": "To install Bookinfo demo application on KinD, run: ./hack/istio/install-bookinfo-demo.sh -c ${CLIENT_EXE}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-demo-applications"
+  ]
+ },
+ {
+  "content": "To install testing demo applications on KinD, run: ./hack/istio/install-testing-demos.sh -c ${CLIENT_EXE}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-demo-applications"
+  ]
+ },
+ {
+  "content": "To port forward to Kiali service on KinD, run: kubectl port-forward -n istio-system svc/kiali 20001:20001, then access at http://localhost:20001/kiali",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-access",
+   "trigger:access-kiali"
+  ]
+ },
+ {
+  "content": "To delete Kiali from KinD cluster, run: make CLUSTER_TYPE=kind KIND_NAME=${KIND_NAME} kiali-delete",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-cleanup",
+   "trigger:cleanup-kiali"
+  ]
+ },
+ {
+  "content": "To delete Kiali operator from KinD, run: make CLUSTER_TYPE=kind KIND_NAME=${KIND_NAME} operator-delete",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-cleanup",
+   "trigger:cleanup-operator"
+  ]
+ },
+ {
+  "content": "To completely purge Kiali from KinD cluster, run: ./hack/purge-kiali-from-cluster.sh -c ${CLIENT_EXE}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-cleanup",
+   "trigger:cleanup-complete"
+  ]
+ },
+ {
+  "content": "To delete entire KinD cluster, run: kind delete cluster --name ${KIND_NAME}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-cleanup",
+   "trigger:delete-cluster"
+  ]
+ },
+ {
+  "content": "For OpenShift (CRC) cluster setup, required environment variables are: CLUSTER_TYPE=openshift, DORP=podman or docker depending on setup, and CLIENT_EXE=oc",
+  "memory_type": "semantic",
+  "tags": [
+   "section:openshift-crc-setup"
+  ]
+ },
+ {
+  "content": "Optional OpenShift environment variable: HELM_CHARTS_REPO_PULL=false if local helm-charts repo has a branch with no remote tracking",
+  "memory_type": "semantic",
+  "tags": [
+   "section:openshift-crc-setup"
+  ]
+ },
+ {
+  "content": "To start CodeReady Containers (CRC) for local OpenShift, run: ./hack/crc-openshift.sh start",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-crc-setup",
+   "trigger:start-crc"
+  ]
+ },
+ {
+  "content": "To check CodeReady Containers status, run: ./hack/crc-openshift.sh status",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-crc-setup",
+   "trigger:check-crc-status"
+  ]
+ },
+ {
+  "content": "After CRC cluster is ready, install Istio via: ./hack/istio/install-istio-via-istioctl.sh -c ${CLIENT_EXE}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-crc-setup"
+  ]
+ },
+ {
+  "content": "To install OpenShift Service Mesh (OSSM) instead of upstream Istio on CRC, run: ./hack/istio/sail/install-ossm-release.sh install-operators then ./hack/istio/sail/install-ossm-release.sh install-istio",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-crc-setup"
+  ]
+ },
+ {
+  "content": "To get all routes on OpenShift CRC, run: ./hack/crc-openshift.sh routes",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-crc-setup",
+   "trigger:get-routes"
+  ]
+ },
+ {
+  "content": "To get all service endpoints on OpenShift CRC, run: ./hack/crc-openshift.sh services",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-crc-setup"
+  ]
+ },
+ {
+  "content": "To check OpenShift cluster status via make, run: make CLUSTER_TYPE=openshift cluster-status",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-status",
+   "trigger:check-cluster-ready"
+  ]
+ },
+ {
+  "content": "To login to OpenShift CRC after getting credentials from ./hack/crc-openshift.sh status, use: oc login -u kubeadmin -p <password> https://api.crc.testing:6443",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-status"
+  ]
+ },
+ {
+  "content": "To build UI and backend for OpenShift, then push images to cluster, run: make CLUSTER_TYPE=openshift build-ui build test cluster-push",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-build-and-deploy",
+   "trigger:build-deploy-kiali"
+  ]
+ },
+ {
+  "content": "To deploy Kiali operator on OpenShift using OLM, run: make CLUSTER_TYPE=openshift olm-operator-create",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-build-and-deploy",
+   "trigger:deploy-operator"
+  ]
+ },
+ {
+  "content": "To deploy Kiali operator on OpenShift without OLM, run: make CLUSTER_TYPE=openshift operator-create",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-build-and-deploy",
+   "trigger:deploy-operator"
+  ]
+ },
+ {
+  "content": "To deploy Kiali from OperatorHub on OpenShift, run: make CLUSTER_TYPE=openshift operator-install",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-build-and-deploy",
+   "trigger:deploy-operator"
+  ]
+ },
+ {
+  "content": "To deploy Kiali on OpenShift, run: make CLUSTER_TYPE=openshift kiali-create",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-build-and-deploy",
+   "trigger:deploy-kiali"
+  ]
+ },
+ {
+  "content": "For faster iteration on OpenShift after Kiali code changes, run: make CLUSTER_TYPE=openshift build cluster-push-kiali then make CLUSTER_TYPE=openshift kiali-reload-image",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-build-and-deploy",
+   "trigger:build-deploy-kiali"
+  ]
+ },
+ {
+  "content": "For faster iteration on OpenShift after operator code changes, run: make CLUSTER_TYPE=openshift cluster-push-operator then make CLUSTER_TYPE=openshift operator-reload-image",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-build-and-deploy",
+   "trigger:build-deploy-operator"
+  ]
+ },
+ {
+  "content": "To install Bookinfo demo application on OpenShift, run: ./hack/istio/install-bookinfo-demo.sh -c ${CLIENT_EXE}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-demo-applications"
+  ]
+ },
+ {
+  "content": "To install testing demo applications on OpenShift, run: ./hack/istio/install-testing-demos.sh -c ${CLIENT_EXE}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-demo-applications"
+  ]
+ },
+ {
+  "content": "To get Kiali route URL on OpenShift, run: oc get route kiali -n istio-system -o jsonpath='{.spec.host}'",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-access",
+   "trigger:access-kiali-url"
+  ]
+ },
+ {
+  "content": "Alternatively, to get Kiali route on OpenShift CRC, run: ./hack/crc-openshift.sh routes and look for the kiali entry",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-access",
+   "trigger:access-kiali-url"
+  ]
+ },
+ {
+  "content": "To delete Kiali from OpenShift, run: make CLUSTER_TYPE=openshift kiali-delete",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-cleanup",
+   "trigger:cleanup-kiali"
+  ]
+ },
+ {
+  "content": "To delete Kiali operator from OpenShift, run: make CLUSTER_TYPE=openshift operator-delete",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-cleanup",
+   "trigger:cleanup-operator"
+  ]
+ },
+ {
+  "content": "To completely purge Kiali from OpenShift cluster, run: ./hack/purge-kiali-from-cluster.sh -c ${CLIENT_EXE}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-cleanup",
+   "trigger:cleanup-complete"
+  ]
+ },
+ {
+  "content": "Open Kiali in browser by executing: xdg-open https://$(oc get route kiali -n istio-system -o jsonpath='{.spec.host}')",
+  "memory_type": "procedural",
+  "tags": [
+   "section:crc-specific-operations",
+   "trigger:kiali-open"
+  ]
+ },
+ {
+  "content": "Expose CRC cluster to remote clients and add firewall rules using: ./hack/crc-openshift.sh expose",
+  "memory_type": "procedural",
+  "tags": [
+   "section:crc-specific-operations",
+   "trigger:crc-expose"
+  ]
+ },
+ {
+  "content": "Remove remote access from CRC cluster using: ./hack/crc-openshift.sh unexpose",
+  "memory_type": "procedural",
+  "tags": [
+   "section:crc-specific-operations",
+   "trigger:crc-unexpose"
+  ]
+ },
+ {
+  "content": "SSH into CRC VM using: ./hack/crc-openshift.sh ssh",
+  "memory_type": "procedural",
+  "tags": [
+   "section:crc-specific-operations",
+   "trigger:crc-ssh"
+  ]
+ },
+ {
+  "content": "Debug in CRC VM using: ./hack/crc-openshift.sh sshoc",
+  "memory_type": "procedural",
+  "tags": [
+   "section:crc-specific-operations",
+   "trigger:crc-debug"
+  ]
+ },
+ {
+  "content": "Change CRC domain from crc.testing to nip.io using: ./hack/crc-openshift.sh changedomain",
+  "memory_type": "procedural",
+  "tags": [
+   "section:crc-specific-operations",
+   "trigger:crc-changedomain"
+  ]
+ },
+ {
+  "content": "Delete Kiali on OpenShift using: make CLUSTER_TYPE=openshift kiali-delete",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cleanup",
+   "trigger:kiali-delete"
+  ]
+ },
+ {
+  "content": "Delete Kiali operator on OpenShift using: make CLUSTER_TYPE=openshift operator-delete. If using OLM, use: make CLUSTER_TYPE=openshift olm-operator-delete",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cleanup",
+   "trigger:operator-delete"
+  ]
+ },
+ {
+  "content": "Purge Kiali and all related components from any cluster type using: ./hack/purge-kiali-from-cluster.sh -c ${CLIENT_EXE}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cleanup",
+   "trigger:kiali-purge-all"
+  ]
+ },
+ {
+  "content": "Stop CRC cluster while preserving cluster state using: ./hack/crc-openshift.sh stop",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cleanup",
+   "trigger:crc-stop"
+  ]
+ },
+ {
+  "content": "Delete CRC cluster completely using: ./hack/crc-openshift.sh delete",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cleanup",
+   "trigger:crc-delete"
+  ]
+ },
+ {
+  "content": "Complete cleanup including CRC cache using: ./hack/crc-openshift.sh cleanup",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cleanup",
+   "trigger:crc-cleanup"
+  ]
+ },
+ {
+  "content": "Delete Kiali Custom Resource (CR) across any cluster type using: make CLUSTER_TYPE=<your-cluster-type> kiali-delete. The operator will remove Kiali when the CR is deleted.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:general-cleanup-commands",
+   "trigger:kiali-cr-delete"
+  ]
+ },
+ {
+  "content": "Force remove Kiali if operator fails using: make CLUSTER_TYPE=<your-cluster-type> kiali-purge",
+  "memory_type": "procedural",
+  "tags": [
+   "section:general-cleanup-commands",
+   "trigger:kiali-force-remove"
+  ]
+ },
+ {
+  "content": "Remove operator from any cluster type using: make CLUSTER_TYPE=<your-cluster-type> operator-delete",
+  "memory_type": "procedural",
+  "tags": [
+   "section:general-cleanup-commands",
+   "trigger:operator-remove"
+  ]
+ },
+ {
+  "content": "Clone kiali-operator separately from the main Kiali repository and link it into the main repository using a symlink to prevent loss of operator changes when checking out old Kiali branches. Steps: cd ~/source && git clone git@github.com:kiali/kiali-operator.git && cd ~/source/kiali/kiali && ln -s ~/source/kiali-operator operator",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:operator-setup"
+  ]
+ },
+ {
+  "content": "Use a symlink when linking kiali-operator into the main Kiali repository. If you clone directly into kiali/operator, checking out old Kiali branches will delete your operator changes.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:operator-development"
+  ]
+ },
+ {
+  "content": "Build and push operator image using: make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=minikube cluster-push-operator. Set CLUSTER_TYPE and MINIKUBE_PROFILE according to your environment.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:operator-push"
+  ]
+ },
+ {
+  "content": "Deploy operator via Helm using: make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=minikube operator-create. Set CLUSTER_TYPE and MINIKUBE_PROFILE according to your environment.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:operator-create-helm"
+  ]
+ },
+ {
+  "content": "Deploy operator via OLM on OpenShift using: make CLUSTER_TYPE=openshift olm-operator-create. OLM is typically installed on OpenShift clusters.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:operator-create-olm"
+  ]
+ },
+ {
+  "content": "Delete operator from minikube using: make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=minikube operator-delete",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:operator-delete-minikube"
+  ]
+ },
+ {
+  "content": "Delete operator from OpenShift using OLM: make CLUSTER_TYPE=openshift olm-operator-delete",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:operator-delete-openshift-olm"
+  ]
+ },
+ {
+  "content": "Test Kiali Ansible playbook changes quickly using: make run-operator-playbook-kiali. Configuration files are in kiali-operator/dev-playbook-config/.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:operator-test-playbook-kiali"
+  ]
+ },
+ {
+  "content": "Test OSSMConsole Ansible playbook changes quickly using: make run-operator-playbook-ossmconsole. Configuration files are in kiali-operator/dev-playbook-config/.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:operator-test-playbook-ossmconsole"
+  ]
+ },
+ {
+  "content": "Before running operator playbook tests, ensure Python3 is in PATH, Ansible collections are installed with: ansible-galaxy collection install -r operator/requirements.yml --force-with-deps, and Python libraries are installed with: python -m pip install --user --upgrade -r operator/molecule/requirements.txt",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development"
+  ]
+ },
+ {
+  "content": "Run full operator locally with Ansible operator infrastructure using: make run-operator. This runs the ansible-operator process locally, watching for Kiali and OSSMConsole CRs in the cluster.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:operator-run-full"
+  ]
+ },
+ {
+  "content": "Allow ad-hoc namespaces in operator configuration using: make operator-set-config-allow-ad-hoc-kiali-namespace",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development"
+  ]
+ },
+ {
+  "content": "Allow ad-hoc images in operator configuration using: make operator-set-config-allow-ad-hoc-kiali-image",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development"
+  ]
+ },
+ {
+  "content": "Enable debug logging in operator configuration using: make operator-set-config-ansible-debug-logs",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development"
+  ]
+ },
+ {
+  "content": "Set verbosity level (0-7) in operator configuration using: make operator-set-config-ansible-verbosity",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development"
+  ]
+ },
+ {
+  "content": "Enable profiler in operator configuration using: make operator-set-config-ansible-profiler-on",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development"
+  ]
+ },
+ {
+  "content": "Enable operator profiling by setting ANSIBLE_CONFIG=/opt/ansible/ansible-profiler.cfg in the operator deployment. The profiler report shows task execution times.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development"
+  ]
+ },
+ {
+  "content": "To view cumulative profiler results on looped tasks, save the profiler report and pipe through: awk -F~ '{val=$2; $2=\"@\"; a[$0]+=val} !b[$0]++{c[++count]=$0} END{for(i=1;i<=count;i++){sub(\"@\",a[c[i]],c[i]); print c[i]}}' OFS=\\~ <(cat - | sed 's/\\(.*\\) -\\+ \\(.*\\)s/\\1~\\2/') | sort -n -t '~' -k 2 -r | column -s~ -t",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development"
+  ]
+ },
+ {
+  "content": "For minikube molecule tests, set environment variables: CLUSTER_TYPE=minikube, MINIKUBE_PROFILE=ci, DORP=podman, CLIENT_EXE=kubectl",
+  "memory_type": "semantic",
+  "tags": [
+   "section:operator-development"
+  ]
+ },
+ {
+  "content": "Start minikube cluster with Hydra (required for some molecule tests) using: ./hack/k8s-minikube.sh --hydra-enabled true -mp ci start",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:minikube-start-hydra"
+  ]
+ },
+ {
+  "content": "Install Istio on minikube cluster using: ./hack/istio/install-istio-via-istioctl.sh --client-exe ${CLIENT_EXE}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:istio-install-minikube"
+  ]
+ },
+ {
+  "content": "For KinD molecule tests, set environment variables: CLUSTER_TYPE=kind, KIND_NAME=ci, DORP=docker (podman typically does not work), CLIENT_EXE=kubectl",
+  "memory_type": "semantic",
+  "tags": [
+   "section:operator-development"
+  ]
+ },
+ {
+  "content": "Start KinD cluster with Hydra (required for some molecule tests) using: ./hack/start-kind.sh --name ${KIND_NAME} --enable-hydra true",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:kind-start-hydra"
+  ]
+ },
+ {
+  "content": "Install Istio on KinD cluster using: ./hack/istio/install-istio-via-istioctl.sh --client-exe ${CLIENT_EXE}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:istio-install-kind"
+  ]
+ },
+ {
+  "content": "For OpenShift molecule tests, set environment variables: CLUSTER_TYPE=openshift, DORP=podman, CLIENT_EXE=oc",
+  "memory_type": "semantic",
+  "tags": [
+   "section:operator-development"
+  ]
+ },
+ {
+  "content": "Start OpenShift cluster using: ./hack/crc-openshift.sh start",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:openshift-start"
+  ]
+ },
+ {
+  "content": "Install Istio on OpenShift cluster using: ./hack/istio/install-istio-via-istioctl.sh -c ${CLIENT_EXE}",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:istio-install-openshift"
+  ]
+ },
+ {
+  "content": "Before running molecule tests, verify no Kiali is already deployed by checking: ${CLIENT_EXE} get deployments -A -l app.kubernetes.io/name=kiali and ${CLIENT_EXE} get deployments -A -l app.kubernetes.io/name=kiali-operator",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:molecule-pre-check"
+  ]
+ },
+ {
+  "content": "If Kiali is already deployed before molecule tests, purge it using: ./hack/purge-kiali-from-cluster.sh -c ${CLIENT_EXE} and wait for CRDs to be removed with: timeout 60 bash -c \"until ! ${CLIENT_EXE} get crd | grep kiali; do sleep 2; done\"",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:molecule-purge-existing"
+  ]
+ },
+ {
+  "content": "Build and push dev images to minikube for molecule tests using: make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=ci build-ui build test cluster-push",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:molecule-build-push-minikube"
+  ]
+ },
+ {
+  "content": "For KinD cluster, run: make CLUSTER_TYPE=kind KIND_NAME=ci build-ui build test cluster-push",
+  "memory_type": "procedural",
+  "tags": [
+   "section:build-and-deploy",
+   "trigger:cluster-build-kind"
+  ]
+ },
+ {
+  "content": "For OpenShift cluster, run: make CLUSTER_TYPE=openshift build-ui build test cluster-push",
+  "memory_type": "procedural",
+  "tags": [
+   "section:build-and-deploy",
+   "trigger:cluster-build-openshift"
+  ]
+ },
+ {
+  "content": "For Minikube cluster, run: make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=ci build-ui build test cluster-push",
+  "memory_type": "procedural",
+  "tags": [
+   "section:build-and-deploy",
+   "trigger:cluster-build-minikube"
+  ]
+ },
+ {
+  "content": "The -udi (--use-dev-images) flag in molecule tests controls whether to use dev images. Set to true to test local code changes (requires building and pushing dev images first); set to false to test with latest images published on quay.io",
+  "memory_type": "semantic",
+  "tags": [
+   "section:molecule-testing"
+  ]
+ },
+ {
+  "content": "The -hcrp (--helm-charts-repo-pull) flag in molecule tests controls whether to pull the helm-charts repository. Set to true to pull latest helm-charts from remote repository; set to false if local helm-charts repo has a branch with no remote to avoid git pull errors",
+  "memory_type": "semantic",
+  "tags": [
+   "section:molecule-testing"
+  ]
+ },
+ {
+  "content": "For Minikube molecule tests, run: ./hack/run-molecule-tests.sh --client-exe \"$(which kubectl)\" --cluster-type minikube --minikube-profile ci -udi true -hcrp false -at \"token-test\"",
+  "memory_type": "procedural",
+  "tags": [
+   "section:molecule-testing",
+   "trigger:molecule-test-minikube"
+  ]
+ },
+ {
+  "content": "For KinD molecule tests, run: ./hack/run-molecule-tests.sh --client-exe \"$(which kubectl)\" --cluster-type kind -udi true -hcrp false -at \"token-test\"",
+  "memory_type": "procedural",
+  "tags": [
+   "section:molecule-testing",
+   "trigger:molecule-test-kind"
+  ]
+ },
+ {
+  "content": "For OpenShift molecule tests, run: ./hack/run-molecule-tests.sh --client-exe \"$(which oc)\" --cluster-type openshift -udi true -hcrp false -at \"token-test\"",
+  "memory_type": "procedural",
+  "tags": [
+   "section:molecule-testing",
+   "trigger:molecule-test-openshift"
+  ]
+ },
+ {
+  "content": "Molecule tests are located in kiali-operator/molecule/. Each subdirectory is a test scenario (e.g., config-values-test, token-test)",
+  "memory_type": "semantic",
+  "tags": [
+   "section:molecule-testing"
+  ]
+ },
+ {
+  "content": "Never modify versioned operator roles in kiali-operator/roles/v2.4/, roles/v2.11/, etc. Only modify the default role",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:file-protection-rules"
+  ]
+ },
+ {
+  "content": "Never modify old CSV versions in kiali-operator/manifests/*/[version]/. Only modify the LATEST version",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:file-protection-rules"
+  ]
+ },
+ {
+  "content": "Never modify CRD files that are not in kiali-operator/crd-docs/crd/. Golden copies are in crd-docs/crd/ (source of truth). Sync changes using: make sync-crds in kiali-operator repo (this affects both kiali-operator and helm-charts repos)",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:file-protection-rules"
+  ]
+ },
+ {
+  "content": "Never modify generated documentation files: kiali.io/content/en/docs/Configuration/kialis.kiali.io.md and kiali.io/content/en/docs/Configuration/ossmconsoles.kiali.io.md",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:file-protection-rules"
+  ]
+ },
+ {
+  "content": "Never modify _output/ directories or subdirectories as they contain build artifacts and generated files",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:file-protection-rules"
+  ]
+ },
+ {
+  "content": "When modifying operator resources (roles, permissions, CSVs), check if changes break older supported versions in kiali-operator/roles/ (e.g., v1.24). Only make breaking changes after old versions are no longer supported",
+  "memory_type": "procedural",
+  "tags": [
+   "section:file-protection-rules"
+  ]
+ },
+ {
+  "content": "When altering Kiali operator resources, update: (1) golden copy in kiali-operator/manifests/kiali-upstream/, (2) golden copy in kiali-operator/manifests/kiali-ossm/manifests/kiali.clusterserviceversion.yaml, (3) Helm chart in helm-charts/kiali-operator/templates/, (4) if modifying CRD schema run make sync-crds in kiali-operator repo (requires helm-charts PR)",
+  "memory_type": "procedural",
+  "tags": [
+   "section:common-patterns-and-best-practices",
+   "trigger:alter-operator-resources"
+  ]
+ },
+ {
+  "content": "Add new permission to operator",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-operator-resources"
+  ]
+ },
+ {
+  "content": "Update operator deployment spec",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-operator-resources"
+  ]
+ },
+ {
+  "content": "Modify operator RBAC",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-operator-resources"
+  ]
+ },
+ {
+  "content": "Change operator configuration schema",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-operator-resources"
+  ]
+ },
+ {
+  "content": "When altering Kiali server resources, update: (1) Kubernetes templates in kiali-operator/roles/default/kiali-deploy/templates/kubernetes/, (2) OpenShift templates in kiali-operator/roles/default/kiali-deploy/templates/openshift/, (3) check if removal needed in kiali-operator/roles/default/kiali-remove/, (4) Helm chart in helm-charts/kiali-server/templates/",
+  "memory_type": "procedural",
+  "tags": [
+   "section:common-patterns-and-best-practices",
+   "trigger:alter-server-resources"
+  ]
+ },
+ {
+  "content": "Update Kiali deployment spec",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-server-resources"
+  ]
+ },
+ {
+  "content": "Change service configuration",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-server-resources"
+  ]
+ },
+ {
+  "content": "Modify server startup parameters",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-server-resources"
+  ]
+ },
+ {
+  "content": "Update server pod template",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-server-resources"
+  ]
+ },
+ {
+  "content": "When altering Kiali server permissions for all namespaces, update: (1) kiali-operator/manifests/kiali-upstream/ CSVs, (2) kiali-operator/manifests/kiali-ossm/manifests/kiali.clusterserviceversion.yaml, (3) kiali-operator/roles/default/kiali-deploy/templates/kubernetes/role.yaml and role-viewer.yaml, (4) kiali-operator/roles/default/kiali-deploy/templates/openshift/role.yaml and role-viewer.yaml, (5) helm-charts/kiali-operator/templates/clusterrole.yaml, (6) helm-charts/kiali-server/templates/role.yaml and role-viewer.yaml",
+  "memory_type": "procedural",
+  "tags": [
+   "section:common-patterns-and-best-practices",
+   "trigger:alter-server-permissions-all-ns"
+  ]
+ },
+ {
+  "content": "Grant Kiali access to new resource type",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-server-permissions-all-ns"
+  ]
+ },
+ {
+  "content": "Add cluster-wide read permission",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-server-permissions-all-ns"
+  ]
+ },
+ {
+  "content": "Remove permission from all namespaces",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-server-permissions-all-ns"
+  ]
+ },
+ {
+  "content": "Expand Kiali viewer role capabilities",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-server-permissions-all-ns"
+  ]
+ },
+ {
+  "content": "When altering Kiali server permissions for control plane only, update: (1) kiali-operator/manifests/kiali-upstream/ CSVs, (2) kiali-operator/manifests/kiali-ossm/manifests/kiali.clusterserviceversion.yaml, (3) helm-charts/kiali-operator/templates/clusterrole.yaml",
+  "memory_type": "procedural",
+  "tags": [
+   "section:common-patterns-and-best-practices",
+   "trigger:alter-server-permissions-control-plane"
+  ]
+ },
+ {
+  "content": "Add permission to access control plane resources",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-server-permissions-control-plane"
+  ]
+ },
+ {
+  "content": "Grant access to mesh configuration",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-server-permissions-control-plane"
+  ]
+ },
+ {
+  "content": "Restrict permission to control plane namespace",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-server-permissions-control-plane"
+  ]
+ },
+ {
+  "content": "When altering configuration settings, update: (1) set default in kiali-operator/roles/default/kiali-deploy/defaults/main.yml, (2) if new top-level setting add to kiali-operator/roles/default/kiali-deploy/vars/main.yml, (3) document in CRD kiali-operator/crd-docs/crd/kiali.io_kialis.yaml, (4) add example to kiali-operator/crd-docs/cr/kiali.io_v1alpha1_kiali.yaml, (5) validate CR with make validate-cr in kiali-operator repo, (6) if modified CRD run make sync-crds in kiali-operator repo, (7) only if appropriate set value in cr.spec section of helm-charts/kiali-operator/values.yaml, (8) set default in helm-charts/kiali-server/values.yaml, (9) sort alphabetically in all files, (10) if appropriate add test to kiali-operator/molecule/config-values-test/converge.yml, (11) if CRD property added/removed/modified update kiali-operator/molecule/config-values-test/kiali-cr-all-yaml",
+  "memory_type": "procedural",
+  "tags": [
+   "section:common-patterns-and-best-practices",
+   "trigger:alter-config-settings"
+  ]
+ },
+ {
+  "content": "Add new configuration option",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-config-settings"
+  ]
+ },
+ {
+  "content": "Change default setting value",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-config-settings"
+  ]
+ },
+ {
+  "content": "Modify existing config parameter",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-config-settings"
+  ]
+ },
+ {
+  "content": "Add CRD schema field",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:alter-config-settings"
+  ]
+ },
+ {
+  "content": "When altering monitoring dashboard templates, modify built-in templates in kiali/config/dashboards/dashboards.go",
+  "memory_type": "procedural",
+  "tags": [
+   "section:common-patterns-and-best-practices",
+   "trigger:alter-dashboard-templates"
+  ]
+ },
+ {
+  "content": "When backporting changes to older versions, duplicate changes from roles/default/ to versioned roles (e.g., roles/v1.24/) and cherry-pick changes to appropriate git branches",
+  "memory_type": "procedural",
+  "tags": [
+   "section:common-patterns-and-best-practices",
+   "trigger:backport-changes"
+  ]
+ },
+ {
+  "content": "When adding support for a new Ansible role version, (1) add new role directory by copying kiali-operator/roles/default/ and naming it vX.Y (where X.Y is the new version), (2) add new RELATED_IMAGE reference and relatedImages entry to kiali-operator/manifests/kiali-ossm/manifests/kiali.clusterserviceversion.yaml, (3) add new version to kiali-operator/playbooks/kiali-default-supported-images.yml, (4) add new version to kiali-operator/playbooks/ossmconsole-default-supported-images.yml",
+  "memory_type": "procedural",
+  "tags": [
+   "section:common-patterns-and-best-practices",
+   "trigger:add-role-version"
+  ]
+ },
+ {
+  "content": "Create support for new Kiali version",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:add-role-version"
+  ]
+ },
+ {
+  "content": "Add compatibility for new operator version",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:add-role-version"
+  ]
+ },
+ {
+  "content": "Extend version coverage",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:add-role-version"
+  ]
+ },
+ {
+  "content": "Support new role variant",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:add-role-version"
+  ]
+ },
+ {
+  "content": "Delete the role directory from kiali-operator/roles/ when removing support for an old Ansible role version.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:removing-support-for-an-old-ansible-role-version",
+   "trigger:role-removal"
+  ]
+ },
+ {
+  "content": "Remove RELATED_IMAGE reference from kiali-operator/manifests/kiali-ossm/manifests/kiali.clusterserviceversion.yaml when removing support for an old Ansible role version.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:removing-support-for-an-old-ansible-role-version",
+   "trigger:role-removal"
+  ]
+ },
+ {
+  "content": "Remove version from kiali-operator/playbooks/kiali-default-supported-images.yml when removing support for an old Ansible role version.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:removing-support-for-an-old-ansible-role-version",
+   "trigger:role-removal"
+  ]
+ },
+ {
+  "content": "Remove version from kiali-operator/playbooks/ossmconsole-default-supported-images.yml when removing support for an old Ansible role version.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:removing-support-for-an-old-ansible-role-version",
+   "trigger:role-removal"
+  ]
+ },
+ {
+  "content": "When modifying CRD schemas, edit the golden copy at kiali-operator/crd-docs/crd/kiali.io_kialis.yaml or kiali-operator/crd-docs/crd/kiali.io_ossmconsoles.yaml.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-crds",
+   "trigger:crd-modification"
+  ]
+ },
+ {
+  "content": "After editing golden copy CRD schema, run 'make validate-cr' in kiali-operator repo to validate the changes.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-crds",
+   "trigger:crd-modification"
+  ]
+ },
+ {
+  "content": "After validating CRD changes, synchronize to all locations by running 'make sync-crds' in kiali-operator repo.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-crds",
+   "trigger:crd-modification"
+  ]
+ },
+ {
+  "content": "Verify CRD synchronization by running 'make validate-crd-sync' in kiali-operator repo after syncing.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-crds",
+   "trigger:crd-modification"
+  ]
+ },
+ {
+  "content": "Create a PR for kiali-operator repo after CRD changes and verification are complete.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-crds",
+   "trigger:crd-modification"
+  ]
+ },
+ {
+  "content": "Create a separate PR for helm-charts repo with synced CRD files after creating the kiali-operator PR.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:working-with-crds",
+   "trigger:crd-modification"
+  ]
+ },
+ {
+  "content": "The golden copy CRD files are kiali-operator/crd-docs/crd/kiali.io_kialis.yaml and kiali-operator/crd-docs/crd/kiali.io_ossmconsoles.yaml and are the source of truth for CRD schemas.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:working-with-crds"
+  ]
+ },
+ {
+  "content": "Do not edit CRD synchronized copies directly; they are: kiali-operator/manifests/kiali-ossm/manifests/kiali.crd.yaml, kiali-operator/manifests/kiali-ossm/manifests/ossmconsole.crd.yaml, kiali-operator/manifests/kiali-upstream/[version]/manifests/kiali.crd.yaml, helm-charts/kiali-operator/crds/crds.yaml, and helm-charts/kiali-operator/templates/ossmconsole-crd.yaml.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:working-with-crds"
+  ]
+ },
+ {
+  "content": "When upgrading Go, update go.mod using 'go mod edit -go=x.y' with the target version number.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:upgrading-dependencies",
+   "trigger:go-upgrade"
+  ]
+ },
+ {
+  "content": "After updating go.mod during Go upgrade, run 'go mod tidy -v' to update dependencies.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:upgrading-dependencies",
+   "trigger:go-upgrade"
+  ]
+ },
+ {
+  "content": "After updating dependencies during Go upgrade, verify everything builds by running 'make clean build build-ui test'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:upgrading-dependencies",
+   "trigger:go-upgrade"
+  ]
+ },
+ {
+  "content": "Commit and create PR after verifying Go upgrade build succeeds.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:upgrading-dependencies",
+   "trigger:go-upgrade"
+  ]
+ },
+ {
+  "content": "When upgrading PatternFly, check for updates using 'npx npm-check-updates -t latest -f '/^@patternfly/'' to find available versions.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:upgrading-dependencies",
+   "trigger:patternfly-upgrade"
+  ]
+ },
+ {
+  "content": "After checking for PatternFly updates, run 'yarn install' from the frontend/ directory to update yarn.lock.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:upgrading-dependencies",
+   "trigger:patternfly-upgrade"
+  ]
+ },
+ {
+  "content": "Commit both package.json and yarn.lock after upgrading PatternFly.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:upgrading-dependencies",
+   "trigger:patternfly-upgrade"
+  ]
+ },
+ {
+  "content": "Run 'corepack enable' once before using yarn for the first time; Yarn is managed via corepack in the Kiali project.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:upgrading-dependencies"
+  ]
+ },
+ {
+  "content": "The exact Yarn version for Kiali is pinned in frontend/package.json via the packageManager field.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:upgrading-dependencies"
+  ]
+ },
+ {
+  "content": "Use hack/k8s-minikube.sh to start a minikube cluster for development.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:hack-scripts"
+  ]
+ },
+ {
+  "content": "Use hack/crc-openshift.sh to start a local OpenShift cluster for development.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:hack-scripts"
+  ]
+ },
+ {
+  "content": "Use hack/start-kind.sh to start a KinD cluster for development.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:hack-scripts"
+  ]
+ },
+ {
+  "content": "Use hack/istio/install-istio-via-istioctl.sh to install Istio on a development cluster.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:hack-scripts"
+  ]
+ },
+ {
+  "content": "Use hack/istio/install-bookinfo-demo.sh to install the Bookinfo demo application on a development cluster.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:hack-scripts"
+  ]
+ },
+ {
+  "content": "Use hack/run-kiali.sh to run Kiali standalone for development.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:hack-scripts"
+  ]
+ },
+ {
+  "content": "Use hack/run-integration-tests.sh to run the full integration test suite for Kiali.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:hack-scripts"
+  ]
+ },
+ {
+  "content": "Use hack/run-molecule-tests.sh to run Molecule tests for Ansible roles.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:hack-scripts"
+  ]
+ },
+ {
+  "content": "Use hack/purge-kiali-from-cluster.sh to remove all Kiali resources from a cluster.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:hack-scripts"
+  ]
+ },
+ {
+  "content": "Use hack/configure-operator.sh to configure operator settings.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:hack-scripts"
+  ]
+ },
+ {
+  "content": "All scripts in the hack/ directory support --help flag for detailed usage information.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:hack-scripts"
+  ]
+ },
+ {
+  "content": "When experiencing build failures in Kiali, ensure correct Go version using 'make go-check'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-build"
+  ]
+ },
+ {
+  "content": "When experiencing build failures, perform a clean rebuild by running 'make clean-all' followed by 'make build-ui build test'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-build"
+  ]
+ },
+ {
+  "content": "When experiencing cluster push failures, verify cluster accessibility using 'make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} cluster-status' for minikube or 'make CLUSTER_TYPE=kind KIND_NAME=${KIND_NAME} cluster-status' for kind.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-cluster"
+  ]
+ },
+ {
+  "content": "For minikube cluster push failures, ensure the minikube profile is set correctly using 'export MINIKUBE_PROFILE=ci' and verify with 'minikube status -p ci'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-cluster"
+  ]
+ },
+ {
+  "content": "For kind cluster push failures, verify clusters exist using 'kind get clusters' and ensure KIND_NAME environment variable is set correctly.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-cluster"
+  ]
+ },
+ {
+  "content": "When operator is not working, check operator logs using 'kubectl logs -n kiali-operator deployment/kiali-operator -f'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-operator"
+  ]
+ },
+ {
+  "content": "When operator is not working, check Kiali CR status using 'kubectl get kiali -A -o yaml'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-operator"
+  ]
+ },
+ {
+  "content": "When operator is not working, verify operator image using 'kubectl get deployment kiali-operator -n kiali-operator -o yaml | grep image:'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-operator"
+  ]
+ },
+ {
+  "content": "When Molecule tests fail, ensure cluster is clean by running './hack/purge-kiali-from-cluster.sh -c kubectl' and verify no kiali CRDs remain with 'kubectl get crd | grep kiali'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-molecule"
+  ]
+ },
+ {
+  "content": "When Molecule tests fail, rebuild images using 'make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=ci build-ui build test cluster-push'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-molecule"
+  ]
+ },
+ {
+  "content": "When Molecule tests fail, run with debug mode enabled by setting 'export MOLECULE_DEBUG=true' before running './hack/run-molecule-tests.sh'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-molecule"
+  ]
+ },
+ {
+  "content": "When frontend is not loading, verify backend is running using 'curl http://localhost:20001/kiali/api'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-frontend"
+  ]
+ },
+ {
+  "content": "When frontend is not loading, verify proxy setting in rsbuild.config.ts using 'grep proxy frontend/rsbuild.config.ts'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-frontend"
+  ]
+ },
+ {
+  "content": "When frontend is not loading, restart frontend dev server using 'make run-frontend'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting",
+   "trigger:troubleshoot-frontend"
+  ]
+ },
+ {
+  "content": "To get debug information, run './hack/ci-get-debug-info.sh' to collect comprehensive debugging data.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting"
+  ]
+ },
+ {
+  "content": "To get operator logs for debugging, use 'kubectl logs -n kiali-operator deployment/kiali-operator --tail=100'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting"
+  ]
+ },
+ {
+  "content": "To get Kiali server logs for debugging, use 'kubectl logs -n istio-system deployment/kiali --tail=100'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting"
+  ]
+ },
+ {
+  "content": "To check all Kiali-related resources, use 'kubectl get all,kiali,ossmconsole -A | grep kiali'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting"
+  ]
+ },
+ {
+  "content": "If encountering SELinux permission errors with molecule tests, temporarily disable SELinux using 'sudo setenforce 0' and re-enable after testing with 'sudo setenforce 1'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:troubleshooting"
+  ]
+ },
+ {
+  "content": "For local development without a cluster, use 'make build-ui && make run-backend' in one terminal and 'make run-frontend' in another terminal for hot reload development cycle.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:quick-command-reference"
+  ]
+ },
+ {
+  "content": "When starting minikube for development, set CLUSTER_TYPE=minikube, MINIKUBE_PROFILE to a profile name like 'ci', DORP=docker, and CLIENT_EXE=kubectl as environment variables.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:quick-command-reference"
+  ]
+ },
+ {
+  "content": "To start a minikube cluster and install Istio, run './hack/k8s-minikube.sh -mp ${MINIKUBE_PROFILE} start' followed by './hack/istio/install-istio-via-istioctl.sh --client-exe ${CLIENT_EXE}'.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:quick-command-reference"
+  ]
+ },
+ {
+  "content": "Run 'make help' to show all available make targets in the Kiali project.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:additional-resources"
+  ]
+ },
+ {
+  "content": "Main Kiali documentation is available at https://kiali.io/docs",
+  "memory_type": "semantic",
+  "tags": [
+   "section:additional-resources"
+  ]
+ },
+ {
+  "content": "Refer to CONTRIBUTING.md for contribution guidelines for the Kiali project.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:additional-resources"
+  ]
+ },
+ {
+  "content": "Refer to STYLE_GUIDE.adoc for code and documentation style guidelines for the Kiali project.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:additional-resources"
+  ]
+ },
+ {
+  "content": "Refer to README.adoc for general project information about Kiali.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:additional-resources"
+  ]
+ },
+ {
+  "content": "Refer to frontend/README.adoc for frontend-specific development information.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:additional-resources"
+  ]
+ },
+ {
+  "content": "Refer to operator/DEVELOPING.adoc for operator development guidelines.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:additional-resources"
+  ]
+ },
+ {
+  "content": "Refer to RELEASING.adoc for the release process and procedures.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:additional-resources"
+  ]
+ },
+ {
+  "content": "Join GitHub Discussions at https://github.com/kiali/kiali/discussions to engage with the Kiali community.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:additional-resources"
+  ]
+ },
+ {
+  "content": "Report issues and track bugs on GitHub Issues at https://github.com/kiali/kiali/issues.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:additional-resources"
+  ]
+ },
+ {
+  "content": "Visit the Kiali community page at https://kiali.io/community/ to learn about the project community.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:additional-resources"
+  ]
+ },
+ {
+  "content": "Build and deploy to Minikube cluster: run `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} build-ui build test cluster-push` followed by `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} operator-create` and `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} kiali-create`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:build-and-deploy",
+   "trigger:minikube-deploy"
+  ]
+ },
+ {
+  "content": "Deploy to minikube",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:minikube-deploy"
+  ]
+ },
+ {
+  "content": "Set up Kiali on minikube cluster",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:minikube-deploy"
+  ]
+ },
+ {
+  "content": "Build and push to minikube",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:minikube-deploy"
+  ]
+ },
+ {
+  "content": "Deploy operator to minikube",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:minikube-deploy"
+  ]
+ },
+ {
+  "content": "Quick iteration on Minikube: run `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} build cluster-push-kiali kiali-reload-image` to rebuild and redeploy Kiali without full setup",
+  "memory_type": "procedural",
+  "tags": [
+   "section:quick-iteration",
+   "trigger:minikube-iterate"
+  ]
+ },
+ {
+  "content": "Quick redeploy to minikube",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:minikube-iterate"
+  ]
+ },
+ {
+  "content": "Rebuild and reload Kiali on minikube",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:minikube-iterate"
+  ]
+ },
+ {
+  "content": "Fast iteration on minikube cluster",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:minikube-iterate"
+  ]
+ },
+ {
+  "content": "Update Kiali image on minikube",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:minikube-iterate"
+  ]
+ },
+ {
+  "content": "Forward ports to access Minikube Kiali: run `./hack/k8s-minikube.sh -mp ${MINIKUBE_PROFILE} port-forward`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:access",
+   "trigger:minikube-port-forward"
+  ]
+ },
+ {
+  "content": "Clean up Minikube cluster: run `make CLUSTER_TYPE=minikube MINIKUBE_PROFILE=${MINIKUBE_PROFILE} kiali-delete operator-delete` followed by `./hack/k8s-minikube.sh -mp ${MINIKUBE_PROFILE} stop`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:cleanup",
+   "trigger:minikube-cleanup"
+  ]
+ },
+ {
+  "content": "Clean up minikube cluster",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:minikube-cleanup"
+  ]
+ },
+ {
+  "content": "Delete Kiali from minikube",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:minikube-cleanup"
+  ]
+ },
+ {
+  "content": "Stop and clean minikube",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:minikube-cleanup"
+  ]
+ },
+ {
+  "content": "Set up KinD cluster environment: export CLUSTER_TYPE=kind, KIND_NAME=kiali-testing, DORP=docker, CLIENT_EXE=kubectl",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-quick-reference",
+   "trigger:kind-setup"
+  ]
+ },
+ {
+  "content": "Start KinD cluster and install Istio: run `./hack/start-kind.sh -n ${KIND_NAME}` followed by `./hack/istio/install-istio-via-istioctl.sh --client-exe ${CLIENT_EXE}`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-quick-reference",
+   "trigger:kind-init"
+  ]
+ },
+ {
+  "content": "Build and deploy to KinD cluster: run `make CLUSTER_TYPE=kind KIND_NAME=${KIND_NAME} build-ui build test cluster-push` followed by `make CLUSTER_TYPE=kind KIND_NAME=${KIND_NAME} operator-create` and `make CLUSTER_TYPE=kind KIND_NAME=${KIND_NAME} kiali-create`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-quick-reference",
+   "trigger:kind-deploy"
+  ]
+ },
+ {
+  "content": "Deploy to KinD",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:kind-deploy"
+  ]
+ },
+ {
+  "content": "Set up Kiali on KinD cluster",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:kind-deploy"
+  ]
+ },
+ {
+  "content": "Build and push to KinD",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:kind-deploy"
+  ]
+ },
+ {
+  "content": "Quick iteration on KinD: run `make CLUSTER_TYPE=kind KIND_NAME=${KIND_NAME} build cluster-push-kiali kiali-reload-image`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-quick-reference",
+   "trigger:kind-iterate"
+  ]
+ },
+ {
+  "content": "Quick redeploy to KinD",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:kind-iterate"
+  ]
+ },
+ {
+  "content": "Rebuild and reload Kiali on KinD",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:kind-iterate"
+  ]
+ },
+ {
+  "content": "Forward ports to access KinD Kiali: run `kubectl port-forward -n istio-system svc/kiali 20001:20001`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-quick-reference",
+   "trigger:kind-port-forward"
+  ]
+ },
+ {
+  "content": "Clean up KinD cluster: run `kind delete cluster --name ${KIND_NAME}`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:kind-quick-reference",
+   "trigger:kind-cleanup"
+  ]
+ },
+ {
+  "content": "Clean up KinD cluster",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:kind-cleanup"
+  ]
+ },
+ {
+  "content": "Delete KinD cluster",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:kind-cleanup"
+  ]
+ },
+ {
+  "content": "Set up OpenShift cluster environment: export CLUSTER_TYPE=openshift, DORP=podman, CLIENT_EXE=oc",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-quick-reference",
+   "trigger:openshift-setup"
+  ]
+ },
+ {
+  "content": "Start OpenShift cluster and install Istio: run `./hack/crc-openshift.sh start` followed by `./hack/istio/install-istio-via-istioctl.sh -c ${CLIENT_EXE}`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-quick-reference",
+   "trigger:openshift-init"
+  ]
+ },
+ {
+  "content": "Get OpenShift credentials and login: run `./hack/crc-openshift.sh status` to get password, then `oc login -u kubeadmin -p <password-from-status> https://api.crc.testing:6443`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-quick-reference",
+   "trigger:openshift-login"
+  ]
+ },
+ {
+  "content": "Build and deploy to OpenShift cluster: run `make CLUSTER_TYPE=openshift build-ui build test cluster-push` followed by `make CLUSTER_TYPE=openshift operator-create` (or `make CLUSTER_TYPE=openshift olm-operator-create` for OLM) and `make CLUSTER_TYPE=openshift kiali-create`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-quick-reference",
+   "trigger:openshift-deploy"
+  ]
+ },
+ {
+  "content": "Deploy to OpenShift",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:openshift-deploy"
+  ]
+ },
+ {
+  "content": "Set up Kiali on OpenShift",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:openshift-deploy"
+  ]
+ },
+ {
+  "content": "Build and push to OpenShift",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:openshift-deploy"
+  ]
+ },
+ {
+  "content": "Quick iteration on OpenShift: run `make CLUSTER_TYPE=openshift build cluster-push-kiali kiali-reload-image`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-quick-reference",
+   "trigger:openshift-iterate"
+  ]
+ },
+ {
+  "content": "Quick redeploy to OpenShift",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:openshift-iterate"
+  ]
+ },
+ {
+  "content": "Rebuild and reload Kiali on OpenShift",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:openshift-iterate"
+  ]
+ },
+ {
+  "content": "Access OpenShift Kiali: run `./hack/crc-openshift.sh routes | grep kiali` to get the route URL",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-quick-reference",
+   "trigger:openshift-access"
+  ]
+ },
+ {
+  "content": "Clean up OpenShift cluster: run `make CLUSTER_TYPE=openshift kiali-delete operator-delete` (or `olm-operator-delete` if using OLM) followed by `./hack/crc-openshift.sh stop`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:openshift-quick-reference",
+   "trigger:openshift-cleanup"
+  ]
+ },
+ {
+  "content": "Clean up OpenShift cluster",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:openshift-cleanup"
+  ]
+ },
+ {
+  "content": "Delete Kiali from OpenShift",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:openshift-cleanup"
+  ]
+ },
+ {
+  "content": "Stop and clean OpenShift",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:openshift-cleanup"
+  ]
+ },
+ {
+  "content": "Run backend tests for Kiali: run `make test`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing",
+   "trigger:test-backend"
+  ]
+ },
+ {
+  "content": "Run frontend Cypress tests interactively: run `make cypress-gui`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing",
+   "trigger:test-frontend-gui"
+  ]
+ },
+ {
+  "content": "Run frontend Cypress tests in headless mode: run `make cypress-run`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing",
+   "trigger:test-frontend-headless"
+  ]
+ },
+ {
+  "content": "Run Molecule tests for operator validation: run `./hack/run-molecule-tests.sh --client-exe \"$(which kubectl)\" --cluster-type minikube --minikube-profile ci -udi true -hcrp false` (example uses minikube with profile 'ci')",
+  "memory_type": "procedural",
+  "tags": [
+   "section:testing",
+   "trigger:test-molecule"
+  ]
+ },
+ {
+  "content": "Format and lint code: run `make format lint`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality",
+   "trigger:code-quality-format-lint"
+  ]
+ },
+ {
+  "content": "Check Go version: run `make go-check`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality",
+   "trigger:code-quality-go-check"
+  ]
+ },
+ {
+  "content": "Clean all build artifacts: run `make clean-all`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:code-quality",
+   "trigger:code-quality-clean"
+  ]
+ },
+ {
+  "content": "Test operator playbook locally (fastest method): run `make run-operator-playbook-kiali`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:operator-test-playbook"
+  ]
+ },
+ {
+  "content": "Run full operator locally: run `make run-operator`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:operator-run-full"
+  ]
+ },
+ {
+  "content": "Build and push operator to cluster: run `make cluster-push-operator`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:operator-development",
+   "trigger:operator-build-push"
+  ]
+ },
+ {
+  "content": "Get help about Kiali make commands: run `make help`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:get-help"
+  ]
+ },
+ {
+  "content": "Get help about minikube hacks: run `./hack/k8s-minikube.sh --help`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:get-help"
+  ]
+ },
+ {
+  "content": "Get help about KinD startup: run `./hack/start-kind.sh --help`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:get-help"
+  ]
+ },
+ {
+  "content": "Get help about OpenShift CRC: run `./hack/crc-openshift.sh --help`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:get-help"
+  ]
+ },
+ {
+  "content": "Never push feature branches directly to upstream kiali/kiali or any kiali/* repository. Always push to the developer's personal fork and create PRs from there.",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:creating-pull-requests",
+   "trigger:pr-create"
+  ]
+ },
+ {
+  "content": "I want to push my changes",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "How do I create a PR",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Should I push to kiali/kiali",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Where do I push my branch",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Before pushing to a fork, run `git remote -v` to identify the fork remote (has developer's username) versus upstream remote (kiali/*). If no fork remote exists, ask the user to set it up.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:creating-pull-requests",
+   "trigger:pr-create"
+  ]
+ },
+ {
+  "content": "I want to push my changes",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "How do I create a PR",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Should I push to kiali/kiali",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Where do I push my branch",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Add PR to Kiali GitHub Project after creation: use `gh pr edit <PR_NUMBER> --repo <REPO> --add-assignee <USER>` to set assignee, then `gh project list --owner kiali --format json` to find project, then `gh project item-add <PROJECT_NUMBER> --owner kiali --url <PR_URL> --format json` to add PR to project.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:creating-pull-requests",
+   "trigger:pr-create"
+  ]
+ },
+ {
+  "content": "I want to push my changes",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "How do I create a PR",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Should I push to kiali/kiali",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Where do I push my branch",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Set PR project status based on state: Draft PR status = 'In progress', Ready for review PR status = 'In review'. Use `gh project field-list <PROJECT_NUMBER> --owner kiali --format json` to get field metadata, then `gh project item-edit --project-id <PROJECT_ID> --id <ITEM_ID> --field-id <STATUS_FIELD_ID> --single-select-option-id <OPTION_ID>` to update status.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:creating-pull-requests",
+   "trigger:pr-create"
+  ]
+ },
+ {
+  "content": "I want to push my changes",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "How do I create a PR",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Should I push to kiali/kiali",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Where do I push my branch",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Request PR reviewers: ask user who should review the PR, then use `gh pr edit <PR_NUMBER> --repo <REPO> --add-reviewer <REVIEWER1> --add-reviewer <REVIEWER2>` to add them.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:creating-pull-requests",
+   "trigger:pr-create"
+  ]
+ },
+ {
+  "content": "I want to push my changes",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "How do I create a PR",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Should I push to kiali/kiali",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Where do I push my branch",
+  "memory_type": "semantic",
+  "tags": [
+   "mode-exemplar:pr-create"
+  ]
+ },
+ {
+  "content": "Always build UI before backend: run `make build-ui` first, then `make build`",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders",
+   "trigger:build-order"
+  ]
+ },
+ {
+  "content": "Yarn is managed via corepack. Run `corepack enable` once before using yarn. The pinned Yarn version is specified in frontend/package.json in the packageManager field.",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "Set CLUSTER_TYPE environment variable to minikube, kind, or openshift depending on target cluster",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "Set MINIKUBE_PROFILE environment variable when using Minikube cluster",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "Set KIND_NAME environment variable when using KinD cluster",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "Set DORP environment variable to docker or podman for container runtime",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "Set CLIENT_EXE environment variable to kubectl for minikube/KinD or oc for OpenShift",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "Before committing: run `make format lint` to format and lint code",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders",
+   "trigger:pre-commit"
+  ]
+ },
+ {
+  "content": "Before committing: run `make test` to execute tests",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders",
+   "trigger:pre-commit"
+  ]
+ },
+ {
+  "content": "Before committing: remove trailing whitespace from all files",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders",
+   "trigger:pre-commit"
+  ]
+ },
+ {
+  "content": "Before committing: sort struct fields and YAML keys alphabetically",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders",
+   "trigger:pre-commit"
+  ]
+ },
+ {
+  "content": "After operator changes: ask to run molecule tests to validate operator behavior",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "For operator changes: update all installation methods (Helm, OLM, Operator templates)",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "For operator changes: verify backward compatibility with versioned roles",
+  "memory_type": "procedural",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "Never modify versioned operator roles in directories matching roles/v1.*/ or roles/v2.*/",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "Never modify old CSV versions in operator manifests; only modify LATEST version",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "Never modify CRD copies; only modify golden copies in crd-docs/crd/",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "Never modify generated documentation files",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "Never modify _output/ directories",
+  "memory_type": "anti_pattern",
+  "tags": [
+   "section:important-reminders"
+  ]
+ },
+ {
+  "content": "Backend Architecture documentation describes server startup, HTTP routing, handlers, and middleware pipeline at docs/agents/backend-architecture.md. Generated by codebase-scribe.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-documentation"
+  ]
+ },
+ {
+  "content": "Business Logic Layer documentation describes core service-mesh domain logic including apps, workloads, health, Istio config, and mesh topology at docs/agents/business-logic.md. Generated by codebase-scribe.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-documentation"
+  ]
+ },
+ {
+  "content": "Kubernetes Client Layer documentation describes K8s/Istio API access, multi-cluster support, client factory, and offline mode at docs/agents/kubernetes-client.md. Generated by codebase-scribe.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-documentation"
+  ]
+ },
+ {
+  "content": "Graph Engine documentation describes traffic graph computation, appenders, telemetry pipelines, and graph caching at docs/agents/graph-engine.md. Generated by codebase-scribe.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-documentation"
+  ]
+ },
+ {
+  "content": "Observability Integrations and AI documentation describes distributed tracing (Jaeger/Tempo/OTel), Grafana, Perses, metrics, and AI Chat integration at docs/agents/observability-and-ai.md. Generated by codebase-scribe.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-documentation"
+  ]
+ },
+ {
+  "content": "Authentication and Security documentation describes authentication controllers (OpenID, token, OpenShift), JWT, mTLS/TLS policy at docs/agents/auth-and-security.md. Generated by codebase-scribe.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-documentation"
+  ]
+ },
+ {
+  "content": "Frontend Architecture documentation describes React/TypeScript frontend including component structure, routing, Redux state, PatternFly, i18n, and Cypress tests at docs/agents/frontend-architecture.md. Generated by codebase-scribe.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-documentation"
+  ]
+ },
+ {
+  "content": "Build System and Dev Conventions documentation describes build system, CI/CD, cluster deployment, operator lifecycle, code standards, and file protection rules at docs/agents/build-and-dev-conventions.md. Generated by codebase-scribe.",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-documentation"
+  ]
+ },
+ {
+  "content": "Check documentation freshness scores at docs/agents/STATUS.md",
+  "memory_type": "semantic",
+  "tags": [
+   "section:architecture-documentation"
+  ]
+ }
+]

@@ -1,0 +1,111 @@
+{
+  "description": "Ground truth for fixtures/kiali_agents.md, the AGENTS.md of github.com/kiali/kiali (70KB, fetched 2026-07-25, Apache 2.0). Verbatim copy, zero edits. atom_match strings are verbatim quotes from the file.",
+  "rules": {
+    "any-over-interface": {
+      "atom_match": [
+        "instead of `interface{}`"
+      ],
+      "checker": {
+        "type": "not_contains",
+        "needles": [
+          "interface{}"
+        ]
+      }
+    },
+    "i18n-t-function": {
+      "atom_match": [
+        "the `t` function"
+      ],
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "t('Refresh",
+          "t(\"Refresh",
+          "{t("
+        ]
+      }
+    },
+    "functional-components": {
+      "atom_match": [
+        "class component"
+      ],
+      "checker": {
+        "type": "not_contains",
+        "needles": [
+          "React.Component",
+          "extends Component"
+        ]
+      }
+    },
+    "kialistyle-classname": {
+      "atom_match": "kialiStyle",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "kialiStyle"
+        ]
+      }
+    },
+    "rem-over-px": {
+      "atom_match": "for margin, padding, gap",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "rem"
+        ]
+      }
+    },
+    "pf-tokens": {
+      "atom_match": "PFSpacer",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "PFSpacer",
+          "PfSpacer",
+          "PFColors"
+        ]
+      }
+    },
+    "build-ui-first": {
+      "atom_match": [
+        "build-ui` first",
+        "Always build UI before backend"
+      ],
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "make build-ui"
+        ]
+      }
+    },
+    "push-fork-only": {
+      "atom_match": "personal fork",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "fork"
+        ]
+      }
+    },
+    "cy-request-object": {
+      "atom_match": [
+        "object format"
+      ],
+      "checker": {
+        "type": "contains_all",
+        "needles": [
+          "method:"
+        ]
+      }
+    },
+    "make-lint": {
+      "atom_match": "golangci-lint",
+      "checker": {
+        "type": "contains_any",
+        "needles": [
+          "make lint"
+        ]
+      }
+    }
+  }
+}
