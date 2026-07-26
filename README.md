@@ -463,6 +463,10 @@ graph TD
     WAL --> PAGE
 ```
 
+## Agent File Ingestion and Rule Delivery
+
+`ingest_agent_file` (deterministic) and `ingest_agent_file_llm` (any format, any language, via an extraction provider) break an agent instruction file into atomic, self contained memories: open vocabulary action triggers (`trigger:git-commit`, `trigger:order-refund`), section tags for cluster completion, and exemplar turns that anchor mode activation for standing directives ("longterm fixes only", "use the t function for user visible text"). Delivery runs through four channels: relevance injection, action rules at the tool moment, mode activation by activity, and cluster completion for dense rule sections. Measured on real public agent files (openai/codex, kiali, temporal, freerouting), two pass delivery (retrieve at the prompt, review against the draft) reached 100 percent rule compliance at 2 to 8 times fewer tokens than carrying the file in context, including a held out file never used during development. The benchmark lives in the platform repository under benchmarks/agent_file.
+
 ## Cognitive Engine
 
 MenteDB isn't just a memory store — it's a cognitive engine that automatically maintains memory health. All cognitive features are wired into the core `MenteDb` facade and run automatically.
