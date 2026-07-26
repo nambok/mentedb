@@ -18,26 +18,22 @@ https://mentedb.com/blog/infinite-context-window-for-ai-with-memory
   govern it.
 - `two_pass.py` — the compliance instrument. Three conditions per task:
   whole file in context, MenteDB two pass retrieval, and nothing (the control).
-  Mechanical checkers score the output.
-- `sweep.py` — offline retrieval tuning through the real injection pipeline
-  (no model calls, candle embeddings, multi seed).
-- `fast_tune.py` — same scoring on persistent stores so a config evaluates in
-  seconds; `--build` once, then iterate.
-- `run_compliance.py`, `run_coverage.py`, `cohere_space.py`, `llm_ingest.py` —
-  shared helpers (Bedrock calls, checkers, store builders).
+  Mechanical checkers score the output. Builds each suite's store from the
+  cached parse on first run.
+- `common.py`, `run_compliance.py`, `run_coverage.py`, `cohere_space.py`,
+  `llm_ingest.py` — shared helpers (suite loading, Bedrock calls, checkers,
+  store building, parse cache generation).
 
 ## Running it
 
 ```bash
 pip install mentedb boto3
-python3 sweep.py --config '{}' --suites codex,kiali,temporal   # offline, no model
-python3 fast_tune.py --build && python3 fast_tune.py --config '{}'
-python3 two_pass.py codex,kiali,temporal 5                     # full instrument
+python3 two_pass.py codex,kiali,temporal 5
 ```
 
-`two_pass.py` and `fast_tune.py` call AWS Bedrock (Claude Haiku, Claude Sonnet,
-Cohere embed-english-v3), so they need AWS credentials with Bedrock access; set
-`AWS_PROFILE` if you use a named profile. `sweep.py` runs fully offline.
+`two_pass.py` calls AWS Bedrock (Claude Haiku, Claude Sonnet, Cohere
+embed-english-v3), so it needs AWS credentials with Bedrock access; set
+`AWS_PROFILE` if you use a named profile.
 
 Rules anchor to verbatim text from the files, checkers are plain string
 predicates, and the `nothing` condition is the honesty control: any rule the

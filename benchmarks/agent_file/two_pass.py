@@ -10,15 +10,10 @@ margins, plain go test), which no prompt-side retrieval can fetch.
 Conditions: whole_file (best case for the file), two_pass (ours), nothing.
 """
 
-import json
-import os
 import sys
-import time
 
-os.environ.setdefault("TUNE_SPACE", "cohere")
-from fast_tune import store_dir, cohere_vectors, norm_text
+from common import cohere_vectors, ensure_store, load_suite
 from run_compliance import check, call_bedrock, USAGE
-from sweep import load_suite
 import mentedb
 
 MODEL = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -54,7 +49,7 @@ def main():
     trials = int(sys.argv[2]) if len(sys.argv) > 2 else 3
     for suite in suites:
         spec, rules, content, atoms = load_suite(suite)
-        db = mentedb.MenteDB(store_dir(suite), dimension=1024,
+        db = mentedb.MenteDB(ensure_store(suite), dimension=1024,
                              injection_overrides={"cluster_dominant_fraction": 0.34,
                                                   "cluster_fill_max": 6,
                                                   "cluster_max_span": 40})
