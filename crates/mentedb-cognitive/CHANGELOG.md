@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.1](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.32.0...mentedb-cognitive-v0.32.1) - 2026-07-27
+
+### Fixed
+
+- value updates fire mid sentence and invalidate the stale fact ([#388](https://github.com/nambok/mentedb/pull/388))
+
 ## [0.32.0](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.31.0...mentedb-cognitive-v0.32.0) - 2026-07-27
 
 ### Other
