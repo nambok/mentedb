@@ -95,7 +95,7 @@ pub struct WriteInferenceConfig {
     /// cosine (which cannot tell paraphrase from contradiction and was removed
     /// at ~0% precision), the shared-frame test only fires on the update shape.
     pub value_update_enabled: bool,
-    /// Minimum embedding similarity for the value-update rule (default: 0.5).
+    /// Minimum embedding similarity for the value-update rule (default: 0.3).
     ///
     /// This is a loose topical floor, not the primary gate. A value correction
     /// inherently drives cosine down (the changed value is most of a short
@@ -103,10 +103,13 @@ pub struct WriteInferenceConfig {
     /// measured on Titan V2 at 256 dims, "favorite coffee is a cortado" vs
     /// "... a flat white" is 0.61 and "phone is 1234" vs "... 4321" is 0.51;
     /// on OpenAI text-embedding-3-small they are 0.80 and 0.79. A 0.88 gate
-    /// (the old default) was unreachable on either embedder, so the rule never
-    /// fired in production. The embedder-independent `is_value_update` shared
-    /// frame test carries the precision here; the cosine floor only rejects
-    /// genuinely off-topic pairs that a shared token frame collided on.
+    /// (the first default) was unreachable on either embedder, and even 0.5
+    /// sat inside the real-pair range and silently gated identical-frame
+    /// pairs in production (observed on Cohere 1024: "uses Next.js for the
+    /// front end" vs "uses React for the front end" never superseded). The
+    /// embedder-independent `is_value_update` shared frame test carries the
+    /// precision here; the floor only rejects genuinely off-topic pairs that
+    /// a shared token frame collided on, which sit near 0.2 and below.
     pub value_update_min_similarity: f32,
     /// Minimum fraction of the longer memory's tokens that must be shared
     /// frame, the common prefix plus the common suffix around the changed
@@ -128,7 +131,7 @@ impl Default for WriteInferenceConfig {
             confidence_decay_factor: 0.5,
             confidence_floor: 0.1,
             value_update_enabled: true,
-            value_update_min_similarity: 0.5,
+            value_update_min_similarity: 0.3,
             value_update_prefix_share: 0.6,
             value_update_max_tail: 4,
         }
@@ -307,7 +310,6 @@ impl WriteInferenceEngine {
                     keeper: new_memory.id,
                 });
             } else if self.config.value_update_enabled
-                && sim >= self.config.value_update_min_similarity
                 && existing.agent_id == new_memory.agent_id
                 && existing.user_id == new_memory.user_id
                 && is_value_update(
@@ -317,6 +319,17 @@ impl WriteInferenceEngine {
                     self.config.value_update_max_tail,
                 )
             {
+                if sim < self.config.value_update_min_similarity {
+                    // A frame matched pair below the floor is exactly the
+                    // signal that the floor sits wrong for the embedding
+                    // space in use; log it so production data keeps the
+                    // default honest.
+                    tracing::info!(
+                        similarity = sim,
+                        "value update frame matched below the cosine floor, skipped"
+                    );
+                    continue;
+                }
                 // Same sentence frame, different value: one supersedes the other.
                 // The value-update rule owns this pair (so the correction handler
                 // skips it), and the winner is decided deterministically rather
@@ -664,9 +677,41 @@ mod tests {
     }
 
     #[test]
+    fn value_update_fires_below_the_old_floor() {
+        // The production miss on Cohere 1024: an identical frame pair whose
+        // cosine sits in the 0.3 to 0.5 band was silently gated by the 0.5
+        // floor. cosine([1,0,0],[0.4,0.9165,0]) = 0.4 must fire now.
+        let agent = AgentId::new();
+        let mut existing = make_memory(
+            "The user uses Next.js for the front end",
+            vec![1.0, 0.0, 0.0],
+            MemoryType::Semantic,
+        );
+        existing.agent_id = agent;
+        let mut new_mem = make_memory(
+            "The user uses React for the front end",
+            vec![0.4, 0.9165, 0.0],
+            MemoryType::Semantic,
+        );
+        new_mem.agent_id = agent;
+        new_mem.created_at = 2000;
+
+        let actions =
+            WriteInferenceEngine::new().infer_on_write(&new_mem, &[existing.clone()], &[]);
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                InferredAction::InvalidateMemory { memory, superseded_by, .. }
+                    if *superseded_by == new_mem.id && *memory == existing.id
+            )),
+            "an identical frame pair at cosine 0.4 must supersede, got: {actions:?}"
+        );
+    }
+
+    #[test]
     fn value_update_below_cosine_floor_does_not_supersede() {
         // The cosine floor still guards: a shared token frame that collided on
-        // genuinely off-topic content (cosine 0.4, below the 0.5 floor) must not
+        // genuinely off-topic content (cosine 0.2, below the 0.3 floor) must not
         // supersede, even though the frame test alone would pass. Structure is
         // primary, but the floor rejects pathological frame collisions.
         let agent = AgentId::new();
@@ -676,10 +721,10 @@ mod tests {
             MemoryType::Semantic,
         );
         existing.agent_id = agent;
-        // cosine([1,0,0], [0.4,0.917,0]) = 0.4: below the 0.5 floor.
+        // cosine([1,0,0], [0.2,0.9798,0]) = 0.2: below the 0.3 floor.
         let mut new_mem = make_memory(
             "The user's favorite coffee order is a flat white",
-            vec![0.4, 0.917, 0.0],
+            vec![0.2, 0.9798, 0.0],
             MemoryType::Semantic,
         );
         new_mem.agent_id = agent;
@@ -687,13 +732,9 @@ mod tests {
 
         let actions = WriteInferenceEngine::new().infer_on_write(&new_mem, &[existing], &[]);
         assert!(
-            !actions.iter().any(|a| matches!(
-                a,
-                InferredAction::CreateEdge {
-                    edge_type: EdgeType::Supersedes,
-                    ..
-                }
-            )),
+            !actions
+                .iter()
+                .any(|a| matches!(a, InferredAction::InvalidateMemory { .. })),
             "below the cosine floor a frame match must not supersede, got: {actions:?}"
         );
     }
