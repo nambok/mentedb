@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.31.0...mentedb-cognitive-v0.32.0) - 2026-07-27
+
+### Other
+
+- Agent file sync: edit the file, memory mirrors it ([#385](https://github.com/nambok/mentedb/pull/385))
+- agent file compliance benchmark moved from the platform repo ([#383](https://github.com/nambok/mentedb/pull/383))
+
 ## [0.31.0](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.30.0...mentedb-cognitive-v0.31.0) - 2026-07-26
 
 ### Other
