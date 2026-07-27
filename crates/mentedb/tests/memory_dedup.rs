@@ -81,6 +81,83 @@ fn value_update_is_not_swallowed() {
 }
 
 #[test]
+fn value_update_invalidates_the_stale_fact() {
+    // The reported production bug: "i use next.js for the front end" then
+    // "now i use react for the front end" left BOTH facts live, and recall
+    // kept answering with the stale one. The value sits mid sentence
+    // (wrapped by the shared "for the front end" tail), which the old
+    // prefix-only frame test could not see; and even when the rule fired it
+    // only created an edge, never invalidating the loser out of recall.
+    let dir = tempfile::tempdir().unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
+    let agent = AgentId::new();
+    let t = now_us();
+
+    let a = node(
+        agent,
+        "The user uses Next.js for the front end",
+        vec![1.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        t,
+    );
+    let a_id = a.id;
+    let b = node(
+        agent,
+        "The user uses React for the front end",
+        vec![1.0, 0.08, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        t + 1,
+    );
+    let b_id = b.id;
+    db.store(a).unwrap();
+    db.store(b).unwrap();
+
+    let stale = db.get_memory(a_id).unwrap();
+    assert!(
+        stale.valid_until.is_some(),
+        "the older value must be invalidated so recall stops returning it"
+    );
+    let fresh = db.get_memory(b_id).unwrap();
+    assert!(fresh.valid_until.is_none(), "the newer value stays live");
+}
+
+#[test]
+fn value_update_resolves_against_store_order() {
+    // Async enrichment can store the OLDER turn's fact after the newer one.
+    // Resolution follows created_at (the turn's time), not arrival order, so
+    // the stale value loses whichever lands last.
+    let dir = tempfile::tempdir().unwrap();
+    let db = MenteDb::open(dir.path()).unwrap();
+    let agent = AgentId::new();
+    let t = now_us();
+
+    // The react fact carries the LATER timestamp but stores FIRST.
+    let b = node(
+        agent,
+        "The user uses React for the front end",
+        vec![1.0, 0.08, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        t + 1,
+    );
+    let b_id = b.id;
+    let a = node(
+        agent,
+        "The user uses Next.js for the front end",
+        vec![1.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        t,
+    );
+    let a_id = a.id;
+    db.store(b).unwrap();
+    db.store(a).unwrap();
+
+    assert!(
+        db.get_memory(a_id).unwrap().valid_until.is_some(),
+        "the older turn's fact loses even when it stores last"
+    );
+    assert!(
+        db.get_memory(b_id).unwrap().valid_until.is_none(),
+        "the newer turn's fact survives arrival order inversion"
+    );
+}
+
+#[test]
 fn cross_owner_is_never_deduped() {
     let dir = tempfile::tempdir().unwrap();
     let db = MenteDb::open(dir.path()).unwrap();

@@ -108,11 +108,12 @@ pub struct WriteInferenceConfig {
     /// frame test carries the precision here; the cosine floor only rejects
     /// genuinely off-topic pairs that a shared token frame collided on.
     pub value_update_min_similarity: f32,
-    /// Minimum fraction of the longer memory's tokens that must be a shared
-    /// prefix for the pair to count as the same sentence frame (default: 0.6).
+    /// Minimum fraction of the longer memory's tokens that must be shared
+    /// frame, the common prefix plus the common suffix around the changed
+    /// value (default: 0.6).
     pub value_update_prefix_share: f32,
-    /// Maximum differing tail tokens for a value update (default: 4). Larger
-    /// tails mean genuinely different statements, not a value change.
+    /// Maximum differing value tokens per side (default: 4). Larger middles
+    /// mean genuinely different statements, not a value change.
     pub value_update_max_tail: usize,
 }
 
@@ -143,21 +144,68 @@ fn frame_tokens(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// True when `new` and `old` share the same sentence frame but end in a
-/// different value: a long common token prefix with a short, non-identical
-/// tail. "the user's favorite coffee order is a cortado" vs "... is a flat
-/// white" fires; "my dog is allergic to chicken" vs "my cat is allergic to
-/// chicken" does not (the difference is at the head, a different subject).
-fn is_value_update(new: &str, old: &str, prefix_share: f32, max_tail: usize) -> bool {
+/// True when `new` and `old` share the same sentence frame with a short
+/// differing value somewhere inside it: a common token prefix and a common
+/// token suffix that together cover most of the sentence, with a small
+/// non-identical middle on each side. The value may sit at the end ("the
+/// user's favorite coffee order is a cortado" vs "... is a flat white") or
+/// mid sentence ("i use next.js for the front end" vs "i use react for the
+/// front end", where the value is wrapped by a shared tail). A subject swap
+/// at the head ("my dog is allergic to chicken" vs "my cat is allergic to
+/// chicken") shares at most one leading token, so the two token minimum
+/// prefix keeps it out: changing the subject is a different fact, not a
+/// value update. The original prefix-only test could not see shared tails,
+/// which made every mid sentence value change invisible and left
+/// contradicting facts coexisting.
+///
+/// Mid sentence middles that are purely numeric on both sides ("rule 3" vs
+/// "rule 4", "room 2" vs "room 5") are identifiers naming different things,
+/// not changed values, and such facts legitimately coexist; only the end
+/// position keeps numeric updates ("phone is 1234" vs "phone is 4321").
+/// Precision beats recall here on purpose: a wrong supersession silently
+/// deletes a true fact, while a missed one is caught by the LLM
+/// contradiction layer.
+fn is_value_update(new: &str, old: &str, frame_share: f32, max_value: usize) -> bool {
     let nt = frame_tokens(new);
     let ot = frame_tokens(old);
     if nt.is_empty() || ot.is_empty() || nt == ot {
         return false;
     }
+    // Very short sentences cannot carry enough frame to tell an update from
+    // an enumeration: "directive number 1" and "directive number 2" are two
+    // items, not one changed value. Real value sentences name a relation and
+    // a value and run longer ("my phone number is 4321" is five tokens).
+    if nt.len().min(ot.len()) < 4 {
+        return false;
+    }
     let prefix = nt.iter().zip(ot.iter()).take_while(|(a, b)| a == b).count();
+    if prefix < 2 {
+        return false;
+    }
+    let suffix = nt
+        .iter()
+        .rev()
+        .zip(ot.iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count()
+        // The suffix may not reach back into the prefix on the shorter side.
+        .min(nt.len().min(ot.len()) - prefix);
     let longest = nt.len().max(ot.len());
-    let tail = longest - prefix;
-    prefix as f32 / longest as f32 >= prefix_share && tail > 0 && tail <= max_tail
+    let value_new = nt.len() - prefix - suffix;
+    let value_old = ot.len() - prefix - suffix;
+    if suffix > 0 {
+        let all_numeric =
+            |tokens: &[String]| tokens.iter().all(|t| t.chars().all(|c| c.is_ascii_digit()));
+        if all_numeric(&nt[prefix..nt.len() - suffix])
+            && all_numeric(&ot[prefix..ot.len() - suffix])
+        {
+            return false;
+        }
+    }
+    (prefix + suffix) as f32 / longest as f32 >= frame_share
+        && value_new.max(value_old) > 0
+        && value_new <= max_value
+        && value_old <= max_value
 }
 
 /// Decide which of two value-frame-matching memories supersedes the other, and
@@ -281,11 +329,19 @@ impl WriteInferenceEngine {
                 if let Some((winner, loser, loser_confidence)) =
                     value_update_resolution(new_memory, existing)
                 {
-                    actions.push(InferredAction::CreateEdge {
-                        source: winner,
-                        target: loser,
-                        edge_type: EdgeType::Supersedes,
-                        weight: sim,
+                    // Invalidate the loser, not just edge it: recall's
+                    // validity filter reads valid_until, so a Supersedes edge
+                    // alone left the stale value recallable and the agent
+                    // kept answering with it. InvalidateMemory sets
+                    // valid_until and creates the Supersedes edge.
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_micros() as u64;
+                    actions.push(InferredAction::InvalidateMemory {
+                        memory: loser,
+                        superseded_by: winner,
+                        valid_until: now,
                     });
                     actions.push(InferredAction::UpdateConfidence {
                         memory: loser,
@@ -557,10 +613,10 @@ mod tests {
         assert!(
             actions.iter().any(|a| matches!(
                 a,
-                InferredAction::CreateEdge { source, target, edge_type: EdgeType::Supersedes, .. }
-                    if *source == new_mem.id && *target == existing.id
+                InferredAction::InvalidateMemory { memory, superseded_by, .. }
+                    if *superseded_by == new_mem.id && *memory == existing.id
             )),
-            "value update must create a Supersedes edge, got: {actions:?}"
+            "value update must invalidate the stale fact, got: {actions:?}"
         );
         assert!(
             actions
@@ -600,8 +656,8 @@ mod tests {
         assert!(
             actions.iter().any(|a| matches!(
                 a,
-                InferredAction::CreateEdge { source, target, edge_type: EdgeType::Supersedes, .. }
-                    if *source == new_mem.id && *target == existing.id
+                InferredAction::InvalidateMemory { memory, superseded_by, .. }
+                    if *superseded_by == new_mem.id && *memory == existing.id
             )),
             "a frame-matched correction at realistic cosine 0.6 must supersede, got: {actions:?}"
         );
@@ -670,10 +726,10 @@ mod tests {
         assert!(
             actions.iter().any(|a| matches!(
                 a,
-                InferredAction::CreateEdge { source, target, edge_type: EdgeType::Supersedes, .. }
-                    if *source == correction.id && *target == original.id
+                InferredAction::InvalidateMemory { memory, superseded_by, .. }
+                    if *superseded_by == correction.id && *memory == original.id
             )),
-            "the correction must supersede the later-arriving original, got: {actions:?}"
+            "the correction must invalidate the later-arriving original, got: {actions:?}"
         );
     }
 
@@ -702,10 +758,10 @@ mod tests {
         assert!(
             actions.iter().any(|a| matches!(
                 a,
-                InferredAction::CreateEdge { source, target, edge_type: EdgeType::Supersedes, .. }
-                    if *source == correction.id && *target == original.id
+                InferredAction::InvalidateMemory { memory, superseded_by, .. }
+                    if *superseded_by == correction.id && *memory == original.id
             )),
-            "the correction must supersede the original at equal timestamps, got: {actions:?}"
+            "the correction must invalidate the original at equal timestamps, got: {actions:?}"
         );
     }
 
@@ -846,6 +902,48 @@ mod tests {
         ));
         // Negative: identical content is not an update.
         assert!(!is_value_update("same fact", "same fact", 0.6, 4));
+        // Positive: the value sits mid sentence, wrapped by a shared tail.
+        // This is the reported production miss: "i use next.js" then "now i
+        // use react" coexisted forever because the old prefix-only test
+        // could not see the shared "for the front end" tail.
+        assert!(is_value_update(
+            "The user uses React for the front end",
+            "The user uses Next.js for the front end",
+            0.6,
+            4
+        ));
+        assert!(is_value_update(
+            "i use react for the front end",
+            "i use next.js for the front end",
+            0.6,
+            4
+        ));
+        // Negative: subject swap with a long shared tail must still not fire;
+        // only a one token head is shared.
+        assert!(!is_value_update(
+            "the cat is allergic to chicken and needs the special food",
+            "the dog is allergic to chicken and needs the special food",
+            0.6,
+            4
+        ));
+        // Negative: purely numeric mid sentence middles are identifiers
+        // naming different things (rule 3 and rule 4 coexist), never a
+        // changed value.
+        assert!(!is_value_update(
+            "API sibling rule 1 about payload naming",
+            "API sibling rule 0 about payload naming",
+            0.6,
+            4
+        ));
+        // Positive is unaffected at the end position: a numeric tail is a
+        // value ("phone is 1234" to "phone is 4321"), covered above.
+        // Negative: three token enumerations are items, never updates.
+        assert!(!is_value_update(
+            "Directive number 1",
+            "Directive number 0",
+            0.6,
+            4
+        ));
         // Negative: tail too long (a genuinely different statement).
         assert!(!is_value_update(
             "the deploy runs every friday and sarah reviews it after standup",
