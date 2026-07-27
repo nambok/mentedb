@@ -118,10 +118,15 @@ fn no_dominant_section_means_no_swap() {
     let db = open_with(dir.path(), 0.34);
     // Every atom in its own section: nothing dominates, output matches the
     // plain selection exactly.
+    // Distinct directions (not magnitudes: cosine ignores magnitude) so the
+    // six rules have strictly ordered similarities and both stores rank
+    // them identically without leaning on tie-break randomness.
     for i in 0..6 {
+        let mut v = axis(0, 1.0);
+        v[7] = 0.1 * (i + 1) as f32;
         db.store(node(
             &format!("Standalone rule {i}"),
-            axis(0, 1.0 - i as f32 * 0.05),
+            v,
             &[&format!("section:sec-{i}")],
         ))
         .unwrap();
@@ -136,9 +141,11 @@ fn no_dominant_section_means_no_swap() {
     let dir2 = tempfile::tempdir().unwrap();
     let db2 = open_with(dir2.path(), 0.0);
     for i in 0..6 {
+        let mut v = axis(0, 1.0);
+        v[7] = 0.1 * (i + 1) as f32;
         db2.store(node(
             &format!("Standalone rule {i}"),
-            axis(0, 1.0 - i as f32 * 0.05),
+            v,
             &[&format!("section:sec-{i}")],
         ))
         .unwrap();

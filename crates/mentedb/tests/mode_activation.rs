@@ -183,6 +183,8 @@ fn mode_rules_respect_cap_and_gate_zero_disables() {
     );
 
     // A tiny cap holds even when many rules activate, best similarities win.
+    // Topical facts own the relevance slots so the directives can only
+    // arrive through the mode channel, which is the channel under test.
     let dir = tempfile::tempdir().unwrap();
     let db = open_with_gate(dir.path(), 0.5, 2);
     for i in 0..6 {
@@ -193,7 +195,20 @@ fn mode_rules_respect_cap_and_gate_zero_disables() {
         ))
         .unwrap();
     }
-    let got = inject(&db, &axis(0, 1.0), 12);
+    for i in 0..12 {
+        let node = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            format!("Topical fact {i} about payment retries"),
+            axis(3, 1.0),
+        );
+        db.store(node).unwrap();
+    }
+    // Topic dominant turn (0.8 to the topical cluster) with the activity
+    // above the 0.5 gate (0.6 to the directives' axis).
+    let mut turn = axis(3, 0.8);
+    turn[0] = 0.6;
+    let got = inject(&db, &turn, 12);
     let mode_count = got
         .iter()
         .filter(|(r, _)| *r == SelectionReason::ModeRule)
