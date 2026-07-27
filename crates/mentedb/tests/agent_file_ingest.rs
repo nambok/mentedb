@@ -106,6 +106,88 @@ fn reingest_deduplicates_instead_of_duplicating() {
 }
 
 #[test]
+fn reingest_syncs_memory_with_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let opts = AgentFileIngestOptions::default();
+
+    let v1 = "# Rules\n\n\
+        - Always run the complete test suite before committing anything.\n\
+        - Indent with four spaces, tabs are forbidden in source files.\n\
+        - Documentation comments stay in English regardless of code locale.\n";
+    let r1 = db.ingest_agent_file(v1, &opts).unwrap();
+    assert_eq!(r1.candidates, 3);
+    assert_eq!((r1.stored, r1.removed), (3, 0));
+
+    // The user edits their file: first rule unchanged, the indentation rule
+    // rewritten, the documentation rule deleted, one rule added. Re ingest
+    // must mirror that: dedup, replace, remove, add, no manual cleanup.
+    let v2 = "# Rules\n\n\
+        - Always run the complete test suite before committing anything.\n\
+        - Prefer hard tabs over spaces when editing legacy makefiles.\n\
+        - Wrap every user visible string in the translation helper function.\n";
+    let r2 = db.ingest_agent_file(v2, &opts).unwrap();
+    assert_eq!(r2.deduplicated, 1, "the unchanged rule deduplicates");
+    assert_eq!(r2.stored, 2, "the rewritten and the new rule store");
+    assert_eq!(
+        r2.removed, 2,
+        "the old edition and the deleted rule are forgotten"
+    );
+
+    // Sync converges: mirroring the same file again changes nothing.
+    let r3 = db.ingest_agent_file(v2, &opts).unwrap();
+    assert_eq!((r3.stored, r3.removed), (0, 0));
+    assert_eq!(r3.deduplicated, 3);
+}
+
+#[test]
+fn sync_never_touches_another_owners_memories() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let a = AgentFileIngestOptions {
+        agent_id: mentedb_core::types::AgentId(uuid::Uuid::from_u128(1)),
+        ..Default::default()
+    };
+    let b = AgentFileIngestOptions {
+        agent_id: mentedb_core::types::AgentId(uuid::Uuid::from_u128(2)),
+        ..Default::default()
+    };
+    let file_a = "# Rules\n\n- Agent alpha always answers in formal English sentences.\n";
+    let file_b = "# Rules\n\n- Agent beta replies with short bullet lists only.\n";
+    db.ingest_agent_file(file_a, &a).unwrap();
+    let rb = db.ingest_agent_file(file_b, &b).unwrap();
+    assert_eq!(rb.removed, 0, "one agent's sync must not prune another's");
+    let ra = db.ingest_agent_file(file_a, &a).unwrap();
+    assert_eq!(
+        (ra.deduplicated, ra.removed),
+        (1, 0),
+        "the first agent's ingest is intact"
+    );
+}
+
+#[test]
+fn sync_off_keeps_reingest_additive() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let additive = AgentFileIngestOptions {
+        sync: false,
+        ..Default::default()
+    };
+
+    let v1 = "# Rules\n\n- Documentation comments stay in English regardless of code locale.\n";
+    let v2 = "# Rules\n\n- Wrap every user visible string in the translation helper function.\n";
+    db.ingest_agent_file(v1, &additive).unwrap();
+    let r2 = db.ingest_agent_file(v2, &additive).unwrap();
+    assert_eq!(r2.removed, 0, "sync off never removes");
+
+    // Turning sync back on prunes the rule the file no longer contains.
+    let r3 = db
+        .ingest_agent_file(v2, &AgentFileIngestOptions::default())
+        .unwrap();
+    assert_eq!(r3.removed, 1, "the stale rule from v1 is forgotten");
+}
+
+#[test]
 fn large_file_mechanics_hold() {
     // A generated large instruction file: mechanics only (segmentation,
     // atom caps, throughput), never a marketing number.

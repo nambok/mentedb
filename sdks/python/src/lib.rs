@@ -364,12 +364,13 @@ impl MenteDB {
     /// as individual memories: atomic statements with section provenance,
     /// action trigger tags where rules govern an action, nothing pinned to
     /// every turn. Returns the ingest report as a dict.
-    #[pyo3(signature = (content, agent_id=None, source_tag=None))]
+    #[pyo3(signature = (content, agent_id=None, source_tag=None, sync=None))]
     fn ingest_agent_file(
         &self,
         content: &str,
         agent_id: Option<&str>,
         source_tag: Option<String>,
+        sync: Option<bool>,
     ) -> PyResult<Py<PyAny>> {
         let db = self
             .db
@@ -382,11 +383,15 @@ impl MenteDB {
         if let Some(s) = source_tag {
             opts.source_tag = s;
         }
+        if let Some(s) = sync {
+            opts.sync = s;
+        }
         let report = db.ingest_agent_file(content, &opts).map_err(to_pyerr)?;
         Python::attach(|py| {
             let dict = pyo3::types::PyDict::new(py);
             dict.set_item("candidates", report.candidates)?;
             dict.set_item("stored", report.stored)?;
+            dict.set_item("removed", report.removed)?;
             dict.set_item("deduplicated", report.deduplicated)?;
             dict.set_item("semantic", report.semantic)?;
             dict.set_item("procedural", report.procedural)?;

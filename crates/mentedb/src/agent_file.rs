@@ -64,6 +64,21 @@ pub struct AgentFileIngestOptions {
     /// Chunk size in characters for LLM parsing of large files; chunks split
     /// at section boundaries.
     pub llm_chunk_chars: usize,
+    /// When true (the default), re ingesting is a full sync with the file:
+    /// memories from a previous ingest of the same source_tag and owner
+    /// scope whose rule no longer appears in the file are forgotten. Edit
+    /// the file and re ingest; new rules are stored, unchanged rules
+    /// deduplicate, edited rules replace their old version, deleted rules
+    /// are removed. Ingesting several different files into the same owner
+    /// scope requires a distinct source_tag per file, otherwise each file's
+    /// sync prunes the others'.
+    pub sync: bool,
+    /// Survival gate for sync: an existing memory is kept when its content
+    /// matches a new atom verbatim after whitespace and case normalization,
+    /// or its embedding reaches this cosine similarity against any new atom.
+    /// Near verbatim by default, so a meaningfully edited rule is replaced
+    /// rather than kept alongside its old version.
+    pub sync_keep_similarity: f32,
 }
 
 impl Default for AgentFileIngestOptions {
@@ -78,6 +93,8 @@ impl Default for AgentFileIngestOptions {
             embed_batch_size: 256,
             trigger_min_similarity: 0.45,
             llm_chunk_chars: 24_000,
+            sync: true,
+            sync_keep_similarity: 0.97,
         }
     }
 }
@@ -89,6 +106,9 @@ pub struct AgentFileIngestReport {
     pub candidates: usize,
     /// Memories actually stored (candidates minus dedup and failures).
     pub stored: usize,
+    /// Memories from a previous ingest forgotten by sync because their rule
+    /// no longer appears in the file.
+    pub removed: usize,
     /// Candidates the write pipeline folded into an existing memory.
     pub deduplicated: usize,
     /// Stored memories by type.
@@ -160,6 +180,15 @@ const TRIGGER_ANCHORS: &[(&str, &[&str])] = &[
         ],
     ),
 ];
+
+/// Whitespace and case insensitive content identity, the verbatim leg of
+/// sync survival matching.
+fn norm_content(s: &str) -> String {
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
     if a.is_empty() || b.is_empty() || a.len() != b.len() {
@@ -542,14 +571,25 @@ impl MenteDb {
         }
 
         let mut sections = std::collections::HashSet::new();
+        // Snapshot the previous ingest before storing, so sync can compare
+        // the file's new state against what an earlier version left behind.
+        let previous: Vec<_> = if opts.sync {
+            self.index
+                .bitmap
+                .query_tag(&opts.source_tag)
+                .into_iter()
+                .collect()
+        } else {
+            Vec::new()
+        };
         let before = self.count_by_tag(&opts.source_tag);
         let mut stored_tokens = 0usize;
-        for (atom, embedding) in atoms.iter().zip(embeddings) {
+        for (atom, embedding) in atoms.iter().zip(&embeddings) {
             let mut node = MemoryNode::new(
                 opts.agent_id,
                 atom.memory_type,
                 atom.content.clone(),
-                embedding,
+                embedding.clone(),
             );
             node.user_id = opts.user_id;
             node.tags = atom.tags.clone();
@@ -577,6 +617,41 @@ impl MenteDb {
         report.sections = sections.len();
         if report.stored > 0 {
             report.avg_memory_token_estimate = stored_tokens / report.candidates.max(1);
+        }
+
+        // Sync: a memory from a previous ingest survives only if its rule is
+        // still in the file, verbatim after normalization or near verbatim by
+        // embedding. Everything else was deleted or meaningfully edited by
+        // the user, so the old version is forgotten. Scoped to this ingest's
+        // owner pair; another agent's memories under the same tag are never
+        // touched.
+        if opts.sync && !previous.is_empty() {
+            let new_norms: std::collections::HashSet<String> =
+                atoms.iter().map(|a| norm_content(&a.content)).collect();
+            for id in previous {
+                let Ok(node) = self.get_memory(id) else {
+                    continue;
+                };
+                if node.agent_id != opts.agent_id
+                    || node.user_id != opts.user_id
+                    || !node.tags.iter().any(|t| t == &opts.source_tag)
+                {
+                    continue;
+                }
+                if new_norms.contains(&norm_content(&node.content)) {
+                    continue;
+                }
+                let near_verbatim = !node.embedding.is_empty()
+                    && embeddings.iter().any(|e| {
+                        !e.is_empty() && cosine(&node.embedding, e) >= opts.sync_keep_similarity
+                    });
+                if near_verbatim {
+                    continue;
+                }
+                if self.forget(node.id).is_ok() {
+                    report.removed += 1;
+                }
+            }
         }
         Ok(())
     }

@@ -110,16 +110,21 @@ class MenteDB:
         return self._db.recall(query)
 
     def ingest_agent_file(self, content: str, agent_id: str | None = None,
-                          source_tag: str | None = None) -> dict:
+                          source_tag: str | None = None,
+                          sync: bool | None = None) -> dict:
         """Ingest an agent instruction file (CLAUDE.md, AGENTS.md,
         .cursorrules) as individual memories.
 
         Atomic statements with section provenance, action trigger tags where
         rules govern an action (``trigger:git-commit``), nothing pinned to
-        every turn. Re ingesting an edited file deduplicates instead of
-        duplicating. Returns the ingest report as a dict.
+        every turn. Re ingesting keeps memory in sync with the file: new
+        rules are stored, unchanged rules deduplicate, edited rules replace
+        their old version, and rules deleted from the file are forgotten
+        (``sync=False`` turns removal off; give each file its own
+        ``source_tag`` when several files share one agent). Returns the
+        ingest report as a dict, including ``removed``.
         """
-        return self._db.ingest_agent_file(content, agent_id, source_tag)
+        return self._db.ingest_agent_file(content, agent_id, source_tag, sync)
 
     def recall_similar(self, embedding: list[float], k: int = 10) -> list[tuple[str, float]]:
         """Nearest neighbours for an explicit embedding, any embedding space."""
