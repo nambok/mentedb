@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.2](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.32.1...mentedb-extraction-v0.32.2) - 2026-07-27
+
+### Fixed
+
+- value update cosine floor sits below real embedder bands, floor rejections logged ([#391](https://github.com/nambok/mentedb/pull/391))
+
 ## [0.32.1](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.32.0...mentedb-extraction-v0.32.1) - 2026-07-27
 
 ### Fixed
