@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0](https://github.com/nambok/mentedb/compare/mentedb-v0.32.2...mentedb-v0.33.0) - 2026-07-28
+
+### Added
+
+- action recall is semantic and type-weighted, not tag lookup ([#393](https://github.com/nambok/mentedb/pull/393))
+
 ## [0.32.2](https://github.com/nambok/mentedb/compare/mentedb-v0.32.1...mentedb-v0.32.2) - 2026-07-27
 
 ### Fixed
