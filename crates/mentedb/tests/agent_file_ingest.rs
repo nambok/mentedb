@@ -37,38 +37,18 @@ fn ingests_the_real_claude_md() {
         "section paths must nest: {}",
         report.sections
     );
-    // The hash embedder is non semantic, so anchor triggers must stay
-    // silent rather than false fire (measured: no separation exists under
-    // hash). Positive trigger coverage lives in the LLM parser tests and in
-    // the measured candle separations backing the 0.45 default.
-    assert_eq!(report.trigger_tagged, 0, "no false triggers under hash");
+    // The deterministic parser assigns no action tags at all: which memories
+    // bear on an action is decided at recall time by recall_for_action
+    // (semantic), never stamped at ingest. So the report carries no triggers.
+    assert_eq!(
+        report.trigger_tagged, 0,
+        "deterministic parser stamps no triggers"
+    );
     assert!(report.procedural > 0 && report.semantic > 0);
     assert!(
         report.file_token_estimate > report.avg_memory_token_estimate * 4,
         "atoms must be much smaller than the file"
     );
-}
-
-#[test]
-fn no_false_triggers_under_a_non_semantic_embedder() {
-    // Anchor triggers are embedding based; the hash embedder has no
-    // semantics, so the guarantee that matters here is silence: nothing
-    // fires at the wrong moment. The positive path, rules firing through
-    // recall_for_action after ingest, is covered by the LLM parser tests
-    // (open vocabulary triggers) and by measured candle separations.
-    let dir = tempfile::tempdir().unwrap();
-    let db = open(dir.path());
-    db.ingest_agent_file(CLAUDE_MD, &AgentFileIngestOptions::default())
-        .unwrap();
-
-    for action in ["git-commit", "pr-create", "git-push", "deploy"] {
-        let rules = db.recall_for_action(action, None, None, 8).unwrap();
-        assert!(
-            rules.is_empty(),
-            "hash embedder must never assign triggers, {action} fired: {:?}",
-            rules.iter().map(|r| &r.content).collect::<Vec<_>>()
-        );
-    }
 }
 
 #[test]
