@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.0](https://github.com/nambok/mentedb/compare/mentedb-v0.33.0...mentedb-v0.34.0) - 2026-07-28
+
+### Added
+
+- action recall is hybrid, keyword path survives a weak embedder ([#396](https://github.com/nambok/mentedb/pull/396))
+
 ## [0.33.0](https://github.com/nambok/mentedb/compare/mentedb-v0.32.2...mentedb-v0.33.0) - 2026-07-28
 
 ### Added
