@@ -65,7 +65,7 @@ fn governing_type_outranks_topical_at_equal_similarity() {
     );
     db.store(episode).unwrap();
 
-    let out = db.recall_for_action(&axis(0), None, None, 8).unwrap();
+    let out = db.recall_for_action(&axis(0), None, None, None, 8).unwrap();
     assert!(!out.is_empty(), "the governing rule must surface");
     assert_eq!(out[0].id, rule_id, "procedure outranks the topical episode");
 }
@@ -84,7 +84,7 @@ fn below_similarity_floor_is_excluded() {
     );
     db.store(unrelated).unwrap();
 
-    let out = db.recall_for_action(&axis(0), None, None, 8).unwrap();
+    let out = db.recall_for_action(&axis(0), None, None, None, 8).unwrap();
     assert!(
         out.is_empty(),
         "an unrelated action pulls no governing rules, got {out:?}"
@@ -114,7 +114,7 @@ fn near_rule_surfaces_over_distant_rule() {
     );
     db.store(deploy_rule).unwrap();
 
-    let out = db.recall_for_action(&axis(0), None, None, 8).unwrap();
+    let out = db.recall_for_action(&axis(0), None, None, None, 8).unwrap();
     assert_eq!(out[0].id, commit_id, "the rule near the action wins");
     assert!(
         out.iter()
@@ -148,7 +148,9 @@ fn respects_agent_and_user_visibility() {
     db.store(shared).unwrap();
 
     // Scoped to agent A: sees A's own rule plus the shared (nil) rule, never B's.
-    let out = db.recall_for_action(&axis(0), Some(a), None, 8).unwrap();
+    let out = db
+        .recall_for_action(&axis(0), None, Some(a), None, 8)
+        .unwrap();
     let contents: Vec<&str> = out.iter().map(|n| n.content.as_str()).collect();
     assert!(contents.contains(&"agent A commit rule"));
     assert!(contents.contains(&"shared commit rule"));
@@ -171,8 +173,52 @@ fn honors_the_k_cap() {
         ))
         .unwrap();
     }
-    let out = db.recall_for_action(&axis(0), None, None, 3).unwrap();
+    let out = db.recall_for_action(&axis(0), None, None, None, 3).unwrap();
     assert_eq!(out.len(), 3, "returns at most k");
+}
+
+#[test]
+fn keyword_admits_a_rule_when_the_vector_is_weak() {
+    // The robustness case: the rule's embedding is ORTHOGONAL to the action
+    // (cosine 0, well under the floor), as happens under a weak or
+    // non-semantic embedder. The shared keyword must still surface it, and an
+    // action with no shared keyword must still surface nothing.
+    let dir = tempfile::tempdir().unwrap();
+    let db = MenteDb::open(dir.path()).expect("open");
+
+    let rule = node(
+        AgentId::nil(),
+        MemoryType::Procedural,
+        "always sign the git commit with 1Password",
+        axis(3),
+    );
+    let rule_id = rule.id;
+    db.store(rule).unwrap();
+
+    // Vector says nothing (query is orthogonal), but the words match.
+    let out = db
+        .recall_for_action(
+            &axis(0),
+            Some("about to run git commit -m fix"),
+            None,
+            None,
+            8,
+        )
+        .unwrap();
+    assert_eq!(
+        out.first().map(|n| n.id),
+        Some(rule_id),
+        "a shared keyword must surface the rule even when the vector is weak"
+    );
+
+    // No shared keyword and no vector signal: nothing surfaces.
+    let out = db
+        .recall_for_action(&axis(0), Some("listing directory entries"), None, None, 8)
+        .unwrap();
+    assert!(
+        out.is_empty(),
+        "an unrelated action with no keyword and no vector match stays silent, got {out:?}"
+    );
 }
 
 #[test]
@@ -186,9 +232,13 @@ fn empty_embedding_or_zero_k_returns_empty() {
         axis(0),
     ))
     .unwrap();
-    assert!(db.recall_for_action(&[], None, None, 8).unwrap().is_empty());
     assert!(
-        db.recall_for_action(&axis(0), None, None, 0)
+        db.recall_for_action(&[], None, None, None, 8)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        db.recall_for_action(&axis(0), None, None, None, 0)
             .unwrap()
             .is_empty()
     );

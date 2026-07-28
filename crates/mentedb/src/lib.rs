@@ -433,6 +433,16 @@ pub struct CognitiveConfig {
     /// system, not a hardcoded action vocabulary. Order matches `MemoryType`:
     /// [episodic, semantic, procedural, anti_pattern, reasoning, correction].
     pub action_type_weights: [f32; 6],
+    /// Action recall: relevance added to a candidate that shares a keyword
+    /// with the action text (a BM25/lexical signal). This is what keeps action
+    /// recall working when the embedder is weak or a non-semantic fallback: a
+    /// rule about "git commit" is still found by the words when the vector is
+    /// noise. A candidate is admitted on EITHER a semantic signal (cosine over
+    /// `action_min_similarity`) OR a lexical one (a shared keyword).
+    pub action_keyword_weight: f32,
+    /// Action recall: minimum token length for a word to count as a shared
+    /// keyword, so short glue tokens ("to", "-c") do not create matches.
+    pub action_keyword_min_len: usize,
 }
 
 impl Default for CognitiveConfig {
@@ -476,6 +486,8 @@ impl Default for CognitiveConfig {
             action_overfetch: 5,
             // episodic, semantic, procedural, anti_pattern, reasoning, correction
             action_type_weights: [0.3, 0.5, 1.0, 1.0, 0.7, 1.0],
+            action_keyword_weight: 0.5,
+            action_keyword_min_len: 3,
         }
     }
 }
@@ -554,6 +566,25 @@ pub struct MenteDb {
 /// Agent visibility rule for scoped retrieval: a node is visible to an agent
 /// when it is owned by that agent or owned by no agent (nil, shared
 /// knowledge). No scope means global visibility.
+/// Split text into lowercase alphanumeric tokens of at least `min_len`, the
+/// unit of the lexical (keyword) admit signal for action recall.
+fn keyword_tokens(text: &str, min_len: usize) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|t| t.chars().count() >= min_len)
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// True when `content` contains any of `action_tokens`, so a rule about "git
+/// commit" is found by the words even when the vector similarity is noise.
+fn shares_keyword(action_tokens: &[String], content: &str, min_len: usize) -> bool {
+    let set: std::collections::HashSet<&str> = action_tokens.iter().map(String::as_str).collect();
+    content
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| t.chars().count() >= min_len)
+        .any(|t| set.contains(t.to_lowercase().as_str()))
+}
+
 /// Index into `CognitiveConfig::action_type_weights` for a memory type. The
 /// order is fixed alongside the weights array; keep the two in lockstep.
 fn action_type_index(t: MemoryType) -> usize {
@@ -1321,12 +1352,21 @@ impl MenteDb {
     /// surfaces the commit-signing rule by understanding, and `ls` surfaces
     /// nothing because nothing is meaningfully about listing files.
     ///
-    /// Scoring is `similarity * type_weight`; candidates below
-    /// `action_min_similarity` are dropped, the rest are ranked and truncated
-    /// to `k`. All knobs live in [`CognitiveConfig`].
+    /// The caller passes both the embedding of the action's meaning AND the
+    /// action text. Candidates come from HYBRID recall (vector nearest
+    /// neighbors fused with BM25 keyword matches on the text), and a candidate
+    /// is admitted on EITHER a semantic signal (true cosine over
+    /// `action_min_similarity`) OR a lexical one (a shared keyword). The
+    /// lexical path is deliberate robustness: when the embedder is weak or a
+    /// non-semantic fallback, the vector is noise and only the words find the
+    /// rule, so the old tag lookup's embedder-independence is preserved without
+    /// its hardcoded action vocabulary. Ranking is
+    /// `(cosine + keyword_bonus) * type_weight`, truncated to `k`. All knobs in
+    /// [`CognitiveConfig`].
     pub fn recall_for_action(
         &self,
         action_embedding: &[f32],
+        action_text: Option<&str>,
         agent_id: Option<AgentId>,
         user_id: Option<UserId>,
         k: usize,
@@ -1340,17 +1380,16 @@ impl MenteDb {
             .unwrap_or_default()
             .as_micros() as u64;
 
-        // The index gives fast candidates by approximate nearest neighbor; the
-        // GATE and RANK use true cosine computed from the embeddings, not the
-        // index's fused score. Absolute cosine thresholds are embedder-coupled
-        // (the whole calibration system exists because fused-score constants
-        // silently broke cognition twice), so scoring on real cosine keeps
-        // `action_min_similarity` meaning what it says.
         let pool = k.saturating_mul(cfg.action_overfetch.max(1));
-        let hits = self.recall_similar_at(action_embedding, pool, now)?;
+        let hits =
+            self.recall_hybrid_at(action_embedding, action_text, pool, now, None, None, None)?;
+
+        let action_tokens: Vec<String> = action_text
+            .map(|t| keyword_tokens(t, cfg.action_keyword_min_len))
+            .unwrap_or_default();
 
         let mut scored: Vec<(MemoryNode, f32)> = Vec::new();
-        for (id, _approx) in hits {
+        for (id, _fused) in hits {
             let Ok(node) = self.get_memory(id) else {
                 continue;
             };
@@ -1360,15 +1399,26 @@ impl MenteDb {
             {
                 continue;
             }
-            let sim = Self::cosine(action_embedding, &node.embedding);
-            if sim < cfg.action_min_similarity {
-                continue;
-            }
             let weight = cfg.action_type_weights[action_type_index(node.memory_type)];
             if weight <= 0.0 {
                 continue;
             }
-            scored.push((node, sim * weight));
+            // True cosine is the semantic signal; a shared keyword is the
+            // lexical one. Absolute cosine thresholds are embedder-coupled, so
+            // the keyword path is what carries recall when the vector is weak.
+            let sim = Self::cosine(action_embedding, &node.embedding);
+            let keyword = !action_tokens.is_empty()
+                && shares_keyword(&action_tokens, &node.content, cfg.action_keyword_min_len);
+            if sim < cfg.action_min_similarity && !keyword {
+                continue;
+            }
+            let relevance = sim
+                + if keyword {
+                    cfg.action_keyword_weight
+                } else {
+                    0.0
+                };
+            scored.push((node, relevance * weight));
         }
         scored.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
