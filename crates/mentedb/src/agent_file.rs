@@ -12,9 +12,12 @@
 //!   nothing here is specific to developer files.
 //! - The fallback parser (`ingest_agent_file`) is deterministic markdown
 //!   segmentation for installs with no LLM configured: heading paths for
-//!   self contained memories, sentence level atomization, type
-//!   classification, and action triggers by embedding similarity to anchor
-//!   sentences, never string matching.
+//!   self contained memories, sentence level atomization, and type
+//!   classification.
+//!
+//! Which memories bear on an action the agent is about to take is answered at
+//! recall time by [`MenteDb::recall_for_action`], semantic recall re ranked by
+//! how strongly a memory governs behavior, not by any stored action tag.
 //! - Nothing is marked `scope:always` by either parser. The point of
 //!   ingesting an agent file is that no rule rides every turn; rules arrive
 //!   by topic or by action.
@@ -51,16 +54,6 @@ pub struct AgentFileIngestOptions {
     pub max_content_chars: usize,
     /// Batch size for embedding calls.
     pub embed_batch_size: usize,
-    /// Minimum cosine similarity between an atom and a trigger anchor for
-    /// the atom to receive that action trigger tag. Embedding thresholds are
-    /// embedder coupled; the default is backed by measured separations on
-    /// the bundled candle embedder (2026-07: true commit rules 0.53 to 0.72
-    /// including rephrasings, nearest non commit rules 0.35, unrelated prose
-    /// under 0.22), and prefers erring high, a rule firing at the wrong
-    /// moment erodes trust faster than a missing rule. Non semantic hash
-    /// embeddings show no separation at all, so installs on the hash
-    /// fallback assign no anchor triggers.
-    pub trigger_min_similarity: f32,
     /// Chunk size in characters for LLM parsing of large files; chunks split
     /// at section boundaries.
     pub llm_chunk_chars: usize,
@@ -91,7 +84,6 @@ impl Default for AgentFileIngestOptions {
             min_atom_chars: 12,
             max_content_chars: 1800,
             embed_batch_size: 256,
-            trigger_min_similarity: 0.45,
             llm_chunk_chars: 24_000,
             sync: true,
             sync_keep_similarity: 0.97,
@@ -148,39 +140,6 @@ pub struct AgentFileAtom {
     pub tags: Vec<String>,
 }
 
-/// Action trigger anchors: each trigger is defined by exemplar sentences,
-/// and an atom gets the trigger when its embedding lands close enough to an
-/// anchor. Phrasing independent by construction: "no co-author trailers",
-/// "when committing, keep the subject to one line", and "commit style is
-/// conventional" all land near the same anchors without any string
-/// matching. The gate is embedding based, so its threshold is embedder
-/// coupled and lives in [`AgentFileIngestOptions::trigger_min_similarity`],
-/// never hardcoded.
-const TRIGGER_ANCHORS: &[(&str, &[&str])] = &[
-    (
-        "git-commit",
-        &[
-            "rules for writing git commit messages, their style, format, and subject lines",
-            "what a commit message must look like when committing code changes",
-            "conventions for commit trailers, signing, and commit authorship",
-        ],
-    ),
-    (
-        "pr-create",
-        &[
-            "rules for opening pull requests and writing PR descriptions, titles, and bodies",
-            "what to include when creating a pull request for review",
-        ],
-    ),
-    (
-        "git-push",
-        &[
-            "rules about pushing code to remote branches, force pushing, and protected branches",
-            "when it is allowed to push commits to the main branch",
-        ],
-    ),
-];
-
 /// Whitespace and case insensitive content identity, the verbatim leg of
 /// sync survival matching.
 fn norm_content(s: &str) -> String {
@@ -206,26 +165,6 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
     dot / (na.sqrt() * nb.sqrt())
-}
-
-/// Best matching trigger for an atom embedding, if any anchor clears the
-/// gate. Anchors are grouped per trigger; the best anchor wins.
-fn trigger_for_embedding(
-    atom: &[f32],
-    anchor_embeddings: &[(usize, Vec<f32>)],
-    gate: f32,
-) -> Option<&'static str> {
-    let mut best: Option<(usize, f32)> = None;
-    for (group, emb) in anchor_embeddings {
-        let sim = cosine(atom, emb);
-        if best.is_none_or(|(_, b)| sim > b) {
-            best = Some((*group, sim));
-        }
-    }
-    match best {
-        Some((group, sim)) if sim >= gate => Some(TRIGGER_ANCHORS[group].0),
-        _ => None,
-    }
 }
 
 const RULE_STARTS: &[&str] = &[
@@ -516,7 +455,7 @@ impl MenteDb {
             parsed_by: "deterministic",
             ..Default::default()
         };
-        self.store_atoms(atoms, opts, &mut report, true)?;
+        self.store_atoms(atoms, opts, &mut report)?;
         Ok(report)
     }
 
@@ -525,10 +464,9 @@ impl MenteDb {
     /// store through the full write pipeline, and fill the report.
     fn store_atoms(
         &self,
-        mut atoms: Vec<AgentFileAtom>,
+        atoms: Vec<AgentFileAtom>,
         opts: &AgentFileIngestOptions,
         report: &mut AgentFileIngestReport,
-        assign_anchor_triggers: bool,
     ) -> MenteResult<()> {
         // Batch embed ahead of the stores so a large file pays one provider
         // round trip per batch, not per line.
@@ -539,33 +477,6 @@ impl MenteDb {
                 Some(mut batch) => embeddings.append(&mut batch),
                 None => {
                     embeddings.extend(std::iter::repeat_n(Vec::new(), texts.len()));
-                }
-            }
-        }
-
-        // Fallback trigger assignment: embedding similarity to anchor
-        // sentences, phrasing independent by construction. Skipped when the
-        // LLM already named triggers.
-        if assign_anchor_triggers {
-            let anchor_texts: Vec<&str> = TRIGGER_ANCHORS
-                .iter()
-                .flat_map(|(_, anchors)| anchors.iter().copied())
-                .collect();
-            if let Some(anchor_embs) = self.embed_batch(&anchor_texts)? {
-                let mut grouped: Vec<(usize, Vec<f32>)> = Vec::new();
-                let mut i = 0;
-                for (group, (_, anchors)) in TRIGGER_ANCHORS.iter().enumerate() {
-                    for _ in anchors.iter() {
-                        grouped.push((group, anchor_embs[i].clone()));
-                        i += 1;
-                    }
-                }
-                for (atom, emb) in atoms.iter_mut().zip(&embeddings) {
-                    if let Some(trigger) =
-                        trigger_for_embedding(emb, &grouped, opts.trigger_min_similarity)
-                    {
-                        atom.tags.push(format!("trigger:{trigger}"));
-                    }
                 }
             }
         }
@@ -858,7 +769,7 @@ impl MenteDb {
             llm_chunks: chunks.len(),
             ..Default::default()
         };
-        self.store_atoms(atoms, opts, &mut report, false)?;
+        self.store_atoms(atoms, opts, &mut report)?;
         Ok(report)
     }
 }

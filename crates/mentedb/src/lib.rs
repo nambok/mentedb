@@ -416,6 +416,23 @@ pub struct CognitiveConfig {
     /// and keeps the configured defaults when the embedder cannot separate
     /// paraphrase from noise.
     pub calibration_enabled: bool,
+    /// Action recall: minimum semantic similarity between the meaning of an
+    /// action about to happen and a memory, below which the memory does not
+    /// bear on the action. `recall_for_action` is ordinary semantic recall
+    /// re-ranked by how strongly a memory governs behavior, never a tag lookup.
+    pub action_min_similarity: f32,
+    /// Action recall: candidate over-fetch multiple. Recall pulls
+    /// `action_overfetch * k` by raw similarity, then re-ranks by governing
+    /// weight and truncates to k, so a strongly-governing memory ranked just
+    /// outside the top-k by cosine alone can still surface.
+    pub action_overfetch: usize,
+    /// Action recall: per memory-type weight for how strongly that kind of
+    /// memory governs an action about to happen. Procedures, corrections, and
+    /// anti-patterns govern; facts inform; past events least. This encodes
+    /// "what I know that bears on doing this" as cognition over the type
+    /// system, not a hardcoded action vocabulary. Order matches `MemoryType`:
+    /// [episodic, semantic, procedural, anti_pattern, reasoning, correction].
+    pub action_type_weights: [f32; 6],
 }
 
 impl Default for CognitiveConfig {
@@ -455,6 +472,10 @@ impl Default for CognitiveConfig {
             memory_dedup_token_overlap: 0.85,
             sweep_dedup_token_overlap: 0.55,
             calibration_enabled: true,
+            action_min_similarity: 0.3,
+            action_overfetch: 5,
+            // episodic, semantic, procedural, anti_pattern, reasoning, correction
+            action_type_weights: [0.3, 0.5, 1.0, 1.0, 0.7, 1.0],
         }
     }
 }
@@ -533,6 +554,19 @@ pub struct MenteDb {
 /// Agent visibility rule for scoped retrieval: a node is visible to an agent
 /// when it is owned by that agent or owned by no agent (nil, shared
 /// knowledge). No scope means global visibility.
+/// Index into `CognitiveConfig::action_type_weights` for a memory type. The
+/// order is fixed alongside the weights array; keep the two in lockstep.
+fn action_type_index(t: MemoryType) -> usize {
+    match t {
+        MemoryType::Episodic => 0,
+        MemoryType::Semantic => 1,
+        MemoryType::Procedural => 2,
+        MemoryType::AntiPattern => 3,
+        MemoryType::Reasoning => 4,
+        MemoryType::Correction => 5,
+    }
+}
+
 pub(crate) fn agent_visible(owner: AgentId, scope: Option<AgentId>) -> bool {
     match scope {
         None => true,
@@ -1273,46 +1307,77 @@ impl MenteDb {
     ///   kept both an old rule and its correction, the correction leads.
     ///
     /// An unknown or empty trigger returns an empty vec.
+    /// Recall the memories that bear on an action the agent is about to take.
+    ///
+    /// This is ordinary semantic recall, not a tag lookup: the caller passes the
+    /// embedding of the MEANING of the action about to happen (the command, the
+    /// tool call, the intent), and the engine returns memories that are both
+    /// semantically near that meaning and of a kind that GOVERNS behavior. A
+    /// procedure ("sign commits with 1Password"), a correction, or an
+    /// anti-pattern outranks a merely topical fact or a past event, because the
+    /// type system says which memories govern an action, not a hardcoded
+    /// vocabulary of action names. There is no `trigger:` tag, no command
+    /// classifier, and no string equality anywhere in the path: a git commit
+    /// surfaces the commit-signing rule by understanding, and `ls` surfaces
+    /// nothing because nothing is meaningfully about listing files.
+    ///
+    /// Scoring is `similarity * type_weight`; candidates below
+    /// `action_min_similarity` are dropped, the rest are ranked and truncated
+    /// to `k`. All knobs live in [`CognitiveConfig`].
     pub fn recall_for_action(
         &self,
-        trigger: &str,
+        action_embedding: &[f32],
         agent_id: Option<AgentId>,
         user_id: Option<UserId>,
         k: usize,
     ) -> MenteResult<Vec<MemoryNode>> {
-        let trigger = trigger.trim().to_lowercase();
-        if trigger.is_empty() || k == 0 {
+        if action_embedding.is_empty() || k == 0 {
             return Ok(Vec::new());
         }
-        let tag = format!("trigger:{trigger}");
+        let cfg = &self.cognitive_config;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_micros() as u64;
-        let mut rules: Vec<MemoryNode> = Vec::new();
-        for id in self.index.bitmap.query_tag(&tag) {
+
+        // The index gives fast candidates by approximate nearest neighbor; the
+        // GATE and RANK use true cosine computed from the embeddings, not the
+        // index's fused score. Absolute cosine thresholds are embedder-coupled
+        // (the whole calibration system exists because fused-score constants
+        // silently broke cognition twice), so scoring on real cosine keeps
+        // `action_min_similarity` meaning what it says.
+        let pool = k.saturating_mul(cfg.action_overfetch.max(1));
+        let hits = self.recall_similar_at(action_embedding, pool, now)?;
+
+        let mut scored: Vec<(MemoryNode, f32)> = Vec::new();
+        for (id, _approx) in hits {
             let Ok(node) = self.get_memory(id) else {
                 continue;
             };
-            // The bitmap can lag a tag removal (see count_standing_rules);
-            // trust the node, not the index.
-            if !node.tags.iter().any(|t| t == &tag) {
+            if !node.is_valid_at(now)
+                || !agent_visible(node.agent_id, agent_id)
+                || !user_visible(node.user_id, user_id)
+            {
                 continue;
             }
-            if !node.is_valid_at(now) {
+            let sim = Self::cosine(action_embedding, &node.embedding);
+            if sim < cfg.action_min_similarity {
                 continue;
             }
-            if !agent_visible(node.agent_id, agent_id) {
+            let weight = cfg.action_type_weights[action_type_index(node.memory_type)];
+            if weight <= 0.0 {
                 continue;
             }
-            if !user_visible(node.user_id, user_id) {
-                continue;
-            }
-            rules.push(node);
+            scored.push((node, sim * weight));
         }
-        rules.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)));
-        rules.truncate(k);
-        Ok(rules)
+        scored.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(b.0.created_at.cmp(&a.0.created_at))
+                .then(b.0.id.cmp(&a.0.id))
+        });
+        scored.truncate(k);
+        Ok(scored.into_iter().map(|(node, _)| node).collect())
     }
 
     /// Vector similarity search at a specific point in time.

@@ -32,6 +32,21 @@ fn open(dir: &std::path::Path) -> MenteDb {
     MenteDb::open_with_embedder(dir, Box::new(HashEmbeddingProvider::new(256))).expect("open")
 }
 
+/// Contents of the memories the LLM parser tagged for a given action. The
+/// trigger tag is the mode-activation join key the parser still writes; which
+/// memories bear on an action at RECALL time is answered semantically by
+/// `recall_for_action`, proven under a real embedder in `action_rules` and the
+/// live smoke, not here under the non-semantic hash embedder.
+fn tagged(db: &MenteDb, trigger: &str) -> Vec<String> {
+    let tag = format!("trigger:{trigger}");
+    db.memory_ids()
+        .into_iter()
+        .filter_map(|id| db.get_memory(id).ok())
+        .filter(|n| n.tags.iter().any(|t| t == &tag))
+        .map(|n| n.content)
+        .collect()
+}
+
 #[tokio::test]
 async fn llm_parse_stores_open_vocabulary_triggers() {
     let dir = tempfile::tempdir().unwrap();
@@ -69,15 +84,15 @@ async fn llm_parse_stores_open_vocabulary_triggers() {
     // rejected so that entry stays a plain memory.
     assert_eq!(report.trigger_tagged, 2);
 
-    let refund = db.recall_for_action("order-refund", None, None, 8).unwrap();
+    let refund = tagged(&db, "order-refund");
     assert_eq!(refund.len(), 1);
-    assert!(refund[0].content.contains("manager approval"));
+    assert!(refund[0].contains("manager approval"));
 
-    let trade = db.recall_for_action("trade-entry", None, None, 8).unwrap();
+    let trade = tagged(&db, "trade-entry");
     assert_eq!(trade.len(), 1);
-    assert!(trade[0].content.contains("one percent"));
+    assert!(trade[0].contains("one percent"));
 
-    let none = db.recall_for_action("always", None, None, 8).unwrap();
+    let none = tagged(&db, "always");
     assert!(none.is_empty(), "always must never become a trigger");
 }
 
@@ -164,11 +179,11 @@ async fn exemplars_store_as_activation_anchors_not_rules() {
     assert_eq!(report.stored, 5, "{report:?}");
 
     // Exemplars carry the mode-exemplar tag for their trigger and never the
-    // trigger tag itself, so the action channel returns only real rules.
-    let rules = db.recall_for_action("code-change", None, None, 10).unwrap();
+    // trigger tag itself, so the trigger channel names only real rules.
+    let rules = tagged(&db, "code-change");
     assert_eq!(rules.len(), 1, "{rules:?}");
-    assert!(rules[0].content.contains("root cause"));
-    let anchors = db.recall_for_action("git-commit", None, None, 10).unwrap();
+    assert!(rules[0].contains("root cause"));
+    let anchors = tagged(&db, "git-commit");
     assert_eq!(anchors.len(), 1, "{anchors:?}");
 }
 
