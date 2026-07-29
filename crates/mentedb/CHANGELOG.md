@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0](https://github.com/nambok/mentedb/compare/mentedb-v0.34.0...mentedb-v0.35.0) - 2026-07-29
+
+### Fixed
+
+- violated-rule escalation actually re-ranks injection ([#399](https://github.com/nambok/mentedb/pull/399))
+
 ## [0.34.0](https://github.com/nambok/mentedb/compare/mentedb-v0.33.0...mentedb-v0.34.0) - 2026-07-28
 
 ### Added
