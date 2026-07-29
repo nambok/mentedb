@@ -68,6 +68,18 @@ pub struct InjectionConfig {
     /// account's shared nil owned memories; measured on a busy account,
     /// shared memories otherwise flood the relevant slots. 1.0 disables.
     pub own_agent_boost: f32,
+    /// Score multiplier for a memory tagged `escalated:violation`: a standing
+    /// rule the agent was shown and then broke. Escalation exists so a rule
+    /// that was violated once surfaces at the FRONT the next time its context
+    /// recurs, not buried mid-list where it was ignored. Without this the
+    /// escalation only bumps salience, which injection does not rank on, so the
+    /// correction would not stick. 1.0 disables.
+    pub escalation_boost: f32,
+    /// The boost applies only to an escalated rule whose cosine is at least
+    /// this fraction of the query's best cosine, so escalation reorders rules
+    /// that are genuinely on topic and never drags an unrelated escalated rule
+    /// into the context on the strength of the boost alone.
+    pub escalation_min_relevance: f32,
     /// MMR relevance weight; the remainder weighs redundancy.
     pub mmr_lambda: f32,
     /// Consecutive score ratio treated as the relevance knee.
@@ -133,6 +145,8 @@ impl Default for InjectionConfig {
             cluster_max_span: 12,
             use_lexical_leg: true,
             own_agent_boost: 1.25,
+            escalation_boost: 2.5,
+            escalation_min_relevance: 0.5,
             mmr_lambda: 0.7,
             knee_gap_ratio: 2.0,
             demotion_shown_min: 5,
@@ -419,6 +433,26 @@ impl MenteDb {
             idx += 1;
             keep
         });
+
+        // Escalation re-ranks AMONG the relevance survivors: a rule the agent
+        // was shown and then broke leads the next time its context recurs. It
+        // runs here, after the cosine gates, so the boost can never drag an
+        // irrelevant escalated rule into the context, only reorder rules that
+        // already earned their place.
+        if cfg.escalation_boost != 1.0
+            && candidates
+                .iter()
+                .any(|(n, _, _)| has_tag(n, "escalated:violation"))
+        {
+            let relevance_floor = best_cos * cfg.escalation_min_relevance;
+            for (node, adjusted, cos) in candidates.iter_mut() {
+                if has_tag(node, "escalated:violation") && *cos >= relevance_floor {
+                    *adjusted *= cfg.escalation_boost;
+                }
+            }
+            candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
         let mut scored: Vec<(MemoryNode, f32)> =
             candidates.into_iter().map(|(n, s, _)| (n, s)).collect();
 
