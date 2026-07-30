@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.2](https://github.com/nambok/mentedb/compare/mentedb-v0.35.0...mentedb-v0.35.2) - 2026-07-30
+
+### Added
+
+- index-backed reads for the dashboard (newest, tag, conflict counts) ([#402](https://github.com/nambok/mentedb/pull/402))
+
+### Other
+
+- release v0.35.1 ([#400](https://github.com/nambok/mentedb/pull/400))
+
 ## [0.35.1](https://github.com/nambok/mentedb/compare/mentedb-v0.35.0...mentedb-v0.35.1) - 2026-07-30
 
 ### Added
