@@ -1893,35 +1893,12 @@ impl MenteDb {
 
     /// `(contradicts, supersedes)` conflict-edge counts from the in-memory
     /// graph, deduping undirected contradiction pairs so A<->B counts once.
-    /// Loads no node content, so a conflict badge costs a graph walk rather than
-    /// a full scan with two storage reads per pair. Byte-identical re-saves are
-    /// routed to `Derived` edges at write time, so they never appear here.
+    /// One O(edges) pass, no node content loaded and no per-node delta-log
+    /// rescan, so a conflict badge costs a graph tally rather than a full scan.
+    /// Byte-identical re-saves are routed to `Derived` edges at write time, so
+    /// they never appear here.
     pub fn conflict_edge_counts(&self) -> (usize, usize) {
-        let graph = self.graph();
-        let csr = graph.graph();
-        let mut contradicts: std::collections::HashSet<(MemoryId, MemoryId)> =
-            std::collections::HashSet::new();
-        let mut supersedes = 0usize;
-        for id in self.memory_ids() {
-            if !csr.contains_node(id) {
-                continue;
-            }
-            for (target, edge) in csr.outgoing(id) {
-                match edge.edge_type {
-                    EdgeType::Contradicts => {
-                        let key = if id < target {
-                            (id, target)
-                        } else {
-                            (target, id)
-                        };
-                        contradicts.insert(key);
-                    }
-                    EdgeType::Supersedes => supersedes += 1,
-                    _ => {}
-                }
-            }
-        }
-        (contradicts.len(), supersedes)
+        self.graph().conflict_edge_counts()
     }
 
     /// Fold one op's latency into an exponentially-weighted moving average, in

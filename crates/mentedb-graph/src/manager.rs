@@ -264,6 +264,13 @@ impl GraphManager {
     pub fn graph(&self) -> parking_lot::RwLockReadGuard<'_, CsrGraph> {
         self.graph.read()
     }
+
+    /// Conflict-edge counts `(contradicts, supersedes)` in a single O(edges)
+    /// pass, deduping undirected contradictions. See
+    /// [`CsrGraph::conflict_edge_counts`].
+    pub fn conflict_edge_counts(&self) -> (usize, usize) {
+        self.graph.read().conflict_edge_counts()
+    }
 }
 
 impl Default for GraphManager {
