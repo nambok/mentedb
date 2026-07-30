@@ -1947,23 +1947,18 @@ impl MenteDb {
 
     /// O(1) dashboard counts (scope tree, stats): non-internal total and counts
     /// by type, owner, and project. Grounded by a one-time recount on the first
-    /// read and kept current by store/forget. A cheap consistency check against
-    /// the store's own non-internal count recomputes if the maintained total
-    /// ever diverges (an edit path the incremental hook does not cover), so the
-    /// numbers are self-healing rather than silently wrong.
+    /// read (which also folds in any writes made before that read) and kept
+    /// current by store/forget thereafter, so a read is a lock and a clone. The
+    /// counts are re-grounded whenever the database is reopened, which bounds any
+    /// drift from an edit path the incremental hook does not cover to a single
+    /// process lifetime.
     pub fn scope_counts(&self) -> ScopeCounts {
-        use std::sync::atomic::Ordering::Relaxed;
-        let hidden: Vec<&str> = self
-            .cognitive_config
-            .hidden_count_tags
-            .iter()
-            .map(|s| s.as_str())
-            .collect();
-        let expected = self.count_excluding_tags(&hidden) as u64;
-        if self.scope_counts_ready.load(Relaxed) && self.scope_counts.read().total == expected {
-            return self.scope_counts.read().clone();
+        if !self
+            .scope_counts_ready
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.recompute_scope_counts();
         }
-        self.recompute_scope_counts();
         self.scope_counts.read().clone()
     }
 
