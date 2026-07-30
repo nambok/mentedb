@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.2](https://github.com/nambok/mentedb/compare/mentedb-v0.36.1...mentedb-v0.36.2) - 2026-07-30
+
+### Added
+
+- persist scope counts + a per-tenant blob store (cold O(1)) ([#413](https://github.com/nambok/mentedb/pull/413))
+
 ## [0.36.1](https://github.com/nambok/mentedb/compare/mentedb-v0.35.3...mentedb-v0.36.1) - 2026-07-30
 
 ### Added
