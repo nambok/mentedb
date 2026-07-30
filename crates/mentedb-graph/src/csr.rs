@@ -353,6 +353,55 @@ impl CsrGraph {
         results
     }
 
+    /// Count conflict edges in a single pass over the graph: `(contradicts,
+    /// supersedes)`, with undirected contradictions deduped so A<->B counts
+    /// once. Calling `outgoing` per node instead rescans the entire delta log
+    /// for every node (O(nodes * delta)); this walks the compressed edges and
+    /// the delta log once each (O(edges)) and loads no node content, so a
+    /// conflict badge on a large store is a cheap graph tally.
+    pub fn conflict_edge_counts(&self) -> (usize, usize) {
+        let norm = |a: u32, b: u32| if a <= b { (a, b) } else { (b, a) };
+        let mut contradicts: std::collections::HashSet<(u32, u32)> =
+            std::collections::HashSet::new();
+        let mut supersedes = 0usize;
+
+        // Compressed edges: one pass over each node's neighbor slice (not the
+        // delta log), so the total work is the number of compressed edges.
+        let node_count = self.idx_to_id.len() as u32;
+        for idx in 0..node_count {
+            let neighbors = self.csr.neighbors(idx);
+            let data = self.csr.edge_data_for(idx);
+            for (i, &nbr) in neighbors.iter().enumerate() {
+                if self.is_removed(idx, nbr) {
+                    continue;
+                }
+                match data[i].edge_type {
+                    EdgeType::Contradicts => {
+                        contradicts.insert(norm(idx, nbr));
+                    }
+                    EdgeType::Supersedes => supersedes += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        // Delta edges: one pass over the whole log, not once per node.
+        for d in &self.delta_edges {
+            if self.is_removed(d.source_idx, d.target_idx) {
+                continue;
+            }
+            match d.data.edge_type {
+                EdgeType::Contradicts => {
+                    contradicts.insert(norm(d.source_idx, d.target_idx));
+                }
+                EdgeType::Supersedes => supersedes += 1,
+                _ => {}
+            }
+        }
+
+        (contradicts.len(), supersedes)
+    }
+
     /// Get all incoming edges to a node (CSC + delta, minus removed).
     pub fn incoming(&self, id: MemoryId) -> Vec<(MemoryId, StoredEdge)> {
         let Some(&idx) = self.id_to_idx.get(&id) else {
@@ -570,6 +619,33 @@ mod tests {
         let idx2 = g.add_node(id);
         assert_eq!(idx1, idx2);
         assert_eq!(g.node_count(), 1);
+    }
+
+    #[test]
+    fn conflict_edge_counts_span_compressed_and_delta_and_dedup() {
+        let mut g = CsrGraph::new();
+        let (a, b, c, d) = (
+            MemoryId::new(),
+            MemoryId::new(),
+            MemoryId::new(),
+            MemoryId::new(),
+        );
+
+        // A contradiction that gets compacted into CSR, plus unrelated edge
+        // types that must not be counted.
+        g.add_edge(&make_edge(a, b, EdgeType::Contradicts));
+        g.add_edge(&make_edge(a, c, EdgeType::Related));
+        g.compact();
+
+        // A supersession and the reverse direction of the same contradiction,
+        // both still in the delta log. The reverse must dedup against the
+        // compacted forward edge.
+        g.add_edge(&make_edge(d, c, EdgeType::Supersedes));
+        g.add_edge(&make_edge(b, a, EdgeType::Contradicts));
+
+        let (contradicts, supersedes) = g.conflict_edge_counts();
+        assert_eq!(contradicts, 1, "A<->B is one undirected contradiction");
+        assert_eq!(supersedes, 1);
     }
 
     #[test]
