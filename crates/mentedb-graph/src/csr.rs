@@ -122,6 +122,14 @@ pub struct CsrGraph {
     delta_edges: Vec<DeltaEdge>,
     /// Edges marked for removal (source_idx, target_idx).
     removed_edges: Vec<(u32, u32)>,
+
+    /// Live edge count per type, maintained incrementally so counts (e.g. the
+    /// dashboard conflict badge) are O(1) instead of a walk over every node ever
+    /// created. The detectors store one directed edge per conflict pair, so a
+    /// directed count equals the pair count. Grounded authoritatively on
+    /// `compact` and after load; adjusted on add and per-node removal.
+    #[serde(default)]
+    edge_type_counts: HashMap<EdgeType, usize>,
 }
 
 impl CsrGraph {
@@ -134,6 +142,7 @@ impl CsrGraph {
             csc: CompressedStorage::default(),
             delta_edges: Vec::new(),
             removed_edges: Vec::new(),
+            edge_type_counts: HashMap::default(),
         }
     }
 
@@ -153,6 +162,48 @@ impl CsrGraph {
         let Some(&idx) = self.id_to_idx.get(&id) else {
             return;
         };
+
+        // Collect the types of this node's still-live edges so the running
+        // per-type counts can be decremented. `is_removed` guards against
+        // decrementing an edge twice when both of its endpoints are removed.
+        let mut decrements: Vec<EdgeType> = Vec::new();
+        {
+            let out_neighbors = self.csr.neighbors(idx).to_vec();
+            let out_types: Vec<EdgeType> = self
+                .csr
+                .edge_data_for(idx)
+                .iter()
+                .map(|e| e.edge_type)
+                .collect();
+            for (i, &neighbor) in out_neighbors.iter().enumerate() {
+                if !self.is_removed(idx, neighbor) {
+                    decrements.push(out_types[i]);
+                }
+            }
+            let in_neighbors = self.csc.neighbors(idx).to_vec();
+            let in_types: Vec<EdgeType> = self
+                .csc
+                .edge_data_for(idx)
+                .iter()
+                .map(|e| e.edge_type)
+                .collect();
+            for (i, &neighbor) in in_neighbors.iter().enumerate() {
+                if !self.is_removed(neighbor, idx) {
+                    decrements.push(in_types[i]);
+                }
+            }
+            for e in &self.delta_edges {
+                if e.source_idx == idx || e.target_idx == idx {
+                    decrements.push(e.data.edge_type);
+                }
+            }
+        }
+        for et in decrements {
+            if let Some(c) = self.edge_type_counts.get_mut(&et) {
+                *c = c.saturating_sub(1);
+            }
+        }
+
         // Mark all outgoing and incoming edges for removal
         for &neighbor in self.csr.neighbors(idx) {
             self.removed_edges.push((idx, neighbor));
@@ -188,6 +239,7 @@ impl CsrGraph {
             target_idx,
             data: StoredEdge::from_memory_edge(edge),
         });
+        *self.edge_type_counts.entry(edge.edge_type).or_default() += 1;
     }
 
     /// Strengthen an edge by incrementing its weight (Hebbian learning).
@@ -308,6 +360,9 @@ impl CsrGraph {
             }
         }
         self.delta_edges.extend(restore);
+        // Bulk type removal touches many edges via suppression and restore; just
+        // recount from the resulting live set rather than track each delta.
+        self.recompute_edge_counts();
         removed
     }
 
@@ -353,53 +408,43 @@ impl CsrGraph {
         results
     }
 
-    /// Count conflict edges in a single pass over the graph: `(contradicts,
-    /// supersedes)`, with undirected contradictions deduped so A<->B counts
-    /// once. Calling `outgoing` per node instead rescans the entire delta log
-    /// for every node (O(nodes * delta)); this walks the compressed edges and
-    /// the delta log once each (O(edges)) and loads no node content, so a
-    /// conflict badge on a large store is a cheap graph tally.
+    /// `(contradicts, supersedes)` live conflict-edge counts, read O(1) from the
+    /// running per-type counts. The detectors store one directed edge per
+    /// conflict pair, so a directed count is the pair count.
     pub fn conflict_edge_counts(&self) -> (usize, usize) {
-        let norm = |a: u32, b: u32| if a <= b { (a, b) } else { (b, a) };
-        let mut contradicts: std::collections::HashSet<(u32, u32)> =
-            std::collections::HashSet::new();
-        let mut supersedes = 0usize;
+        (
+            self.edge_type_counts
+                .get(&EdgeType::Contradicts)
+                .copied()
+                .unwrap_or(0),
+            self.edge_type_counts
+                .get(&EdgeType::Supersedes)
+                .copied()
+                .unwrap_or(0),
+        )
+    }
 
-        // Compressed edges: one pass over each node's neighbor slice (not the
-        // delta log), so the total work is the number of compressed edges.
+    /// Recount live edges by type from scratch. Authoritative but O(nodes +
+    /// edges); called only when the graph is already being walked wholesale
+    /// (`compact`, bulk type removal) or grounded after load, never on a read.
+    pub fn recompute_edge_counts(&mut self) {
+        let mut counts: HashMap<EdgeType, usize> = HashMap::default();
         let node_count = self.idx_to_id.len() as u32;
         for idx in 0..node_count {
             let neighbors = self.csr.neighbors(idx);
             let data = self.csr.edge_data_for(idx);
             for (i, &nbr) in neighbors.iter().enumerate() {
-                if self.is_removed(idx, nbr) {
-                    continue;
-                }
-                match data[i].edge_type {
-                    EdgeType::Contradicts => {
-                        contradicts.insert(norm(idx, nbr));
-                    }
-                    EdgeType::Supersedes => supersedes += 1,
-                    _ => {}
+                if !self.is_removed(idx, nbr) {
+                    *counts.entry(data[i].edge_type).or_default() += 1;
                 }
             }
         }
-
-        // Delta edges: one pass over the whole log, not once per node.
         for d in &self.delta_edges {
-            if self.is_removed(d.source_idx, d.target_idx) {
-                continue;
-            }
-            match d.data.edge_type {
-                EdgeType::Contradicts => {
-                    contradicts.insert(norm(d.source_idx, d.target_idx));
-                }
-                EdgeType::Supersedes => supersedes += 1,
-                _ => {}
+            if !self.is_removed(d.source_idx, d.target_idx) {
+                *counts.entry(d.data.edge_type).or_default() += 1;
             }
         }
-
-        (contradicts.len(), supersedes)
+        self.edge_type_counts = counts;
     }
 
     /// Get all incoming edges to a node (CSC + delta, minus removed).
@@ -508,6 +553,10 @@ impl CsrGraph {
 
         self.delta_edges.clear();
         self.removed_edges.clear();
+
+        // Ground the running per-type counts against the freshly compacted
+        // edge set, so any incremental drift since the last compaction is reset.
+        self.recompute_edge_counts();
     }
 
     fn build_compressed(
@@ -582,8 +631,13 @@ impl CsrGraph {
     /// Load the graph from a file.
     pub fn load(path: &std::path::Path) -> MenteResult<Self> {
         let data = std::fs::read(path)?;
-        let graph: Self =
+        let mut graph: Self =
             serde_json::from_slice(&data).map_err(|e| MenteError::Serialization(e.to_string()))?;
+        // Ground the per-type counts from the loaded edges. Snapshots written
+        // before this field existed carry an empty map; recomputing makes the
+        // counts correct regardless, and the edge-log replay in
+        // `GraphManager::open` then adjusts for changes since the snapshot.
+        graph.recompute_edge_counts();
         Ok(graph)
     }
 }
@@ -622,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn conflict_edge_counts_span_compressed_and_delta_and_dedup() {
+    fn edge_type_counts_track_add_compact_and_remove() {
         let mut g = CsrGraph::new();
         let (a, b, c, d) = (
             MemoryId::new(),
@@ -631,21 +685,29 @@ mod tests {
             MemoryId::new(),
         );
 
-        // A contradiction that gets compacted into CSR, plus unrelated edge
-        // types that must not be counted.
+        // Adds land in the delta log and bump the running counts. Related edges
+        // are not conflicts and must not be counted.
         g.add_edge(&make_edge(a, b, EdgeType::Contradicts));
+        g.add_edge(&make_edge(c, d, EdgeType::Supersedes));
         g.add_edge(&make_edge(a, c, EdgeType::Related));
+        assert_eq!(g.conflict_edge_counts(), (1, 1));
+        // An exact-duplicate add is a no-op and must not double count.
+        g.add_edge(&make_edge(a, b, EdgeType::Contradicts));
+        assert_eq!(g.conflict_edge_counts(), (1, 1));
+
+        // Counts survive compaction (the CSR is rebuilt and the counts are
+        // reground from the compacted edge set).
         g.compact();
+        assert_eq!(g.conflict_edge_counts(), (1, 1));
 
-        // A supersession and the reverse direction of the same contradiction,
-        // both still in the delta log. The reverse must dedup against the
-        // compacted forward edge.
-        g.add_edge(&make_edge(d, c, EdgeType::Supersedes));
-        g.add_edge(&make_edge(b, a, EdgeType::Contradicts));
+        // A new edge after compaction lands in the delta log again.
+        g.add_edge(&make_edge(a, d, EdgeType::Supersedes));
+        assert_eq!(g.conflict_edge_counts(), (1, 2));
 
-        let (contradicts, supersedes) = g.conflict_edge_counts();
-        assert_eq!(contradicts, 1, "A<->B is one undirected contradiction");
-        assert_eq!(supersedes, 1);
+        // Removing a node drops its edges from the counts: a->b (contradicts,
+        // now compacted) and a->d (supersedes, in delta). c->d supersedes stays.
+        g.remove_node(a);
+        assert_eq!(g.conflict_edge_counts(), (0, 1));
     }
 
     #[test]
