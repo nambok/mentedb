@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.1](https://github.com/nambok/mentedb/compare/mentedb-v0.35.3...mentedb-v0.36.1) - 2026-07-30
+
+### Added
+
+- O(1) scope counts for the dashboard (type/owner/scope/project) ([#408](https://github.com/nambok/mentedb/pull/408))
+
+### Other
+
+- release v0.35.4 ([#407](https://github.com/nambok/mentedb/pull/407))
+
 ## [0.36.0](https://github.com/nambok/mentedb/compare/mentedb-v0.35.3...mentedb-v0.36.0) - 2026-07-30
 
 ### Added
