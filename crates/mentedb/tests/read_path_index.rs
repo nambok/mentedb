@@ -111,7 +111,7 @@ fn memory_ids_with_tag_finds_only_the_tagged() {
 }
 
 #[test]
-fn conflict_edge_counts_tally_the_graph_without_loading_nodes() {
+fn conflict_edge_counts_track_add_and_forget_without_loading_nodes() {
     let (_dir, db) = open();
     let a = store(&db, "the database uses Postgres", 100, &[]);
     let b = store(&db, "the database uses MySQL", 200, &[]);
@@ -129,12 +129,18 @@ fn conflict_edge_counts_tally_the_graph_without_loading_nodes() {
         label: None,
     };
 
+    // The detectors store one directed edge per conflict pair, so a directed
+    // count is the pair count.
     db.relate(edge(a, b, EdgeType::Contradicts)).unwrap();
-    // The reverse direction of the same contradiction must not double count.
-    db.relate(edge(b, a, EdgeType::Contradicts)).unwrap();
     db.relate(edge(d, c, EdgeType::Supersedes)).unwrap();
+    assert_eq!(db.conflict_edge_counts(), (1, 1));
 
-    let (contradicts, supersedes) = db.conflict_edge_counts();
-    assert_eq!(contradicts, 1, "A<->B is one undirected contradiction");
-    assert_eq!(supersedes, 1);
+    // Forgetting an endpoint drops that pair from the running counts, with no
+    // graph rescan on the read.
+    db.forget(b).unwrap();
+    assert_eq!(
+        db.conflict_edge_counts(),
+        (0, 1),
+        "the contradiction goes with b, the supersession stays"
+    );
 }
