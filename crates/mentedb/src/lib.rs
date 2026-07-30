@@ -804,12 +804,24 @@ impl MenteDb {
                 .load(&cognitive_dir.join("entities.json"));
         }
 
+        // Load the persisted scope counts so a cold reopen is O(1); a missing or
+        // unreadable snapshot, or one whose stamped memory count no longer
+        // matches (writes landed after it via WAL replay), leaves them
+        // ungrounded (lazily recounted on the first read, then re-persisted).
+        let current_count = page_map.len();
+        let (scope_counts, scope_counts_ready) = std::fs::read(path.join("scope_counts.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<(usize, ScopeCounts)>(&b).ok())
+            .filter(|(count, _)| *count == current_count)
+            .map(|(_, c)| (c, true))
+            .unwrap_or_else(|| (ScopeCounts::default(), false));
+
         Ok(Self {
             storage,
             index,
             graph,
-            scope_counts: RwLock::new(ScopeCounts::default()),
-            scope_counts_ready: std::sync::atomic::AtomicBool::new(false),
+            scope_counts: RwLock::new(scope_counts),
+            scope_counts_ready: std::sync::atomic::AtomicBool::new(scope_counts_ready),
             page_map: RwLock::new(page_map),
             flushes_since_snapshot: std::sync::atomic::AtomicU32::new(0),
             stores: std::sync::atomic::AtomicU64::new(0),
@@ -1977,6 +1989,39 @@ impl MenteDb {
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Read a persisted per-tenant blob by key (under `<path>/blobs/`), or None
+    /// if absent. Lets the host cache an expensive derived result (e.g. the
+    /// stats page) on the tenant's own storage, so a cold reopen serves it
+    /// without recomputing.
+    pub fn read_blob(&self, key: &str) -> Option<Vec<u8>> {
+        std::fs::read(self.blob_path(key)).ok()
+    }
+
+    /// Persist a per-tenant blob by key. Best effort; a failed write just makes
+    /// the next read a miss.
+    pub fn write_blob(&self, key: &str, data: &[u8]) {
+        let path = self.blob_path(key);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(path, data);
+    }
+
+    fn blob_path(&self, key: &str) -> PathBuf {
+        // Collapse the key to one safe path segment so it cannot escape the dir.
+        let safe: String = key
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        self.path.join("blobs").join(safe)
+    }
+
     /// Ids of the newest `limit` memories (descending by creation time),
     /// excluding any tagged with an `exclude_tags` entry and beginning after
     /// `after` when given. Resolved entirely from the temporal and bitmap
@@ -2887,6 +2932,21 @@ impl MenteDb {
     fn write_snapshots(&self) -> MenteResult<()> {
         self.index.save(&self.path.join("indexes"))?;
         self.graph.save(&self.path.join("graph"))?;
+
+        // Persist the dashboard scope counts so a cold reopen loads them in O(1)
+        // instead of recounting every memory. Only once they have been grounded;
+        // an ungrounded snapshot would just be zeros.
+        if self
+            .scope_counts_ready
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            // Stamp the memory count so a reopen can tell whether writes landed
+            // after this snapshot (WAL replay) and the counts are stale.
+            let stamped = (self.memory_count(), &*self.scope_counts.read());
+            if let Ok(bytes) = serde_json::to_vec(&stamped) {
+                let _ = std::fs::write(self.path.join("scope_counts.json"), bytes);
+            }
+        }
 
         // Persist cognitive subsystem state.
         let cognitive_dir = self.path.join("cognitive");

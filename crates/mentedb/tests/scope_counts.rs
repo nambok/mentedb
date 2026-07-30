@@ -128,3 +128,37 @@ fn first_read_grounds_writes_made_before_it() {
         "grounded from the store, hidden excluded"
     );
 }
+
+#[test]
+fn counts_and_blobs_persist_across_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let db = MenteDb::open_with_config(dir.path(), config()).expect("open");
+        db.store(node(1, 1, MemoryType::Semantic, "a", &[]))
+            .unwrap();
+        db.store(node(
+            1,
+            1,
+            MemoryType::Procedural,
+            "b",
+            &["scope:project:apex"],
+        ))
+        .unwrap();
+        db.store(node(1, 1, MemoryType::Episodic, "raw turn", &["turn"]))
+            .unwrap();
+        assert_eq!(db.scope_counts().total, 2, "grounds, hidden excluded");
+        db.write_blob("stats", b"cached-stats-payload");
+        db.flush_full().expect("flush");
+    }
+    // Reopen: counts come from the persisted snapshot (no recount), blob reads.
+    let db = MenteDb::open_with_config(dir.path(), config()).expect("reopen");
+    let c = db.scope_counts();
+    assert_eq!(c.total, 2, "persisted counts survive a cold reopen");
+    assert_eq!(c.by_type.get("procedural"), Some(&1));
+    assert_eq!(c.by_project.get("apex"), Some(&1));
+    assert_eq!(
+        db.read_blob("stats").as_deref(),
+        Some(&b"cached-stats-payload"[..])
+    );
+    assert_eq!(db.read_blob("never-written"), None);
+}
