@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.3](https://github.com/nambok/mentedb/compare/mentedb-graph-v0.35.2...mentedb-graph-v0.35.3) - 2026-07-30
+
+### Other
+
+- O(1) conflict counts via a maintained per-type edge count ([#406](https://github.com/nambok/mentedb/pull/406))
+
 ## [0.32.0](https://github.com/nambok/mentedb/compare/mentedb-graph-v0.31.0...mentedb-graph-v0.32.0) - 2026-07-27
 
 ### Other
