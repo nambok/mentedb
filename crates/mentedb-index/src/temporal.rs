@@ -49,6 +49,41 @@ impl TemporalIndex {
             .collect()
     }
 
+    /// The newest `limit` ids (descending by timestamp) that are not in `skip`,
+    /// beginning after `after` when it is given. Walks only the in-memory index
+    /// and loads nothing; stops as soon as `limit` ids are collected, so the
+    /// cost is bounded by the page returned rather than the whole index. When
+    /// `after` is set, ids are passed over in the descending walk until `after`
+    /// itself is seen, which makes this serve cursor pagination too.
+    pub fn latest_filtered(
+        &self,
+        limit: usize,
+        skip: &std::collections::HashSet<MemoryId>,
+        after: Option<MemoryId>,
+    ) -> Vec<MemoryId> {
+        let inner = self.inner.read();
+        let mut results = Vec::with_capacity(limit.min(1024));
+        let mut seen_after = after.is_none();
+        for (_, ids) in inner.tree.iter().rev() {
+            for &id in ids.iter().rev() {
+                if !seen_after {
+                    if Some(id) == after {
+                        seen_after = true;
+                    }
+                    continue;
+                }
+                if skip.contains(&id) {
+                    continue;
+                }
+                results.push(id);
+                if results.len() >= limit {
+                    return results;
+                }
+            }
+        }
+        results
+    }
+
     /// Get the `n` most recent memories (by timestamp, descending).
     pub fn latest(&self, n: usize) -> Vec<MemoryId> {
         let inner = self.inner.read();

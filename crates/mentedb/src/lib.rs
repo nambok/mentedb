@@ -1847,6 +1847,83 @@ impl MenteDb {
         self.page_map.read().len()
     }
 
+    /// Ids of the newest `limit` memories (descending by creation time),
+    /// excluding any tagged with an `exclude_tags` entry and beginning after
+    /// `after` when given. Resolved entirely from the temporal and bitmap
+    /// indexes: no memory content is loaded and no full scan runs, so serving a
+    /// page of a dashboard list costs the size of the page, not the size of the
+    /// store. The caller loads only the returned ids with [`Self::get_memory`].
+    pub fn recent_memory_ids(
+        &self,
+        limit: usize,
+        exclude_tags: &[&str],
+        after: Option<MemoryId>,
+    ) -> Vec<MemoryId> {
+        let skip = self.ids_with_any_tag(exclude_tags);
+        self.index.temporal.latest_filtered(limit, &skip, after)
+    }
+
+    /// Ids of every memory carrying `tag`, straight from the bitmap index. No
+    /// content is loaded and no scan runs, so a small tagged set (standing
+    /// rules, the profile node, a project) is found in time proportional to the
+    /// set, not the store.
+    pub fn memory_ids_with_tag(&self, tag: &str) -> Vec<MemoryId> {
+        self.index.bitmap.query_tag(tag)
+    }
+
+    /// Count of memories that carry none of `exclude_tags`, from the O(1) total
+    /// and the bitmap index. Never loads content or scans; the union of the
+    /// excluded tag sets is computed in memory.
+    pub fn count_excluding_tags(&self, exclude_tags: &[&str]) -> usize {
+        let excluded = self.ids_with_any_tag(exclude_tags).len();
+        self.memory_count().saturating_sub(excluded)
+    }
+
+    /// The union of the id sets for `tags`, from the bitmap index. In memory,
+    /// no storage loads.
+    fn ids_with_any_tag(&self, tags: &[&str]) -> std::collections::HashSet<MemoryId> {
+        let mut set = std::collections::HashSet::new();
+        for tag in tags {
+            for id in self.index.bitmap.query_tag(tag) {
+                set.insert(id);
+            }
+        }
+        set
+    }
+
+    /// `(contradicts, supersedes)` conflict-edge counts from the in-memory
+    /// graph, deduping undirected contradiction pairs so A<->B counts once.
+    /// Loads no node content, so a conflict badge costs a graph walk rather than
+    /// a full scan with two storage reads per pair. Byte-identical re-saves are
+    /// routed to `Derived` edges at write time, so they never appear here.
+    pub fn conflict_edge_counts(&self) -> (usize, usize) {
+        let graph = self.graph();
+        let csr = graph.graph();
+        let mut contradicts: std::collections::HashSet<(MemoryId, MemoryId)> =
+            std::collections::HashSet::new();
+        let mut supersedes = 0usize;
+        for id in self.memory_ids() {
+            if !csr.contains_node(id) {
+                continue;
+            }
+            for (target, edge) in csr.outgoing(id) {
+                match edge.edge_type {
+                    EdgeType::Contradicts => {
+                        let key = if id < target {
+                            (id, target)
+                        } else {
+                            (target, id)
+                        };
+                        contradicts.insert(key);
+                    }
+                    EdgeType::Supersedes => supersedes += 1,
+                    _ => {}
+                }
+            }
+        }
+        (contradicts.len(), supersedes)
+    }
+
     /// Fold one op's latency into an exponentially-weighted moving average, in
     /// microseconds. An EMA (not a lifetime mean) so a one-off slow op, e.g. right
     /// after a cold open, decays out over the next few ops instead of permanently
