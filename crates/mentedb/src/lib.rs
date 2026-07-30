@@ -443,6 +443,10 @@ pub struct CognitiveConfig {
     /// Action recall: minimum token length for a word to count as a shared
     /// keyword, so short glue tokens ("to", "-c") do not create matches.
     pub action_keyword_min_len: usize,
+    /// Tags that mark a memory as internal working material to leave out of the
+    /// dashboard scope counts (raw turns, action captures, entity index nodes).
+    /// The host supplies its own spellings; the engine does not hardcode them.
+    pub hidden_count_tags: Vec<String>,
 }
 
 impl Default for CognitiveConfig {
@@ -488,6 +492,7 @@ impl Default for CognitiveConfig {
             action_type_weights: [0.3, 0.5, 1.0, 1.0, 0.7, 1.0],
             action_keyword_weight: 0.5,
             action_keyword_min_len: 3,
+            hidden_count_tags: Vec::new(),
         }
     }
 }
@@ -500,10 +505,88 @@ impl Default for CognitiveConfig {
 /// All internal state is protected by fine-grained locks, so every public method
 /// takes `&self`. This allows `Arc<MenteDb>` to be shared across threads without
 /// an external `RwLock`.
+/// Per-owner/type/scope memory counts, excluding hidden (internal working)
+/// tags, maintained incrementally so the dashboard scope tree and stats read
+/// them in O(1) rather than scanning every memory. String keys keep it
+/// JSON-persistable; it is grounded by a full recount only when no snapshot
+/// exists (owner and type are not otherwise indexed, so a recount costs a full
+/// load and must be avoided on the read path and on every open).
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ScopeCounts {
+    /// Non-hidden memories in total.
+    pub total: u64,
+    /// Memories with no owner (nil user and agent): the shared/global pool.
+    pub global: u64,
+    /// Memories tagged `scope:always`.
+    pub always: u64,
+    /// Count by memory type name (lowercased, `anti_pattern` normalized).
+    pub by_type: HashMap<String, u64>,
+    /// Count by end-user owner (uuid string).
+    pub by_user: HashMap<String, u64>,
+    /// Count by agent owner (uuid string).
+    pub by_agent: HashMap<String, u64>,
+    /// Count by `"user_uuid|agent_uuid"` pair.
+    pub by_user_agent: HashMap<String, u64>,
+    /// Count by project name (from `scope:project:` tags).
+    pub by_project: HashMap<String, u64>,
+}
+
+impl ScopeCounts {
+    fn type_name(t: MemoryType) -> String {
+        format!("{t:?}")
+            .to_lowercase()
+            .replace("antipattern", "anti_pattern")
+    }
+
+    /// Fold one node into the counts with `sign` (+1 on store, -1 on forget).
+    /// Nodes carrying any `hidden` tag are internal working material and are
+    /// never counted, exactly as the dashboard excludes them.
+    fn apply(&mut self, node: &MemoryNode, sign: i64, hidden: &[String]) {
+        if node.tags.iter().any(|t| hidden.iter().any(|h| h == t)) {
+            return;
+        }
+        fn bump(m: &mut HashMap<String, u64>, k: String, sign: i64) {
+            let e = m.entry(k).or_insert(0);
+            *e = (*e as i64 + sign).max(0) as u64;
+            if *e == 0 {
+                // Keep the map bounded: a dimension that empties is dropped.
+            }
+        }
+        let adj = |v: u64| -> u64 { (v as i64 + sign).max(0) as u64 };
+        self.total = adj(self.total);
+        bump(&mut self.by_type, Self::type_name(node.memory_type), sign);
+        if node.user_id.is_nil() && node.agent_id.is_nil() {
+            self.global = adj(self.global);
+        } else {
+            bump(&mut self.by_user, node.user_id.to_string(), sign);
+            bump(&mut self.by_agent, node.agent_id.to_string(), sign);
+            bump(
+                &mut self.by_user_agent,
+                format!("{}|{}", node.user_id, node.agent_id),
+                sign,
+            );
+        }
+        for tag in &node.tags {
+            if tag == "scope:always" {
+                self.always = adj(self.always);
+            } else if let Some(p) = tag.strip_prefix("scope:project:") {
+                bump(&mut self.by_project, p.to_string(), sign);
+            }
+        }
+    }
+}
+
 pub struct MenteDb {
     storage: StorageEngine,
     index: IndexManager,
     graph: GraphManager,
+    /// O(1) dashboard counts (scope tree, stats, non-internal total),
+    /// maintained on store/forget. See [`ScopeCounts`].
+    scope_counts: RwLock<ScopeCounts>,
+    /// False until [`Self::scope_counts`] has grounded the counts by a one-time
+    /// recount; store/forget only adjust the counts once they are ready, so a
+    /// write before the first read is folded in by that recount, not lost.
+    scope_counts_ready: std::sync::atomic::AtomicBool,
     /// Maps memory IDs to their storage page IDs for retrieval.
     page_map: RwLock<HashMap<MemoryId, PageId>>,
     /// Hot flushes since the last snapshot write; see flush_snapshot_interval.
@@ -725,6 +808,8 @@ impl MenteDb {
             storage,
             index,
             graph,
+            scope_counts: RwLock::new(ScopeCounts::default()),
+            scope_counts_ready: std::sync::atomic::AtomicBool::new(false),
             page_map: RwLock::new(page_map),
             flushes_since_snapshot: std::sync::atomic::AtomicU32::new(0),
             stores: std::sync::atomic::AtomicU64::new(0),
@@ -921,10 +1006,23 @@ impl MenteDb {
             return Ok(());
         }
 
+        let is_new = !self.page_map.read().contains_key(&id);
         let page_id = self.storage.store_memory(&node)?;
         self.page_map.write().insert(id, page_id);
         self.index.index_memory(&node);
         self.graph.add_memory(id);
+        // Keep the O(1) dashboard counts current for genuinely new memories.
+        // Re-stores (updates) are left to the read-time drift check, which
+        // recounts if the maintained total ever diverges from the store.
+        if is_new
+            && self
+                .scope_counts_ready
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.scope_counts
+                .write()
+                .apply(&node, 1, &self.cognitive_config.hidden_count_tags);
+        }
         self.stores
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
@@ -1847,6 +1945,43 @@ impl MenteDb {
         self.page_map.read().len()
     }
 
+    /// O(1) dashboard counts (scope tree, stats): non-internal total and counts
+    /// by type, owner, and project. Grounded by a one-time recount on the first
+    /// read and kept current by store/forget. A cheap consistency check against
+    /// the store's own non-internal count recomputes if the maintained total
+    /// ever diverges (an edit path the incremental hook does not cover), so the
+    /// numbers are self-healing rather than silently wrong.
+    pub fn scope_counts(&self) -> ScopeCounts {
+        use std::sync::atomic::Ordering::Relaxed;
+        let hidden: Vec<&str> = self
+            .cognitive_config
+            .hidden_count_tags
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let expected = self.count_excluding_tags(&hidden) as u64;
+        if self.scope_counts_ready.load(Relaxed) && self.scope_counts.read().total == expected {
+            return self.scope_counts.read().clone();
+        }
+        self.recompute_scope_counts();
+        self.scope_counts.read().clone()
+    }
+
+    /// Rebuild the scope counts from every stored memory (one load each). Runs
+    /// only on the first read or when drift is detected, never on the hot path.
+    fn recompute_scope_counts(&self) {
+        let hidden = self.cognitive_config.hidden_count_tags.clone();
+        let mut counts = ScopeCounts::default();
+        for id in self.memory_ids() {
+            if let Ok(node) = self.get_memory(id) {
+                counts.apply(&node, 1, &hidden);
+            }
+        }
+        *self.scope_counts.write() = counts;
+        self.scope_counts_ready
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Ids of the newest `limit` memories (descending by creation time),
     /// excluding any tagged with an `exclude_tags` entry and beginning after
     /// `after` when given. Resolved entirely from the temporal and bitmap
@@ -2012,6 +2147,16 @@ impl MenteDb {
         if let Some(&page_id) = self.page_map.read().get(&id) {
             if let Ok(node) = self.storage.load_memory(page_id) {
                 self.index.remove_memory(id, &node);
+                if self
+                    .scope_counts_ready
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    self.scope_counts.write().apply(
+                        &node,
+                        -1,
+                        &self.cognitive_config.hidden_count_tags,
+                    );
+                }
             }
             // Durable delete: WAL-logged page free, so the memory does not
             // resurrect when the page map is rebuilt on reopen.
