@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.2](https://github.com/nambok/mentedb/compare/mentedb-index-v0.37.1...mentedb-index-v0.37.2) - 2026-07-31
+
+### Added
+
+- oldest-first temporal browse so oldest and contextual sorts never scan ([#419](https://github.com/nambok/mentedb/pull/419))
+
 ## [0.37.1](https://github.com/nambok/mentedb/compare/mentedb-index-v0.37.0...mentedb-index-v0.37.1) - 2026-07-31
 
 ### Added
