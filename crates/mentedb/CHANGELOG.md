@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.0](https://github.com/nambok/mentedb/compare/mentedb-v0.36.2...mentedb-v0.37.0) - 2026-07-31
+
+### Added
+
+- O(1) dashboard stats snapshot and maintained conflict-edge list ([#415](https://github.com/nambok/mentedb/pull/415))
+
 ## [0.36.2](https://github.com/nambok/mentedb/compare/mentedb-v0.36.1...mentedb-v0.36.2) - 2026-07-30
 
 ### Added
