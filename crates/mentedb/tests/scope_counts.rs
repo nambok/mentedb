@@ -81,6 +81,60 @@ fn counts_by_type_owner_scope_excluding_hidden() {
         Some(&1)
     );
     assert_eq!(c.by_project.get("apex"), Some(&1));
+
+    // Growth is keyed by creation month (UTC). All five nodes were created now,
+    // but the raw turn is hidden, so the current month counts the four curated
+    // ones. Sum across months must equal the (hidden-excluded) total.
+    let growth_total: u64 = c.growth.values().sum();
+    assert_eq!(growth_total, 4, "growth sums to the non-hidden total");
+}
+
+#[test]
+fn growth_is_keyed_by_creation_month() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    // Two fixed creation instants in different months (UTC micros).
+    // 2021-01-15T00:00:00Z and 2021-03-20T00:00:00Z.
+    let mut jan = node(1, 1, MemoryType::Semantic, "jan", &[]);
+    jan.created_at = 1_610_668_800_000_000; // 2021-01-15
+    let mut mar = node(1, 1, MemoryType::Semantic, "mar", &[]);
+    mar.created_at = 1_616_198_400_000_000; // 2021-03-20
+    db.store(jan).unwrap();
+    db.store(mar).unwrap();
+    let c = db.scope_counts();
+    assert_eq!(c.growth.get("2021-01"), Some(&1));
+    assert_eq!(c.growth.get("2021-03"), Some(&1));
+}
+
+#[test]
+fn stats_snapshot_materializes_health_usage_and_persists() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let db = open(dir.path());
+        // Two curated project memories, one recalled; one hidden turn excluded.
+        let mut a = node(1, 1, MemoryType::Semantic, "a", &["scope:project:apex"]);
+        a.access_count = 3;
+        let b = node(1, 1, MemoryType::Procedural, "b", &["scope:project:apex"]);
+        db.store(a).unwrap();
+        db.store(b).unwrap();
+        db.store(node(1, 1, MemoryType::Episodic, "turn", &["turn"]))
+            .unwrap();
+
+        // No snapshot until the sweep materializes one.
+        assert!(db.stats_snapshot().is_none());
+        let snap = db.refresh_stats_snapshot();
+        assert_eq!(snap.count, 2, "hidden turn excluded from health count");
+        assert_eq!(snap.project_usage.get("apex"), Some(&3), "recalls summed");
+        assert_eq!(snap.health_distribution.iter().sum::<u64>(), 2);
+        assert!(snap.avg_health > 0.0 && snap.avg_health <= 1.0);
+    }
+    // Persisted: a cold reopen serves it from disk with no rescan.
+    let db = open(dir.path());
+    let snap = db
+        .stats_snapshot()
+        .expect("snapshot persisted across reopen");
+    assert_eq!(snap.count, 2);
+    assert_eq!(snap.project_usage.get("apex"), Some(&3));
 }
 
 #[test]

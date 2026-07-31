@@ -271,6 +271,20 @@ impl GraphManager {
     pub fn conflict_edge_counts(&self) -> (usize, usize) {
         self.graph.read().conflict_edge_counts()
     }
+
+    /// Every live conflict-class edge as `(source, target, type, weight)`, read
+    /// in O(conflicts) from the maintained pair list. Lets the dashboard conflict
+    /// view enumerate the pairs without walking the whole graph.
+    pub fn conflict_edges(
+        &self,
+    ) -> Vec<(
+        mentedb_core::types::MemoryId,
+        mentedb_core::types::MemoryId,
+        mentedb_core::edge::EdgeType,
+        f32,
+    )> {
+        self.graph.read().conflict_edges()
+    }
 }
 
 impl Default for GraphManager {
