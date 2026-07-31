@@ -529,6 +529,11 @@ pub struct ScopeCounts {
     pub by_user_agent: HashMap<String, u64>,
     /// Count by project name (from `scope:project:` tags).
     pub by_project: HashMap<String, u64>,
+    /// Count by creation month (`YYYY-MM`, UTC) for the growth timeline. A
+    /// memory's creation month never changes, so this is exact and maintained
+    /// incrementally like the rest, giving the dashboard an O(1) growth chart
+    /// and an exact "this month" figure without a scan.
+    pub growth: HashMap<String, u64>,
 }
 
 impl ScopeCounts {
@@ -536,6 +541,23 @@ impl ScopeCounts {
         format!("{t:?}")
             .to_lowercase()
             .replace("antipattern", "anti_pattern")
+    }
+
+    /// `YYYY-MM` (UTC) for a microsecond timestamp, computed without a calendar
+    /// dependency via Howard Hinnant's `civil_from_days`. Matches the platform's
+    /// `chrono` `%Y-%m` formatting so the growth keys line up across the wire.
+    fn month_key(micros: u64) -> String {
+        let days = (micros / 1_000_000) as i64 / 86_400;
+        let z = days + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = if m <= 2 { y + 1 } else { y };
+        format!("{y:04}-{m:02}")
     }
 
     /// Fold one node into the counts with `sign` (+1 on store, -1 on forget).
@@ -555,6 +577,7 @@ impl ScopeCounts {
         let adj = |v: u64| -> u64 { (v as i64 + sign).max(0) as u64 };
         self.total = adj(self.total);
         bump(&mut self.by_type, Self::type_name(node.memory_type), sign);
+        bump(&mut self.growth, Self::month_key(node.created_at), sign);
         if node.user_id.is_nil() && node.agent_id.is_nil() {
             self.global = adj(self.global);
         } else {
@@ -574,6 +597,36 @@ impl ScopeCounts {
             }
         }
     }
+}
+
+/// The whole-tenant analytics that cannot be a pure count: the decayed-salience
+/// health distribution (a continuous function of now, so it drifts with no write
+/// event and has no exact sub-linear real-time aggregate under the decay +
+/// access-bonus + clamp formula), the recall-count usage sums, and the entity and
+/// community totals. These require one pass over the tenant, so instead of
+/// scanning on the read path they are materialized by the background maintenance
+/// sweep (which already walks every node for archival) and served O(1). With a
+/// multi-day salience half-life the histogram moves under a percent per hour, so a
+/// snapshot refreshed each sweep is exact on the chart. Persisted per tenant so a
+/// cold reopen serves it from disk rather than rescanning.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct StatsSnapshot {
+    /// When this snapshot was computed (micros since epoch).
+    pub computed_at_us: u64,
+    /// Non-hidden memories counted at snapshot time (for staleness/debug).
+    pub count: u64,
+    /// Mean decayed salience across non-hidden memories.
+    pub avg_health: f64,
+    /// Decayed-salience histogram: 5 buckets from 0.0-0.2 up to 0.8-1.0.
+    pub health_distribution: Vec<u64>,
+    /// Total recalls (access counts summed) per project scope.
+    pub project_usage: HashMap<String, u64>,
+    /// Total recalls per scope kind (always vs contextual).
+    pub scope_usage: HashMap<String, u64>,
+    /// Distinct entity names in the tenant (nil-owner pool).
+    pub entities: u64,
+    /// Community summary memories in the tenant (nil-owner pool).
+    pub communities: u64,
 }
 
 pub struct MenteDb {
@@ -1989,6 +2042,104 @@ impl MenteDb {
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
+    const STATS_SNAPSHOT_BLOB: &'static str = "stats_snapshot_v1";
+
+    /// Recompute the materialized [`StatsSnapshot`] in one pass over the tenant
+    /// and persist it. This is the ONLY place the whole-tenant health/usage scan
+    /// happens: it is driven by the background maintenance sweep (which already
+    /// walks every node for archival), never the dashboard read path, so no
+    /// request ever pays O(N). Uses the same hidden-tag exclusion as the scope
+    /// counts so the two agree.
+    pub fn refresh_stats_snapshot(&self) -> StatsSnapshot {
+        let hidden = &self.cognitive_config.hidden_count_tags;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        let page_ids: Vec<PageId> = self.page_map.read().values().copied().collect();
+
+        let mut total_health = 0.0f64;
+        let mut count = 0u64;
+        let mut health_hist = [0u64; 5];
+        let mut project_usage: HashMap<String, u64> = HashMap::new();
+        let mut scope_usage: HashMap<String, u64> = HashMap::new();
+        let mut entity_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut communities = 0u64;
+
+        for pid in &page_ids {
+            let Ok(node) = self.storage.load_memory(*pid) else {
+                continue;
+            };
+            // Entity and community totals count the tenant's nil-owner pool, the
+            // same scope the dashboard's entity/community reads use.
+            if node.user_id.is_nil() && node.agent_id.is_nil() {
+                for tag in &node.tags {
+                    if let Some(name) = tag.strip_prefix("entity:") {
+                        entity_names.insert(name.to_lowercase().trim().to_string());
+                    } else if tag == "community_summary" {
+                        communities += 1;
+                    }
+                }
+            }
+            // Analytics reflect curated knowledge, not internal working material.
+            if node.tags.iter().any(|t| hidden.iter().any(|h| h == t)) {
+                continue;
+            }
+            let health = self.decay.compute_decay(
+                node.salience,
+                node.created_at,
+                node.accessed_at,
+                node.access_count,
+                now,
+            ) as f64;
+            total_health += health;
+            count += 1;
+            health_hist[((health * 5.0) as usize).min(4)] += 1;
+
+            let recalls = node.access_count as u64;
+            let scope = if node.tags.iter().any(|t| t == "scope:always") {
+                "always"
+            } else {
+                "contextual"
+            };
+            *scope_usage.entry(scope.to_string()).or_insert(0) += recalls;
+            for tag in &node.tags {
+                if let Some(project) = tag.strip_prefix("scope:project:") {
+                    *project_usage.entry(project.to_string()).or_insert(0) += recalls;
+                }
+            }
+        }
+
+        let snapshot = StatsSnapshot {
+            computed_at_us: now,
+            count,
+            avg_health: if count > 0 {
+                total_health / count as f64
+            } else {
+                1.0
+            },
+            health_distribution: health_hist.to_vec(),
+            project_usage,
+            scope_usage,
+            entities: entity_names.len() as u64,
+            communities,
+        };
+        if let Ok(bytes) = serde_json::to_vec(&snapshot) {
+            self.write_blob(Self::STATS_SNAPSHOT_BLOB, &bytes);
+        }
+        snapshot
+    }
+
+    /// The last materialized analytics snapshot, or None if the maintenance sweep
+    /// has not produced one yet (a brand-new tenant). O(1): a small blob read, no
+    /// scan. Callers serve the exact O(1) scope counts alongside this and, on a
+    /// None, kick a background [`Self::refresh_stats_snapshot`] rather than
+    /// blocking the request on the scan.
+    pub fn stats_snapshot(&self) -> Option<StatsSnapshot> {
+        self.read_blob(Self::STATS_SNAPSHOT_BLOB)
+            .and_then(|b| serde_json::from_slice::<StatsSnapshot>(&b).ok())
+    }
+
     /// Read a persisted per-tenant blob by key (under `<path>/blobs/`), or None
     /// if absent. Lets the host cache an expensive derived result (e.g. the
     /// stats page) on the tenant's own storage, so a cold reopen serves it
@@ -2074,6 +2225,14 @@ impl MenteDb {
     /// they never appear here.
     pub fn conflict_edge_counts(&self) -> (usize, usize) {
         self.graph().conflict_edge_counts()
+    }
+
+    /// Every live conflict-class edge as `(source, target, type, weight)`, read
+    /// in O(conflicts) from the graph's maintained pair list. The dashboard
+    /// conflict view uses this to enumerate the actual pairs without walking
+    /// every node's out-edges (which rescans the delta log per node).
+    pub fn conflict_edges(&self) -> Vec<(MemoryId, MemoryId, EdgeType, f32)> {
+        self.graph().conflict_edges()
     }
 
     /// Fold one op's latency into an exponentially-weighted moving average, in

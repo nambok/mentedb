@@ -130,6 +130,23 @@ pub struct CsrGraph {
     /// `compact` and after load; adjusted on add and per-node removal.
     #[serde(default)]
     edge_type_counts: HashMap<EdgeType, usize>,
+
+    /// Live conflict-class edges (contradicts, supersedes) with their weight,
+    /// maintained incrementally so the dashboard conflict view enumerates the
+    /// actual pairs in O(conflicts) instead of walking every node's out-edges
+    /// (which rescans the delta log per node, O(nodes x delta)). Keyed by
+    /// `(source, target, type)` so a pair carrying two different edge types does
+    /// not collide. Skipped on serialize (a tuple key is not a JSON map key) and
+    /// reground from the live edges by `recompute_edge_counts` on load, so it
+    /// costs nothing on disk and is always correct after a restart.
+    #[serde(skip)]
+    conflict_edges: HashMap<(MemoryId, MemoryId, EdgeType), f32>,
+}
+
+/// The edge types the dashboard treats as conflicts, maintained as a live pair
+/// list for O(conflicts) enumeration.
+fn is_conflict_type(t: EdgeType) -> bool {
+    matches!(t, EdgeType::Contradicts | EdgeType::Supersedes)
 }
 
 impl CsrGraph {
@@ -143,6 +160,7 @@ impl CsrGraph {
             delta_edges: Vec::new(),
             removed_edges: Vec::new(),
             edge_type_counts: HashMap::default(),
+            conflict_edges: HashMap::default(),
         }
     }
 
@@ -214,6 +232,9 @@ impl CsrGraph {
         // Also remove from delta
         self.delta_edges
             .retain(|e| e.source_idx != idx && e.target_idx != idx);
+        // Drop any conflict edges touching this node.
+        self.conflict_edges
+            .retain(|(s, t, _), _| *s != id && *t != id);
         self.id_to_idx.remove(&id);
     }
 
@@ -240,6 +261,10 @@ impl CsrGraph {
             data: StoredEdge::from_memory_edge(edge),
         });
         *self.edge_type_counts.entry(edge.edge_type).or_default() += 1;
+        if is_conflict_type(edge.edge_type) {
+            self.conflict_edges
+                .insert((edge.source, edge.target, edge.edge_type), edge.weight);
+        }
     }
 
     /// Strengthen an edge by incrementing its weight (Hebbian learning).
@@ -254,6 +279,14 @@ impl CsrGraph {
         else {
             return;
         };
+
+        // Keep the conflict-edge weights in step with the live edge (a pair may
+        // carry either conflict type).
+        for t in [EdgeType::Contradicts, EdgeType::Supersedes] {
+            if let Some(w) = self.conflict_edges.get_mut(&(source, target, t)) {
+                *w = (*w + delta).min(1.0);
+            }
+        }
 
         // Bump an existing delta edge in place.
         if let Some(existing) = self
@@ -296,6 +329,9 @@ impl CsrGraph {
         self.removed_edges.push((src_idx, tgt_idx));
         self.delta_edges
             .retain(|e| !(e.source_idx == src_idx && e.target_idx == tgt_idx));
+        // Pair-granular removal drops every edge between the pair.
+        self.conflict_edges
+            .retain(|(s, t, _), _| !(*s == source && *t == target));
     }
 
     /// Remove every edge whose type is in `types`, preserving all other edges,
@@ -424,27 +460,58 @@ impl CsrGraph {
         )
     }
 
+    /// Every live conflict-class edge as `(source, target, type, weight)`, read
+    /// in O(conflicts) from the maintained pair list, so the dashboard conflict
+    /// view never walks the whole graph. Grounded on compact/load, so it stays
+    /// correct across a restart.
+    pub fn conflict_edges(&self) -> Vec<(MemoryId, MemoryId, EdgeType, f32)> {
+        self.conflict_edges
+            .iter()
+            .map(|(&(s, t, et), &w)| (s, t, et, w))
+            .collect()
+    }
+
     /// Recount live edges by type from scratch. Authoritative but O(nodes +
     /// edges); called only when the graph is already being walked wholesale
     /// (`compact`, bulk type removal) or grounded after load, never on a read.
     pub fn recompute_edge_counts(&mut self) {
         let mut counts: HashMap<EdgeType, usize> = HashMap::default();
+        let mut conflicts: HashMap<(MemoryId, MemoryId, EdgeType), f32> = HashMap::default();
         let node_count = self.idx_to_id.len() as u32;
         for idx in 0..node_count {
             let neighbors = self.csr.neighbors(idx);
             let data = self.csr.edge_data_for(idx);
             for (i, &nbr) in neighbors.iter().enumerate() {
                 if !self.is_removed(idx, nbr) {
-                    *counts.entry(data[i].edge_type).or_default() += 1;
+                    let et = data[i].edge_type;
+                    *counts.entry(et).or_default() += 1;
+                    if is_conflict_type(et)
+                        && let (Some(&s), Some(&t)) = (
+                            self.idx_to_id.get(idx as usize),
+                            self.idx_to_id.get(nbr as usize),
+                        )
+                    {
+                        conflicts.insert((s, t, et), data[i].weight);
+                    }
                 }
             }
         }
         for d in &self.delta_edges {
             if !self.is_removed(d.source_idx, d.target_idx) {
-                *counts.entry(d.data.edge_type).or_default() += 1;
+                let et = d.data.edge_type;
+                *counts.entry(et).or_default() += 1;
+                if is_conflict_type(et)
+                    && let (Some(&s), Some(&t)) = (
+                        self.idx_to_id.get(d.source_idx as usize),
+                        self.idx_to_id.get(d.target_idx as usize),
+                    )
+                {
+                    conflicts.insert((s, t, et), d.data.weight);
+                }
             }
         }
         self.edge_type_counts = counts;
+        self.conflict_edges = conflicts;
     }
 
     /// Get all incoming edges to a node (CSC + delta, minus removed).
@@ -708,6 +775,52 @@ mod tests {
         // now compacted) and a->d (supersedes, in delta). c->d supersedes stays.
         g.remove_node(a);
         assert_eq!(g.conflict_edge_counts(), (0, 1));
+    }
+
+    #[test]
+    fn conflict_edges_enumerated_maintained_and_persist() {
+        let mut g = CsrGraph::new();
+        let (a, b, c, d) = (
+            MemoryId::new(),
+            MemoryId::new(),
+            MemoryId::new(),
+            MemoryId::new(),
+        );
+        g.add_edge(&make_edge(a, b, EdgeType::Contradicts));
+        g.add_edge(&make_edge(c, d, EdgeType::Supersedes));
+        g.add_edge(&make_edge(a, c, EdgeType::Related)); // not a conflict
+
+        // Enumeration returns only the two conflict pairs, not the related edge.
+        let pairs = g.conflict_edges();
+        assert_eq!(pairs.len(), 2);
+        assert!(
+            pairs
+                .iter()
+                .any(|(s, t, k, _)| *s == a && *t == b && *k == EdgeType::Contradicts)
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|(s, t, k, _)| *s == c && *t == d && *k == EdgeType::Supersedes)
+        );
+
+        // Survives compaction (reground from the compacted set).
+        g.compact();
+        assert_eq!(g.conflict_edges().len(), 2);
+
+        // Persisted and reground on load, so a restart keeps the view O(conflicts).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("graph.json");
+        g.save(&path).unwrap();
+        let reloaded = CsrGraph::load(&path).unwrap();
+        assert_eq!(reloaded.conflict_edges().len(), 2);
+
+        // Removing a node drops the conflict edge that touched it.
+        g.remove_node(a);
+        let pairs = g.conflict_edges();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].0, c);
+        assert_eq!(pairs[0].2, EdgeType::Supersedes);
     }
 
     #[test]
