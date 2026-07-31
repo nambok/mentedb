@@ -5,13 +5,46 @@ use std::path::Path;
 
 use mentedb_core::MemoryNode;
 use mentedb_core::error::MenteResult;
-use mentedb_core::types::{MemoryId, Timestamp};
+use mentedb_core::memory::MemoryType;
+use mentedb_core::types::{AgentId, MemoryId, Timestamp, UserId};
 
 use crate::bitmap::BitmapIndex;
 use crate::bm25::Bm25Index;
 use crate::hnsw::{HnswConfig, HnswIndex};
 use crate::salience::SalienceIndex;
 use crate::temporal::TemporalIndex;
+
+/// Canonical browse string for a memory type: the lowercased debug name with
+/// `antipattern` normalized to `anti_pattern`. Kept identical to the platform's
+/// `type_str` and the engine's scope-count type name so an index lookup returns
+/// exactly the set a per-node type filter would.
+pub fn type_name(t: MemoryType) -> String {
+    format!("{t:?}")
+        .to_lowercase()
+        .replace("antipattern", "anti_pattern")
+}
+
+/// Reserved bitmap key for a memory type. The NUL prefix cannot occur in a user
+/// tag, so these keys never collide with tags and never surface in tag listings.
+pub fn type_index_key(t: MemoryType) -> String {
+    format!("\0type:{}", type_name(t))
+}
+
+/// Reserved bitmap key for a memory type given its already-canonical string,
+/// so callers holding the browse string (not the enum) build the same key.
+pub fn type_index_key_str(type_name: &str) -> String {
+    format!("\0type:{type_name}")
+}
+
+/// Reserved bitmap key for an owner user.
+pub fn user_index_key(user: UserId) -> String {
+    format!("\0user:{user}")
+}
+
+/// Reserved bitmap key for an owner agent.
+pub fn agent_index_key(agent: AgentId) -> String {
+    format!("\0agent:{agent}")
+}
 
 /// Configuration for the composite index manager.
 #[derive(Default)]
@@ -117,6 +150,17 @@ impl IndexManager {
         for tag in &node.tags {
             self.bitmap.add_tag(node.id, tag);
         }
+        // Structured-browse dimensions (memory type, owner user, owner agent) are
+        // indexed as reserved bitmap keys so the dashboard can narrow by them in
+        // O(matches), the same way it narrows by a tag, instead of scanning every
+        // memory. The NUL prefix keeps them from ever colliding with a user tag
+        // and out of every tag-enumeration path (none of which use a NUL prefix).
+        // remove_all above clears these too, so a re-index reflects current state.
+        self.bitmap
+            .add_tag(node.id, &type_index_key(node.memory_type));
+        self.bitmap.add_tag(node.id, &user_index_key(node.user_id));
+        self.bitmap
+            .add_tag(node.id, &agent_index_key(node.agent_id));
 
         // Temporal index
         self.temporal.insert(node.id, node.created_at);
