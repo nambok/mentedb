@@ -822,6 +822,37 @@ impl MenteDb {
             info!(reindexed, retired, "reconciled index with storage");
         }
 
+        // One-time backfill of the reserved browse keys (memory type, owner user,
+        // owner agent). Memories stored before this index existed carry their tags
+        // in the bitmap but none of the reserved keys, so a type or owner browse
+        // filter would come back empty. If no reserved type key is present while
+        // memories are, the persisted bitmap predates the browse index: rebuild
+        // the reserved keys for every memory once. The keys then persist with the
+        // next snapshot, so this pass is skipped on subsequent opens.
+        if !page_map.is_empty() && index.bitmap.tags_with_prefix("\0type:").is_empty() {
+            let mut backfilled = 0usize;
+            for page_id in page_map.values() {
+                if let Ok(node) = storage.load_memory(*page_id) {
+                    index.bitmap.add_tag(
+                        node.id,
+                        &mentedb_index::manager::type_index_key(node.memory_type),
+                    );
+                    index.bitmap.add_tag(
+                        node.id,
+                        &mentedb_index::manager::user_index_key(node.user_id),
+                    );
+                    index.bitmap.add_tag(
+                        node.id,
+                        &mentedb_index::manager::agent_index_key(node.agent_id),
+                    );
+                    backfilled += 1;
+                }
+            }
+            if backfilled > 0 {
+                info!(backfilled, "backfilled browse index reserved keys");
+            }
+        }
+
         let write_inference =
             WriteInferenceEngine::with_config(cognitive_config.inference_config.clone());
         let decay = DecayEngine::new(cognitive_config.decay_config.clone());
@@ -2195,6 +2226,32 @@ impl MenteDb {
     /// set, not the store.
     pub fn memory_ids_with_tag(&self, tag: &str) -> Vec<MemoryId> {
         self.index.bitmap.query_tag(tag)
+    }
+
+    /// Ids of memories of a given type, from the reserved type key in the bitmap
+    /// index (O(matches), no scan). `type_str` is the canonical browse string
+    /// (e.g. `semantic`, `anti_pattern`); it must match [`mentedb_index::manager::type_name`]
+    /// so the set equals a per-node type filter's.
+    pub fn memory_ids_of_type_str(&self, type_str: &str) -> Vec<MemoryId> {
+        self.index
+            .bitmap
+            .query_tag(&mentedb_index::manager::type_index_key_str(type_str))
+    }
+
+    /// Ids of memories owned by a given user, from the reserved owner key in the
+    /// bitmap index (O(matches), no scan).
+    pub fn memory_ids_for_user(&self, user: UserId) -> Vec<MemoryId> {
+        self.index
+            .bitmap
+            .query_tag(&mentedb_index::manager::user_index_key(user))
+    }
+
+    /// Ids of memories owned by a given agent, from the reserved owner key in the
+    /// bitmap index (O(matches), no scan).
+    pub fn memory_ids_for_agent(&self, agent: AgentId) -> Vec<MemoryId> {
+        self.index
+            .bitmap
+            .query_tag(&mentedb_index::manager::agent_index_key(agent))
     }
 
     /// Count of memories that carry none of `exclude_tags`, from the O(1) total
