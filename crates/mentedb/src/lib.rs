@@ -2220,6 +2220,21 @@ impl MenteDb {
         self.index.temporal.latest_filtered(limit, &skip, after)
     }
 
+    /// Oldest-first page of memory ids, excluding any carrying an `exclude_tags`
+    /// tag, beginning after `after`. The ascending mirror of
+    /// [`Self::recent_memory_ids`], served from the temporal index with no scan,
+    /// so oldest-first browse (and contextual browse, by excluding `scope:always`)
+    /// is bounded by the page.
+    pub fn oldest_memory_ids(
+        &self,
+        limit: usize,
+        exclude_tags: &[&str],
+        after: Option<MemoryId>,
+    ) -> Vec<MemoryId> {
+        let skip = self.ids_with_any_tag(exclude_tags);
+        self.index.temporal.oldest_filtered(limit, &skip, after)
+    }
+
     /// Ids of every memory carrying `tag`, straight from the bitmap index. No
     /// content is loaded and no scan runs, so a small tagged set (standing
     /// rules, the profile node, a project) is found in time proportional to the
