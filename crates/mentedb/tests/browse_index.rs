@@ -85,6 +85,41 @@ fn reindex_after_forget_keeps_the_browse_index_exact() {
 }
 
 #[test]
+fn oldest_memory_ids_is_ascending_and_paginates() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = MenteDb::open(dir.path()).expect("open");
+    let mk = |c: &str, ts: u64, tags: &[&str]| {
+        let mut n = node(1, 1, MemoryType::Semantic, c, tags);
+        n.created_at = ts;
+        n
+    };
+    let a = mk("oldest", 100, &[]);
+    let a_id = a.id;
+    let b = mk("mid", 200, &[]);
+    let b_id = b.id;
+    let turn = mk("turn", 150, &["turn"]);
+    let c = mk("newest", 300, &[]);
+    let c_id = c.id;
+    db.store(a).unwrap();
+    db.store(b).unwrap();
+    db.store(turn).unwrap();
+    db.store(c).unwrap();
+
+    // Ascending by created_at, the internal turn excluded.
+    assert_eq!(
+        db.oldest_memory_ids(10, &["turn"], None),
+        vec![a_id, b_id, c_id]
+    );
+    // Cursor: continue after the first id.
+    assert_eq!(
+        db.oldest_memory_ids(10, &["turn"], Some(a_id)),
+        vec![b_id, c_id]
+    );
+    // Limit bounds the page.
+    assert_eq!(db.oldest_memory_ids(1, &["turn"], None), vec![a_id]);
+}
+
+#[test]
 fn browse_index_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let id;

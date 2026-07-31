@@ -84,6 +84,39 @@ impl TemporalIndex {
         results
     }
 
+    /// The oldest `limit` ids (ascending by timestamp) not in `skip`, beginning
+    /// after `after` when given. The ascending mirror of [`Self::latest_filtered`]:
+    /// walks only the in-memory index, loads nothing, and stops at `limit`, so
+    /// oldest-first browse is bounded by the page, never a full scan.
+    pub fn oldest_filtered(
+        &self,
+        limit: usize,
+        skip: &std::collections::HashSet<MemoryId>,
+        after: Option<MemoryId>,
+    ) -> Vec<MemoryId> {
+        let inner = self.inner.read();
+        let mut results = Vec::with_capacity(limit.min(1024));
+        let mut seen_after = after.is_none();
+        for ids in inner.tree.values() {
+            for &id in ids.iter() {
+                if !seen_after {
+                    if Some(id) == after {
+                        seen_after = true;
+                    }
+                    continue;
+                }
+                if skip.contains(&id) {
+                    continue;
+                }
+                results.push(id);
+                if results.len() >= limit {
+                    return results;
+                }
+            }
+        }
+        results
+    }
+
     /// Get the `n` most recent memories (by timestamp, descending).
     pub fn latest(&self, n: usize) -> Vec<MemoryId> {
         let inner = self.inner.read();
