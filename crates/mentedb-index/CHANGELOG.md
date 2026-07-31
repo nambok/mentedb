@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.1](https://github.com/nambok/mentedb/compare/mentedb-index-v0.37.0...mentedb-index-v0.37.1) - 2026-07-31
+
+### Added
+
+- index memory type and owner for O(matches) browse filters ([#417](https://github.com/nambok/mentedb/pull/417))
+
 ## [0.35.2](https://github.com/nambok/mentedb/compare/mentedb-index-v0.35.0...mentedb-index-v0.35.2) - 2026-07-30
 
 ### Added
