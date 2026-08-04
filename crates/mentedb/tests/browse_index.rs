@@ -120,6 +120,27 @@ fn oldest_memory_ids_is_ascending_and_paginates() {
 }
 
 #[test]
+fn recall_recent_is_newest_first_and_includes_hidden_turns() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = MenteDb::open(dir.path()).expect("open");
+    let mk = |c: &str, ts: u64, tags: &[&str]| {
+        let mut n = node(1, 1, MemoryType::Semantic, c, tags);
+        n.created_at = ts;
+        n
+    };
+    db.store(mk("older fact", 100, &[])).unwrap();
+    db.store(mk("a raw turn", 200, &["turn"])).unwrap(); // internal, but recency includes it
+    db.store(mk("newest action", 300, &["action"])).unwrap();
+
+    let recent: Vec<String> = db.recall_recent(2).into_iter().map(|n| n.content).collect();
+    assert_eq!(
+        recent,
+        vec!["newest action", "a raw turn"],
+        "newest first, raw turns included (recency is what just happened)"
+    );
+}
+
+#[test]
 fn browse_index_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let id;
