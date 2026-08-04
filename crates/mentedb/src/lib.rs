@@ -2235,6 +2235,22 @@ impl MenteDb {
         self.index.temporal.oldest_filtered(limit, &skip, after)
     }
 
+    /// The most recent `k` memories, newest first, straight from the temporal
+    /// index. Unlike browse, this includes internal turns (empty skip set): the
+    /// point is "what just happened / where did we leave off", which is the raw
+    /// activity. It is a separate recency channel, so it never touches semantic
+    /// recall or its ranking; the temporal index is per tenant and persisted, so
+    /// a fresh session sees the full history with no lag.
+    pub fn recall_recent(&self, k: usize) -> Vec<MemoryNode> {
+        let empty = std::collections::HashSet::new();
+        self.index
+            .temporal
+            .latest_filtered(k, &empty, None)
+            .into_iter()
+            .filter_map(|id| self.get_memory(id).ok())
+            .collect()
+    }
+
     /// Ids of every memory carrying `tag`, straight from the bitmap index. No
     /// content is loaded and no scan runs, so a small tagged set (standing
     /// rules, the profile node, a project) is found in time proportional to the
