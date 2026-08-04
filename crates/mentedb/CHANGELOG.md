@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.3](https://github.com/nambok/mentedb/compare/mentedb-v0.37.2...mentedb-v0.37.3) - 2026-08-04
+
+### Added
+
+- recall_recent for a recency channel separate from semantic recall ([#422](https://github.com/nambok/mentedb/pull/422))
+
 ## [0.37.2](https://github.com/nambok/mentedb/compare/mentedb-v0.37.1...mentedb-v0.37.2) - 2026-07-31
 
 ### Added
