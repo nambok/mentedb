@@ -31,6 +31,7 @@ fn test_hybrid_search_full_pipeline() {
             ef_search: 30,
             metric: DistanceMetric::Cosine,
         },
+        ..Default::default()
     });
 
     // Insert a variety of memories
@@ -116,6 +117,7 @@ fn test_salience_ranking_influence() {
             metric: DistanceMetric::Euclidean,
             ..HnswConfig::default()
         },
+        ..Default::default()
     });
 
     // Two nodes with identical vectors but different salience
@@ -141,6 +143,7 @@ fn test_many_memories_hybrid() {
             ef_search: 20,
             metric: DistanceMetric::Euclidean,
         },
+        ..Default::default()
     });
 
     // Insert 50 memories
