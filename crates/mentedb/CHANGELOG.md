@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0](https://github.com/nambok/mentedb/compare/mentedb-v0.37.3...mentedb-v0.38.0) - 2026-08-07
+
+### Added
+
+- magnitude-aware hybrid fusion behind a flag ([#425](https://github.com/nambok/mentedb/pull/425))
+
 ## [0.37.3](https://github.com/nambok/mentedb/compare/mentedb-v0.37.2...mentedb-v0.37.3) - 2026-08-04
 
 ### Added
