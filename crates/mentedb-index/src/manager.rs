@@ -46,11 +46,42 @@ pub fn agent_index_key(agent: AgentId) -> String {
     format!("\0agent:{agent}")
 }
 
+/// How the hybrid-search legs (vector, keyword) are fused into one ranking.
+#[derive(Debug, Clone)]
+pub struct FusionConfig {
+    /// When true, fuse the legs by normalized score magnitude (min-max per leg)
+    /// instead of rank-only Reciprocal Rank Fusion. RRF keeps only the rank, so
+    /// a 0.95 and a 0.55 cosine hit collapse to adjacent ranks and the small
+    /// salience term can reorder them. The magnitude-aware path keeps that spread
+    /// so a clearly stronger match cannot fall below a weaker one. Off by default,
+    /// enable to A/B against RRF before making it the default.
+    pub magnitude_aware: bool,
+    /// Weight on the normalized vector-similarity leg (magnitude-aware path).
+    pub w_vector: f32,
+    /// Weight on the normalized BM25 keyword leg (magnitude-aware path).
+    pub w_bm25: f32,
+    /// Weight on salience (magnitude-aware path): a nudge for ties, not a driver.
+    pub w_salience: f32,
+}
+
+impl Default for FusionConfig {
+    fn default() -> Self {
+        Self {
+            magnitude_aware: false,
+            w_vector: 1.0,
+            w_bm25: 1.0,
+            w_salience: 0.1,
+        }
+    }
+}
+
 /// Configuration for the composite index manager.
 #[derive(Default)]
 pub struct IndexManagerConfig {
     /// HNSW configuration parameters.
     pub hnsw: HnswConfig,
+    /// Hybrid-search fusion strategy.
+    pub fusion: FusionConfig,
 }
 
 /// Owns all index types and provides unified indexing and hybrid search.
@@ -65,6 +96,8 @@ pub struct IndexManager {
     pub temporal: TemporalIndex,
     /// Importance score index.
     pub salience: SalienceIndex,
+    /// Hybrid-search fusion strategy.
+    fusion: FusionConfig,
 }
 
 impl IndexManager {
@@ -76,7 +109,15 @@ impl IndexManager {
             bitmap: BitmapIndex::new(),
             temporal: TemporalIndex::new(),
             salience: SalienceIndex::new(),
+            fusion: config.fusion,
         }
+    }
+
+    /// Set the hybrid-search fusion strategy. Lets an embedder flip the
+    /// magnitude-aware path on after `load`/`default` (both of which start it
+    /// off) so it can be toggled from the host's config without a rebuild.
+    pub fn set_fusion(&mut self, fusion: FusionConfig) {
+        self.fusion = fusion;
     }
 
     /// Save all indexes to the given directory (bincode format).
@@ -114,6 +155,7 @@ impl IndexManager {
             bitmap,
             temporal,
             salience,
+            fusion: FusionConfig::default(),
         })
     }
 
@@ -301,47 +343,134 @@ impl IndexManager {
             return Vec::new();
         }
 
-        // Merge via RRF
-        let mut rrf_scores: HashMap<MemoryId, f32> = HashMap::new();
+        // A candidate survives filtering unless it falls outside the tag/time
+        // sets. When the pre-filter path ran, candidates are already constrained
+        // to those sets, so this is a no-op there (matches the prior behavior).
+        let keep = |id: &MemoryId| -> bool {
+            if use_prefilter {
+                return true;
+            }
+            if let Some(ref tf) = tag_filter
+                && !tf.contains(id)
+            {
+                return false;
+            }
+            if let Some(ref trf) = time_filter
+                && !trf.contains(id)
+            {
+                return false;
+            }
+            true
+        };
 
-        for (rank, (id, _)) in vector_candidates.iter().enumerate() {
-            *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
-        }
-        for (rank, (id, _)) in bm25_candidates.iter().enumerate() {
-            *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
-        }
+        let mut scored: Vec<(MemoryId, f32)> = if self.fusion.magnitude_aware {
+            // Magnitude-aware fusion: normalize each leg to [0, 1] within its own
+            // candidate set (nearest vector = 1, top BM25 = 1) and combine by a
+            // weighted sum. Unlike RRF this preserves the score spread, so a
+            // clearly stronger vector match stays ahead of a weaker one instead
+            // of collapsing to an adjacent rank that salience can then flip.
+            let vec_norm = normalize_closeness(&vector_candidates);
+            let bm25_norm = normalize_scores(&bm25_candidates);
 
-        // Post-filter only needed when NOT using pre-filter path
-        let mut scored: Vec<(MemoryId, f32)> = rrf_scores
-            .into_iter()
-            .filter(|(id, _)| {
-                if !use_prefilter {
-                    if let Some(ref tf) = tag_filter
-                        && !tf.contains(id)
-                    {
-                        return false;
-                    }
-                    if let Some(ref trf) = time_filter
-                        && !trf.contains(id)
-                    {
-                        return false;
-                    }
-                }
-                true
-            })
-            .map(|(id, rrf_score)| {
-                let salience = self.salience.get_salience(id).unwrap_or(0.5);
-                let recency = 0.5f32;
+            let mut ids: HashSet<MemoryId> =
+                HashSet::with_capacity(vec_norm.len() + bm25_norm.len());
+            ids.extend(vec_norm.keys().copied());
+            ids.extend(bm25_norm.keys().copied());
 
-                let combined = rrf_score * 0.7 + salience * 0.05 + recency * 0.02;
-                (id, combined)
-            })
-            .collect();
+            ids.into_iter()
+                .filter(|id| keep(id))
+                .map(|id| {
+                    let v = vec_norm.get(&id).copied().unwrap_or(0.0);
+                    let b = bm25_norm.get(&id).copied().unwrap_or(0.0);
+                    let salience = self.salience.get_salience(id).unwrap_or(0.5);
+                    let combined = self.fusion.w_vector * v
+                        + self.fusion.w_bm25 * b
+                        + self.fusion.w_salience * salience;
+                    (id, combined)
+                })
+                .collect()
+        } else {
+            // Reciprocal Rank Fusion (rank-only): robust to differing leg scales
+            // but discards score magnitude. The default until the magnitude-aware
+            // path is validated by an A/B eval.
+            let mut rrf_scores: HashMap<MemoryId, f32> = HashMap::new();
+
+            for (rank, (id, _)) in vector_candidates.iter().enumerate() {
+                *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
+            }
+            for (rank, (id, _)) in bm25_candidates.iter().enumerate() {
+                *rrf_scores.entry(*id).or_insert(0.0) += 1.0 / (rrf_k + rank as f32);
+            }
+
+            rrf_scores
+                .into_iter()
+                .filter(|(id, _)| keep(id))
+                .map(|(id, rrf_score)| {
+                    let salience = self.salience.get_salience(id).unwrap_or(0.5);
+                    let recency = 0.5f32;
+
+                    let combined = rrf_score * 0.7 + salience * 0.05 + recency * 0.02;
+                    (id, combined)
+                })
+                .collect()
+        };
 
         scored.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(k);
         scored
     }
+}
+
+/// Normalize vector-search distances to a [0, 1] closeness within the candidate
+/// set: the nearest candidate maps to 1.0, the farthest to 0.0. Metric-agnostic,
+/// it only needs smaller to mean nearer. A degenerate set (empty, single, or all
+/// equal) invents no spread: every entry maps to 1.0.
+fn normalize_closeness(candidates: &[(MemoryId, f32)]) -> HashMap<MemoryId, f32> {
+    let mut out = HashMap::with_capacity(candidates.len());
+    if candidates.is_empty() {
+        return out;
+    }
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for (_, d) in candidates {
+        lo = lo.min(*d);
+        hi = hi.max(*d);
+    }
+    let range = hi - lo;
+    for (id, d) in candidates {
+        let closeness = if range <= f32::EPSILON {
+            1.0
+        } else {
+            (hi - *d) / range
+        };
+        out.entry(*id).or_insert(closeness);
+    }
+    out
+}
+
+/// Normalize keyword (BM25) scores to [0, 1] within the candidate set: the top
+/// score maps to 1.0, the lowest to 0.0. BM25 magnitudes are unbounded and
+/// corpus-dependent, so normalizing within the set keeps the leg comparable to
+/// the vector leg without a fixed scale. A degenerate set maps every entry to 1.0.
+fn normalize_scores(candidates: &[(MemoryId, f32)]) -> HashMap<MemoryId, f32> {
+    let mut out = HashMap::with_capacity(candidates.len());
+    if candidates.is_empty() {
+        return out;
+    }
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for (_, s) in candidates {
+        lo = lo.min(*s);
+        hi = hi.max(*s);
+    }
+    let range = hi - lo;
+    for (id, s) in candidates {
+        let norm = if range <= f32::EPSILON {
+            1.0
+        } else {
+            (*s - lo) / range
+        };
+        out.entry(*id).or_insert(norm);
+    }
+    out
 }
 
 impl Default for IndexManager {
@@ -428,5 +557,150 @@ mod tests {
         let mgr = IndexManager::default();
         let results = mgr.hybrid_search(&[1.0, 0.0], None, None, 5);
         assert!(results.is_empty());
+    }
+
+    fn magnitude_aware_manager() -> IndexManager {
+        IndexManager::new(IndexManagerConfig {
+            hnsw: HnswConfig::default(),
+            fusion: FusionConfig {
+                magnitude_aware: true,
+                ..Default::default()
+            },
+        })
+    }
+
+    // set_fusion is how an embedder turns v2 on after load()/default(), which
+    // both start it off. Flipping it must change the ranking exactly as the
+    // constructed-on path does.
+    #[test]
+    fn set_fusion_toggles_the_ranking() {
+        let query = [1.0f32, 0.0];
+        let strong = make_node(vec![0.95, 0.312_25], vec![], 0.0, 100);
+        let weak = make_node(vec![0.55, 0.835_16], vec![], 1.0, 100);
+
+        let mut mgr = IndexManager::default();
+        mgr.index_memory(&strong);
+        mgr.index_memory(&weak);
+        // Off by default: salience flips the weaker match up.
+        assert_eq!(mgr.hybrid_search(&query, None, None, 10)[0].0, weak.id);
+
+        mgr.set_fusion(FusionConfig {
+            magnitude_aware: true,
+            ..Default::default()
+        });
+        // Flipped on: the stronger match is restored to the top.
+        assert_eq!(mgr.hybrid_search(&query, None, None, 10)[0].0, strong.id);
+    }
+
+    // The core claim of the flag: rank-only RRF flattens the vector score gap so
+    // the small salience term can flip a clearly stronger match below a weaker,
+    // more salient one; the magnitude-aware fusion keeps the stronger match on
+    // top. Both nodes are unit vectors so the cosine to the query is their first
+    // component: 0.95 (strong) vs 0.55 (weak).
+    #[test]
+    fn magnitude_aware_keeps_the_stronger_match_above_a_salient_weaker_one() {
+        let query = [1.0f32, 0.0];
+        let strong = make_node(vec![0.95, 0.312_25], vec![], 0.0, 100);
+        let weak = make_node(vec![0.55, 0.835_16], vec![], 1.0, 100);
+
+        // v1 default (rank-only RRF): the salient but weaker match wins.
+        let v1 = IndexManager::default();
+        v1.index_memory(&strong);
+        v1.index_memory(&weak);
+        let r1 = v1.hybrid_search(&query, None, None, 10);
+        assert_eq!(r1.len(), 2);
+        assert_eq!(
+            r1[0].0, weak.id,
+            "RRF lets salience flip a clearly weaker match to the top"
+        );
+
+        // v2 magnitude-aware: the stronger match stays on top.
+        let v2 = magnitude_aware_manager();
+        v2.index_memory(&strong);
+        v2.index_memory(&weak);
+        let r2 = v2.hybrid_search(&query, None, None, 10);
+        assert_eq!(r2.len(), 2);
+        assert_eq!(
+            r2[0].0, strong.id,
+            "magnitude-aware fusion keeps the stronger match on top"
+        );
+    }
+
+    // The refactor pulled the tag/time filter into a shared closure used by both
+    // paths. Prove the magnitude-aware path still filters exactly like v1 does.
+    #[test]
+    fn magnitude_aware_respects_tag_and_time_filters() {
+        let by_tag = magnitude_aware_manager();
+        let a = make_node(vec![1.0, 0.0, 0.0, 0.0], vec!["alpha".into()], 0.8, 1000);
+        let b = make_node(vec![0.9, 0.1, 0.0, 0.0], vec!["beta".into()], 0.8, 1000);
+        by_tag.index_memory(&a);
+        by_tag.index_memory(&b);
+        let tagged = by_tag.hybrid_search(&[1.0, 0.0, 0.0, 0.0], Some(&["alpha"]), None, 10);
+        assert_eq!(tagged.len(), 1);
+        assert_eq!(tagged[0].0, a.id);
+
+        let by_time = magnitude_aware_manager();
+        let c = make_node(vec![1.0, 0.0, 0.0, 0.0], vec![], 0.8, 100);
+        let d = make_node(vec![0.9, 0.1, 0.0, 0.0], vec![], 0.8, 500);
+        by_time.index_memory(&c);
+        by_time.index_memory(&d);
+        let ranged = by_time.hybrid_search(&[1.0, 0.0, 0.0, 0.0], None, Some((400, 600)), 10);
+        assert_eq!(ranged.len(), 1);
+        assert_eq!(ranged[0].0, d.id);
+    }
+
+    // Magnitude-aware fusion must never return more than the pre-change default,
+    // and with the flag off the default path is unchanged (guarded by the suite
+    // above). Here: a keyword-only hit still surfaces under the magnitude path.
+    #[test]
+    fn magnitude_aware_matches_keyword_only_hits() {
+        let mgr = magnitude_aware_manager();
+        let mut hit = make_node(vec![0.0, 1.0, 0.0, 0.0], vec![], 0.5, 1);
+        hit.content = "quarterly revenue projection".into();
+        let mut other = make_node(vec![1.0, 0.0, 0.0, 0.0], vec![], 0.5, 2);
+        other.content = "unrelated note".into();
+        mgr.index_memory(&hit);
+        mgr.index_memory(&other);
+
+        // Query vector points at `other`, but the text only matches `hit`.
+        let results = mgr.hybrid_search_with_query(
+            &[1.0, 0.0, 0.0, 0.0],
+            Some("quarterly revenue"),
+            None,
+            None,
+            10,
+        );
+        assert!(
+            results.iter().any(|(id, _)| *id == hit.id),
+            "keyword-only match must survive magnitude-aware fusion"
+        );
+    }
+
+    #[test]
+    fn normalizers_handle_degenerate_sets() {
+        assert!(normalize_closeness(&[]).is_empty());
+        assert!(normalize_scores(&[]).is_empty());
+
+        let n1 = make_node(vec![1.0, 0.0], vec![], 0.5, 1);
+        let n2 = make_node(vec![1.0, 0.0], vec![], 0.5, 2);
+
+        // A single candidate normalizes to 1.0 in both legs.
+        assert_eq!(
+            normalize_closeness(&[(n1.id, 0.42)]).get(&n1.id),
+            Some(&1.0)
+        );
+        assert_eq!(normalize_scores(&[(n1.id, 7.0)]).get(&n1.id), Some(&1.0));
+
+        // All-equal inputs invent no spread: every entry maps to 1.0.
+        let equal = [(n1.id, 0.3), (n2.id, 0.3)];
+        let cl = normalize_closeness(&equal);
+        assert_eq!(cl.get(&n1.id), Some(&1.0));
+        assert_eq!(cl.get(&n2.id), Some(&1.0));
+
+        // A real spread ranks nearest = 1.0, farthest = 0.0.
+        let spread = [(n1.id, 0.1), (n2.id, 0.9)];
+        let cl2 = normalize_closeness(&spread);
+        assert_eq!(cl2.get(&n1.id), Some(&1.0));
+        assert_eq!(cl2.get(&n2.id), Some(&0.0));
     }
 }

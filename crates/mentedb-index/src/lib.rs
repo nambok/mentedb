@@ -24,6 +24,6 @@ pub mod temporal;
 pub use bitmap::BitmapIndex;
 pub use bm25::Bm25Index;
 pub use hnsw::{DistanceMetric, HnswIndex};
-pub use manager::IndexManager;
+pub use manager::{FusionConfig, IndexManager, IndexManagerConfig};
 pub use salience::SalienceIndex;
 pub use temporal::TemporalIndex;

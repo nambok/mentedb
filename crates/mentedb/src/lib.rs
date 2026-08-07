@@ -67,7 +67,7 @@ use mentedb_core::types::{AgentId, MemoryId, Timestamp, UserId};
 use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
 use mentedb_embedding::provider::EmbeddingProvider;
 use mentedb_graph::GraphManager;
-use mentedb_index::IndexManager;
+use mentedb_index::{FusionConfig, IndexManager};
 use mentedb_query::{Condition, Field, Filter, Mql, Operator, OrderBy, QueryPlan, Value};
 use mentedb_storage::StorageEngine;
 use parking_lot::RwLock;
@@ -757,6 +757,13 @@ impl MenteDb {
     /// Opens (or creates) a MenteDB instance at the given path.
     pub fn open(path: &Path) -> MenteResult<Self> {
         Self::open_with_config(path, CognitiveConfig::default())
+    }
+
+    /// Set the hybrid-search fusion strategy for this instance. The engine opens
+    /// with rank-only fusion; a host calls this after `open` to enable the
+    /// magnitude-aware path from its own configuration, e.g. to A/B it in prod.
+    pub fn set_fusion(&mut self, fusion: FusionConfig) {
+        self.index.set_fusion(fusion);
     }
 
     /// Opens a MenteDB instance with custom cognitive configuration.
