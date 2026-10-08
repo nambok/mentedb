@@ -27,7 +27,7 @@ use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
 use mentedb_core::types::{AgentId, MemoryId, Timestamp, UserId};
 use mentedb_core::{MemoryEdge, MemoryNode};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::MenteDb;
@@ -1045,15 +1045,46 @@ impl MenteDb {
 
     fn update_speculative_cache_from_predictions(&self, predictions: &[String]) {
         if predictions.is_empty() {
+            debug!("speculative cache: no predictions this turn");
             return;
         }
-        // We need to capture `self` for use in the closure, but pre_assemble_speculative
-        // takes &self already. We build the closure to search via self.
+        // Each predicted topic either becomes an entry or is dropped at one
+        // step; count which, so an empty cache in production says why instead
+        // of failing silently.
+        #[derive(Default)]
+        struct Outcome {
+            built: usize,
+            no_embedder: usize,
+            embed_failed: usize,
+            recall_failed: usize,
+            nothing_similar: usize,
+            unloadable: usize,
+        }
+        let outcome = std::cell::RefCell::new(Outcome::default());
         let predictions_owned = predictions.to_vec();
         self.pre_assemble_speculative(predictions_owned, |topic| {
-            let topic_emb = self.embed_text(topic).ok()??;
-            let similar_ids = self.recall_similar(&topic_emb, 5).ok()?;
+            let topic_emb = match self.embed_text(topic) {
+                Ok(Some(e)) => e,
+                Ok(None) => {
+                    outcome.borrow_mut().no_embedder += 1;
+                    return None;
+                }
+                Err(e) => {
+                    warn!(error = %e, "speculative cache: topic embed failed");
+                    outcome.borrow_mut().embed_failed += 1;
+                    return None;
+                }
+            };
+            let similar_ids = match self.recall_similar(&topic_emb, 5) {
+                Ok(ids) => ids,
+                Err(e) => {
+                    warn!(error = %e, "speculative cache: recall failed");
+                    outcome.borrow_mut().recall_failed += 1;
+                    return None;
+                }
+            };
             if similar_ids.is_empty() {
+                outcome.borrow_mut().nothing_similar += 1;
                 return None;
             }
             let mut context_parts = Vec::new();
@@ -1065,10 +1096,27 @@ impl MenteDb {
                 }
             }
             if memory_ids.is_empty() {
+                outcome.borrow_mut().unloadable += 1;
                 return None;
             }
-            Some((context_parts.join("\n---\n"), memory_ids, None))
+            outcome.borrow_mut().built += 1;
+            // Keep the topic embedding so a later query matches the entry by
+            // meaning; without it the cache falls back to keyword overlap.
+            Some((context_parts.join("\n---\n"), memory_ids, Some(topic_emb)))
         });
+        let o = outcome.into_inner();
+        info!(
+            predictions = predictions.len(),
+            built = o.built,
+            no_embedder = o.no_embedder,
+            embed_failed = o.embed_failed,
+            recall_failed = o.recall_failed,
+            nothing_similar = o.nothing_similar,
+            unloadable = o.unloadable,
+            enabled = self.cognitive_config.speculative_cache,
+            cache_size = self.speculative_cache_stats().cache_size,
+            "speculative cache pre-assembly"
+        );
     }
 
     fn maybe_run_maintenance(&self, turn_id: u64) {
