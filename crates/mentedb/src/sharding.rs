@@ -78,6 +78,12 @@ pub trait LeaseStore: Send + Sync {
     fn release(&self, lease: &Lease) -> impl Future<Output = Result<(), LeaseError>> + Send;
     /// The current live lease for a key, if any.
     fn current(&self, key: &str) -> impl Future<Output = Result<Option<Lease>, LeaseError>> + Send;
+    /// Whether every node sees the same leases. Only a shared store can say
+    /// which node holds a key, so only then does the coordinator route by lease
+    /// holder; a node-local store routes by placement alone.
+    fn is_shared(&self) -> bool {
+        true
+    }
 }
 
 /// A no-op lease store for self-coordinated fleets (gossip membership plus
@@ -128,6 +134,9 @@ impl LeaseStore for NoCoordLease {
     async fn current(&self, key: &str) -> Result<Option<Lease>, LeaseError> {
         Ok(self.epochs.lock().get(key).map(|e| self.lease(key, *e)))
     }
+    fn is_shared(&self) -> bool {
+        false
+    }
 }
 
 /// A backend that tracks the live node set. Implemented by the embedder.
@@ -135,6 +144,10 @@ pub trait NodeRegistry: Send + Sync {
     fn heartbeat(&self) -> impl Future<Output = Result<(), String>> + Send;
     fn live_nodes(&self) -> impl Future<Output = Result<Vec<Node>, String>> + Send;
     fn node_id(&self) -> &str;
+}
+
+fn addr_of(nodes: &[Node], id: &str) -> Option<String> {
+    nodes.iter().find(|n| n.id == id).map(|n| n.addr.clone())
 }
 
 fn now_secs() -> u64 {
@@ -155,6 +168,10 @@ pub struct Coordinator<L: LeaseStore, R: NodeRegistry> {
     registry: R,
     nodes: Mutex<Vec<Node>>,
     held: Mutex<HashMap<String, Lease>>,
+    /// Short-lived view of which node holds another node's lease, so routing a
+    /// request we do not serve costs a lease read at most every few seconds per
+    /// key instead of on every request. Valid until min(lease expiry, read + 5s).
+    holders: Mutex<HashMap<String, (String, u64)>>,
 }
 
 impl<L: LeaseStore, R: NodeRegistry> Coordinator<L, R> {
@@ -166,6 +183,7 @@ impl<L: LeaseStore, R: NodeRegistry> Coordinator<L, R> {
             registry,
             nodes: Mutex::new(Vec::new()),
             held: Mutex::new(HashMap::new()),
+            holders: Mutex::new(HashMap::new()),
         }
     }
 
@@ -173,12 +191,35 @@ impl<L: LeaseStore, R: NodeRegistry> Coordinator<L, R> {
         self.enabled
     }
 
-    /// Decide where `key` is served. When disabled, or when we are the only live
-    /// node, resolves `Local` without contacting the lease store on the hot path.
+    /// Decide where `key` is served.
+    ///
+    /// The lease holder serves, not the placement math. Placement only picks who
+    /// takes a key that nobody holds. Once a node holds a valid lease it keeps
+    /// serving that key even when the live set changes, and every other node
+    /// forwards to it. Without this, a scale out moved placement to the new node
+    /// while the old one still held the lease and the open database: the new node
+    /// was refused the lease, fell back to opening the database itself, and the
+    /// account hung on the single-writer lock until the old node let go, which it
+    /// never did while it kept renewing. A key moves only when its holder releases
+    /// it or dies and the lease lapses.
+    ///
+    /// When disabled, resolves `Local` without contacting the lease store.
     pub async fn resolve(&self, key: &str) -> Result<Resolution, LeaseError> {
         if !self.enabled {
             return Ok(Resolution::Local { epoch: 0 });
         }
+        if !self.leases.is_shared() {
+            return self.resolve_by_placement(key).await;
+        }
+        // Sticky: a lease we hold stays ours while it is valid. Clone out of the
+        // guard so no lock is held across an await.
+        let cached = self.held.lock().get(key).cloned();
+        if let Some(l) = cached
+            && l.expiry > now_secs() + 5
+        {
+            return Ok(Resolution::Local { epoch: l.epoch });
+        }
+
         let nodes = self.nodes.lock().clone();
         let ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
         let owner = placement::owner(key, &ids)
@@ -186,26 +227,125 @@ impl<L: LeaseStore, R: NodeRegistry> Coordinator<L, R> {
             .unwrap_or_else(|| self.node.clone());
 
         if owner == self.node {
-            // Serve a cached, still-valid lease without a round trip. Clone out of
-            // the guard so no lock is held across the await.
-            let cached = self.held.lock().get(key).cloned();
-            if let Some(l) = cached
-                && l.expiry > now_secs() + 5
-            {
-                return Ok(Resolution::Local { epoch: l.epoch });
+            return match self.leases.acquire(key).await {
+                Ok(lease) => {
+                    let epoch = lease.epoch;
+                    self.held.lock().insert(key.to_string(), lease);
+                    Ok(Resolution::Local { epoch })
+                }
+                // Another live node still holds it (we were just placed here by
+                // a membership change): it keeps serving until it lets go.
+                Err(LeaseError::Held {
+                    owner: holder,
+                    expiry,
+                }) => {
+                    self.remember_holder(key, &holder, expiry);
+                    match addr_of(&nodes, &holder) {
+                        Some(addr) => Ok(Resolution::Remote { addr }),
+                        None => Err(LeaseError::Held {
+                            owner: holder,
+                            expiry,
+                        }),
+                    }
+                }
+                Err(e) => Err(e),
+            };
+        }
+
+        // Not ours by placement: forward to whoever actually holds the lease, and
+        // only to the placement owner when the key is free.
+        if let Some(holder) = self.holder(key).await {
+            if holder == self.node {
+                let lease = self.leases.acquire(key).await?;
+                let epoch = lease.epoch;
+                self.held.lock().insert(key.to_string(), lease);
+                return Ok(Resolution::Local { epoch });
             }
+            if let Some(addr) = addr_of(&nodes, &holder) {
+                return Ok(Resolution::Remote { addr });
+            }
+            // The holder is not live; its lease lapses within the TTL. Fall
+            // through to the placement owner, which takes it over.
+        }
+        let addr = addr_of(&nodes, &owner)
+            .ok_or_else(|| LeaseError::Backend(format!("owner {owner} has no address")))?;
+        Ok(Resolution::Remote { addr })
+    }
+
+    /// Whether this node should do background work (sweeps, migrations) on `key`:
+    /// it holds the key's lease, or nobody does and placement names it. The same
+    /// rule [`resolve`](Self::resolve) serves by, so background work never opens
+    /// an account another node is serving. True when sharding is disabled or the
+    /// node set is not yet known.
+    pub async fn serves(&self, key: &str) -> bool {
+        if !self.enabled {
+            return true;
+        }
+        if !self.leases.is_shared() {
+            return self.owns(key);
+        }
+        let cached = self.held.lock().get(key).cloned();
+        if let Some(l) = cached
+            && l.expiry > now_secs()
+        {
+            return true;
+        }
+        if self.nodes.lock().is_empty() {
+            return true;
+        }
+        match self.holder(key).await {
+            Some(holder) => holder == self.node,
+            None => self.owns(key),
+        }
+    }
+
+    /// Placement-only routing for a node-local lease store (gossip fleets), where
+    /// no node can see another's leases: the placement owner serves, fenced by its
+    /// local epoch, and the single-writer file lock is the safety net in handoff.
+    async fn resolve_by_placement(&self, key: &str) -> Result<Resolution, LeaseError> {
+        let nodes = self.nodes.lock().clone();
+        let ids: Vec<String> = nodes.iter().map(|n| n.id.clone()).collect();
+        let owner = placement::owner(key, &ids)
+            .map(str::to_string)
+            .unwrap_or_else(|| self.node.clone());
+        if owner == self.node {
             let lease = self.leases.acquire(key).await?;
             let epoch = lease.epoch;
             self.held.lock().insert(key.to_string(), lease);
-            Ok(Resolution::Local { epoch })
-        } else {
-            let addr = nodes
-                .iter()
-                .find(|n| n.id == owner)
-                .map(|n| n.addr.clone())
-                .ok_or_else(|| LeaseError::Backend(format!("owner {owner} has no address")))?;
-            Ok(Resolution::Remote { addr })
+            return Ok(Resolution::Local { epoch });
         }
+        let addr = addr_of(&nodes, &owner)
+            .ok_or_else(|| LeaseError::Backend(format!("owner {owner} has no address")))?;
+        Ok(Resolution::Remote { addr })
+    }
+
+    /// The node holding a valid lease on `key`, if any, through the short-lived
+    /// holder cache. A lease backend error reads as "no holder" so callers fall
+    /// back to placement, the behavior before leases were consulted here.
+    async fn holder(&self, key: &str) -> Option<String> {
+        let now = now_secs();
+        if let Some((node, valid_until)) = self.holders.lock().get(key).cloned()
+            && valid_until > now
+        {
+            return Some(node);
+        }
+        match self.leases.current(key).await {
+            Ok(Some(l)) if l.expiry > now => {
+                self.remember_holder(key, &l.node, l.expiry);
+                Some(l.node)
+            }
+            _ => {
+                self.holders.lock().remove(key);
+                None
+            }
+        }
+    }
+
+    fn remember_holder(&self, key: &str, node: &str, expiry: u64) {
+        let valid_until = expiry.min(now_secs() + 5);
+        self.holders
+            .lock()
+            .insert(key.to_string(), (node.to_string(), valid_until));
     }
 
     /// Background upkeep: heartbeat membership, refresh the live node set, and renew
@@ -273,14 +413,22 @@ mod tests {
     /// In-memory lease store, enough to exercise the coordinator logic.
     struct MemLeases {
         node: String,
-        rows: StdMutex<HashMap<String, Lease>>,
+        rows: std::sync::Arc<StdMutex<HashMap<String, Lease>>>,
     }
 
     impl MemLeases {
         fn new(node: &str) -> Self {
             Self {
                 node: node.to_string(),
-                rows: StdMutex::new(HashMap::new()),
+                rows: Default::default(),
+            }
+        }
+        /// A node's view of a lease table shared by the whole fleet, the way
+        /// every gateway task sees the same DynamoDB table.
+        fn shared(node: &str, rows: &std::sync::Arc<StdMutex<HashMap<String, Lease>>>) -> Self {
+            Self {
+                node: node.to_string(),
+                rows: rows.clone(),
             }
         }
     }
@@ -478,5 +626,172 @@ mod tests {
             },
         );
         assert!(c.owns("anything"));
+    }
+
+    fn fleet(n: usize) -> Vec<Node> {
+        (0..n)
+            .map(|i| Node {
+                id: format!("node-{i}"),
+                addr: format!("10.0.0.{i}:8080"),
+            })
+            .collect()
+    }
+
+    fn ids(ns: &[Node]) -> Vec<String> {
+        ns.iter().map(|n| n.id.clone()).collect()
+    }
+
+    /// A key placed on node-0 in a two-node fleet that placement moves to node-2
+    /// once node-2 joins: exactly the scale-out that stranded an account.
+    fn key_moved_by_scale_out() -> String {
+        (0..10_000)
+            .map(|i| format!("acct-{i}"))
+            .find(|k| {
+                placement::owner(k, &ids(&fleet(2))) == Some("node-0")
+                    && placement::owner(k, &ids(&fleet(3))) == Some("node-2")
+            })
+            .expect("some key moves to the new node")
+    }
+
+    async fn coordinator(
+        id: &str,
+        live: Vec<Node>,
+        rows: &std::sync::Arc<StdMutex<HashMap<String, Lease>>>,
+    ) -> Coordinator<MemLeases, MemRegistry> {
+        let c = Coordinator::new(
+            true,
+            id,
+            MemLeases::shared(id, rows),
+            MemRegistry {
+                node: id.into(),
+                nodes: live,
+            },
+        );
+        c.maintain().await;
+        c
+    }
+
+    #[tokio::test]
+    async fn scale_out_keeps_a_held_key_on_its_holder() {
+        let key = key_moved_by_scale_out();
+        let rows = Default::default();
+
+        // Before the scale out, node-0 serves the key and holds its lease.
+        let n0 = coordinator("node-0", fleet(2), &rows).await;
+        assert_eq!(
+            n0.resolve(&key).await.unwrap(),
+            Resolution::Local { epoch: 1 }
+        );
+
+        // node-2 joins. Placement now names node-2, but node-0 still holds the
+        // lease (and the open database), so it keeps serving and everyone else
+        // forwards to it instead of opening the database themselves.
+        let n1 = coordinator("node-1", fleet(3), &rows).await;
+        let n2 = coordinator("node-2", fleet(3), &rows).await;
+        let to_holder = Resolution::Remote {
+            addr: "10.0.0.0:8080".into(),
+        };
+        assert_eq!(n2.resolve(&key).await.unwrap(), to_holder);
+        assert_eq!(n1.resolve(&key).await.unwrap(), to_holder);
+        assert_eq!(
+            n0.resolve(&key).await.unwrap(),
+            Resolution::Local { epoch: 1 }
+        );
+
+        // Background work follows the same rule: only the holder sweeps it.
+        assert!(n0.serves(&key).await);
+        assert!(!n1.serves(&key).await);
+        assert!(!n2.serves(&key).await);
+    }
+
+    #[tokio::test]
+    async fn released_key_moves_to_its_new_placement_owner() {
+        let key = key_moved_by_scale_out();
+        let rows: std::sync::Arc<StdMutex<HashMap<String, Lease>>> = Default::default();
+        let n0 = coordinator("node-0", fleet(3), &rows).await;
+        let n2 = coordinator("node-2", fleet(3), &rows).await;
+        // node-0 took the key while it was the placement owner.
+        let lease = n0.leases.acquire(&key).await.unwrap();
+        n0.held.lock().insert(key.clone(), lease.clone());
+
+        // node-0 lets go (shutdown or rebalance). Its next upkeep drops the lease,
+        // and the placement owner takes over with a higher epoch.
+        n0.leases.release(&lease).await.unwrap();
+        n0.maintain().await;
+        n2.holders.lock().clear();
+        assert_eq!(
+            n2.resolve(&key).await.unwrap(),
+            Resolution::Local { epoch: 1 }
+        );
+        n0.holders.lock().clear();
+        assert_eq!(
+            n0.resolve(&key).await.unwrap(),
+            Resolution::Remote {
+                addr: "10.0.0.2:8080".into()
+            }
+        );
+        assert!(n2.serves(&key).await);
+        assert!(!n0.serves(&key).await);
+    }
+
+    #[tokio::test]
+    async fn free_key_goes_to_its_placement_owner() {
+        let key = key_moved_by_scale_out();
+        let rows = Default::default();
+        let n0 = coordinator("node-0", fleet(3), &rows).await;
+        let n2 = coordinator("node-2", fleet(3), &rows).await;
+        // Nobody holds it: a non-owner forwards to placement, which takes it.
+        assert_eq!(
+            n0.resolve(&key).await.unwrap(),
+            Resolution::Remote {
+                addr: "10.0.0.2:8080".into()
+            }
+        );
+        assert_eq!(
+            n2.resolve(&key).await.unwrap(),
+            Resolution::Local { epoch: 1 }
+        );
+        assert!(n2.serves(&key).await);
+        assert!(!n0.serves(&key).await);
+    }
+
+    #[tokio::test]
+    async fn node_local_leases_route_by_placement_alone() {
+        // Gossip fleets have no shared lease view, so nothing can be sticky: the
+        // placement owner serves, as before.
+        let key = key_moved_by_scale_out();
+        let n2 = Coordinator::new(
+            true,
+            "node-2",
+            NoCoordLease::new("node-2"),
+            MemRegistry {
+                node: "node-2".into(),
+                nodes: fleet(3),
+            },
+        );
+        n2.maintain().await;
+        assert_eq!(
+            n2.resolve(&key).await.unwrap(),
+            Resolution::Local { epoch: 1 }
+        );
+        let n0 = Coordinator::new(
+            true,
+            "node-0",
+            NoCoordLease::new("node-0"),
+            MemRegistry {
+                node: "node-0".into(),
+                nodes: fleet(3),
+            },
+        );
+        n0.maintain().await;
+        // Even after node-0 served it locally once, placement wins.
+        n0.leases.acquire(&key).await.unwrap();
+        assert_eq!(
+            n0.resolve(&key).await.unwrap(),
+            Resolution::Remote {
+                addr: "10.0.0.2:8080".into()
+            }
+        );
+        assert!(!n0.serves(&key).await);
     }
 }
