@@ -640,6 +640,9 @@ pub struct MenteDb {
     /// recount; store/forget only adjust the counts once they are ready, so a
     /// write before the first read is folded in by that recount, not lost.
     scope_counts_ready: std::sync::atomic::AtomicBool,
+    /// Serializes the grounding recount: concurrent first readers wait for one
+    /// recount instead of each walking every memory at once.
+    scope_recount: parking_lot::Mutex<()>,
     /// Maps memory IDs to their storage page IDs for retrieval.
     page_map: RwLock<HashMap<MemoryId, PageId>>,
     /// Hot flushes since the last snapshot write; see flush_snapshot_interval.
@@ -895,16 +898,16 @@ impl MenteDb {
                 .load(&cognitive_dir.join("entities.json"));
         }
 
-        // Load the persisted scope counts so a cold reopen is O(1); a missing or
-        // unreadable snapshot, or one whose stamped memory count no longer
-        // matches (writes landed after it via WAL replay), leaves them
-        // ungrounded (lazily recounted on the first read, then re-persisted).
+        // Load the persisted scope counts so a cold reopen is O(1). A snapshot
+        // whose stamped memory count no longer matches (writes landed after it
+        // via WAL replay) is kept as the approximate value for
+        // `scope_counts_approx` but left ungrounded, so the next grounding read
+        // recounts and re-persists. A missing snapshot starts at zero.
         let current_count = page_map.len();
         let (scope_counts, scope_counts_ready) = std::fs::read(path.join("scope_counts.json"))
             .ok()
             .and_then(|b| serde_json::from_slice::<(usize, ScopeCounts)>(&b).ok())
-            .filter(|(count, _)| *count == current_count)
-            .map(|(_, c)| (c, true))
+            .map(|(count, c)| (c, count == current_count))
             .unwrap_or_else(|| (ScopeCounts::default(), false));
 
         Ok(Self {
@@ -913,6 +916,7 @@ impl MenteDb {
             graph,
             scope_counts: RwLock::new(scope_counts),
             scope_counts_ready: std::sync::atomic::AtomicBool::new(scope_counts_ready),
+            scope_recount: parking_lot::Mutex::new(()),
             page_map: RwLock::new(page_map),
             flushes_since_snapshot: std::sync::atomic::AtomicU32::new(0),
             stores: std::sync::atomic::AtomicU64::new(0),
@@ -2065,9 +2069,30 @@ impl MenteDb {
         self.scope_counts.read().clone()
     }
 
+    /// The dashboard counts without ever blocking on a recount: the grounded
+    /// counts when ready, otherwise the last persisted value (possibly a little
+    /// stale, or zero on a database that never persisted them). The bool is
+    /// whether they are grounded. Request paths use this and ground the counts
+    /// off the request, so an open never makes a dashboard read walk the tenant.
+    pub fn scope_counts_approx(&self) -> (ScopeCounts, bool) {
+        let ready = self
+            .scope_counts_ready
+            .load(std::sync::atomic::Ordering::Relaxed);
+        (self.scope_counts.read().clone(), ready)
+    }
+
     /// Rebuild the scope counts from every stored memory (one load each). Runs
     /// only on the first read or when drift is detected, never on the hot path.
+    /// Single flight: callers that arrive while a recount runs wait for it and
+    /// reuse its result instead of starting their own.
     fn recompute_scope_counts(&self) {
+        let _one = self.scope_recount.lock();
+        if self
+            .scope_counts_ready
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return;
+        }
         let hidden = self.cognitive_config.hidden_count_tags.clone();
         let mut counts = ScopeCounts::default();
         for id in self.memory_ids() {
