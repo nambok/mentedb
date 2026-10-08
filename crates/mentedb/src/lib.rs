@@ -777,9 +777,23 @@ impl MenteDb {
         let index_dir = path.join("indexes");
         let graph_dir = path.join("graph");
 
+        // The indexes are derived data: every entry is rebuilt from storage by
+        // the reconcile pass below. So a snapshot that fails to load (left
+        // truncated by a process killed mid-write, before snapshots were
+        // written atomically) costs a rebuild, never the whole database.
         let index = if index_dir.join("hnsw.bin").exists() || index_dir.join("hnsw.json").exists() {
             debug!("Loading indexes from {}", index_dir.display());
-            IndexManager::load(&index_dir)?
+            match IndexManager::load(&index_dir) {
+                Ok(index) => index,
+                Err(e) => {
+                    warn!(
+                        path = %index_dir.display(),
+                        error = %e,
+                        "index snapshot unreadable, rebuilding the indexes from storage"
+                    );
+                    IndexManager::default()
+                }
+            }
         } else {
             IndexManager::default()
         };
