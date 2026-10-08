@@ -723,7 +723,7 @@ impl HnswIndex {
     /// Save the index to a binary file.
     pub fn save(&self, path: &std::path::Path) -> MenteResult<()> {
         let data = self.serialize()?;
-        std::fs::write(path, data)?;
+        crate::write_atomic(path, &data)?;
         Ok(())
     }
 

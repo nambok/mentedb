@@ -21,6 +21,9 @@ pub mod salience;
 /// Temporal index for timestamp range queries.
 pub mod temporal;
 
+mod atomic;
+pub(crate) use atomic::write_atomic;
+
 pub use bitmap::BitmapIndex;
 pub use bm25::Bm25Index;
 pub use hnsw::{DistanceMetric, HnswIndex};

@@ -181,7 +181,7 @@ impl TemporalIndex {
         };
         let data =
             bincode::serialize(&snapshot).map_err(|e| MenteError::Serialization(e.to_string()))?;
-        std::fs::write(path, data)?;
+        crate::write_atomic(path, &data)?;
         Ok(())
     }
 
