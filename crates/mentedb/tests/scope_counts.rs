@@ -216,3 +216,61 @@ fn counts_and_blobs_persist_across_reopen() {
     );
     assert_eq!(db.read_blob("never-written"), None);
 }
+
+/// A reopen after writes landed past the last snapshot used to discard the
+/// persisted counts, so the first dashboard read walked every memory on the
+/// request path. The approximate read now returns the persisted value at once
+/// (flagged ungrounded), and grounding brings it exact.
+#[test]
+fn reopen_serves_persisted_counts_without_a_recount() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let db = open(dir.path());
+        for i in 0..3 {
+            db.store(node(1, 1, MemoryType::Semantic, &format!("fact {i}"), &[]))
+                .unwrap();
+        }
+        assert_eq!(db.scope_counts().total, 3);
+        db.flush_full().unwrap();
+        // Lands after the snapshot, so the stamped count no longer matches.
+        db.store(node(1, 1, MemoryType::Semantic, "a later fact", &[]))
+            .unwrap();
+        db.flush().unwrap();
+    }
+
+    let db = open(dir.path());
+    let (approx, grounded) = db.scope_counts_approx();
+    assert!(!grounded, "writes after the snapshot leave it ungrounded");
+    assert_eq!(approx.total, 3, "the persisted value is served, not zero");
+
+    assert_eq!(db.scope_counts().total, 4);
+    let (exact, grounded) = db.scope_counts_approx();
+    assert!(grounded);
+    assert_eq!(exact.total, 4);
+}
+
+/// Concurrent first readers share one grounding recount and all see the same
+/// exact counts.
+#[test]
+fn concurrent_first_reads_agree() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let db = open(dir.path());
+        for i in 0..50 {
+            db.store(node(1, 1, MemoryType::Semantic, &format!("fact {i}"), &[]))
+                .unwrap();
+        }
+        db.flush().unwrap();
+    }
+    let db = std::sync::Arc::new(open(dir.path()));
+    let totals: Vec<u64> = (0..8)
+        .map(|_| {
+            let db = db.clone();
+            std::thread::spawn(move || db.scope_counts().total)
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .collect();
+    assert!(totals.iter().all(|t| *t == 50), "{totals:?}");
+}
