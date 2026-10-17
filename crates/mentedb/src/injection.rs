@@ -856,27 +856,55 @@ impl ModeProbe {
 
 impl MenteDb {
     /// The cached mode probe for `id`, loading the memory once on a miss
-    /// (counted in `loads`). A probe loaded while a write raced it is returned
-    /// but not cached, so the cache never keeps a stale copy.
+    /// (counted in `loads`). The slot is marked pending while loading; a write
+    /// to this memory removes the slot, so a copy read before that write is
+    /// returned but never cached. Writes to other memories do not interfere.
     pub(crate) fn mode_probe(
         &self,
         id: MemoryId,
         loads: &mut usize,
     ) -> Option<std::sync::Arc<ModeProbe>> {
-        if let Some(p) = self.mode_probes.read().get(&id) {
-            return Some(std::sync::Arc::clone(p));
-        }
-        let epoch = self.write_epoch.load(std::sync::atomic::Ordering::Acquire);
+        let token = {
+            let mut cache = self.mode_probes.write();
+            match cache.get(&id) {
+                Some(ProbeSlot::Ready(p)) => return Some(std::sync::Arc::clone(p)),
+                Some(ProbeSlot::Loading(_)) => None,
+                None => {
+                    let token = NEXT_PROBE_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    cache.insert(id, ProbeSlot::Loading(token));
+                    Some(token)
+                }
+            }
+        };
         *loads += 1;
-        let node = self.get_memory(id).ok()?;
-        let probe = std::sync::Arc::new(ModeProbe::from_node(&node));
-        let mut cache = self.mode_probes.write();
-        if self.write_epoch.load(std::sync::atomic::Ordering::Acquire) == epoch {
-            cache.insert(id, std::sync::Arc::clone(&probe));
+        let loaded = self
+            .get_memory(id)
+            .ok()
+            .map(|n| std::sync::Arc::new(ModeProbe::from_node(&n)));
+        if let Some(token) = token {
+            let mut cache = self.mode_probes.write();
+            if matches!(cache.get(&id), Some(ProbeSlot::Loading(t)) if *t == token) {
+                match &loaded {
+                    Some(p) => {
+                        cache.insert(id, ProbeSlot::Ready(std::sync::Arc::clone(p)));
+                    }
+                    None => {
+                        cache.remove(&id);
+                    }
+                }
+            }
         }
-        Some(probe)
+        loaded
     }
 }
+
+/// A mode probe cache slot: being loaded (by the holder of this token) or ready.
+pub(crate) enum ProbeSlot {
+    Loading(u64),
+    Ready(std::sync::Arc<ModeProbe>),
+}
+
+static NEXT_PROBE_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[cfg(test)]
 mod tests {
@@ -1009,8 +1037,60 @@ mod mode_probe_tests {
         assert!(db.mode_probe(id, &mut loads).is_some());
         assert_eq!(loads, 1, "second lookup must come from the cache");
 
+        // Writes to other memories leave this probe cached.
+        for _ in 0..10 {
+            db.note_write(MemoryId::new());
+        }
+        assert!(db.mode_probe(id, &mut loads).is_some());
+        assert_eq!(loads, 1, "writes to other memories must not evict it");
+
         db.note_write(id);
         assert!(db.mode_probe(id, &mut loads).is_some());
         assert_eq!(loads, 2, "a write must force a reload");
+        assert!(db.mode_probe(id, &mut loads).is_some());
+        assert_eq!(loads, 2, "and the reload is cached again");
+    }
+
+    /// The production failure: an account writing constantly (a sync backlog
+    /// draining) while recall fills the cache. Writes to other memories during
+    /// a load must not stop that probe from being cached.
+    #[test]
+    fn probes_cache_while_other_memories_are_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = std::sync::Arc::new(
+            MenteDb::open_with_embedder(dir.path(), Box::new(HashEmbeddingProvider::new(16)))
+                .unwrap(),
+        );
+        let mut ids = Vec::new();
+        for i in 0..200 {
+            let text = format!("rule {i}");
+            let emb = db.embed_text(&text).unwrap().unwrap();
+            let mut node = MemoryNode::new(AgentId::nil(), MemoryType::Procedural, text, emb);
+            node.tags = vec!["trigger:x".into()];
+            ids.push(node.id);
+            db.store(node).unwrap();
+        }
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writer = {
+            let db = std::sync::Arc::clone(&db);
+            let stop = std::sync::Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    db.note_write(MemoryId::new());
+                }
+            })
+        };
+        let mut first = 0;
+        for id in &ids {
+            db.mode_probe(*id, &mut first);
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        writer.join().unwrap();
+        assert_eq!(first, ids.len());
+        let mut second = 0;
+        for id in &ids {
+            db.mode_probe(*id, &mut second);
+        }
+        assert_eq!(second, 0, "every probe should be cached after one pass");
     }
 }

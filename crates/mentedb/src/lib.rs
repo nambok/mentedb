@@ -654,10 +654,7 @@ pub struct MenteDb {
     /// so mode activation on every injection recall is dot products in memory
     /// instead of a storage load per memory (thousands on large accounts).
     /// Filled on first use, dropped for a memory whenever it is written.
-    mode_probes: RwLock<HashMap<MemoryId, std::sync::Arc<crate::injection::ModeProbe>>>,
-    /// Bumped on every memory write, so a probe loaded while a write raced it
-    /// is never cached.
-    write_epoch: std::sync::atomic::AtomicU64,
+    mode_probes: RwLock<HashMap<MemoryId, crate::injection::ProbeSlot>>,
     /// Hot flushes since the last snapshot write; see flush_snapshot_interval.
     flushes_since_snapshot: std::sync::atomic::AtomicU32,
     /// Lifetime count of store operations (metrics).
@@ -946,7 +943,6 @@ impl MenteDb {
             scope_recount: parking_lot::Mutex::new(()),
             page_map: RwLock::new(page_map),
             mode_probes: RwLock::new(HashMap::new()),
-            write_epoch: std::sync::atomic::AtomicU64::new(0),
             flushes_since_snapshot: std::sync::atomic::AtomicU32::new(0),
             stores: std::sync::atomic::AtomicU64::new(0),
             recalls: std::sync::atomic::AtomicU64::new(0),
@@ -1097,11 +1093,10 @@ impl MenteDb {
         Ok(())
     }
 
-    /// Record that memory `id` was written: drop its cached mode probe and
-    /// advance the write epoch.
+    /// Record that memory `id` was written: drop its cached mode probe.
     pub(crate) fn note_write(&self, id: MemoryId) {
-        self.write_epoch
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        // Removing the slot also cancels a load in flight for this memory,
+        // so a copy read before this write is never cached.
         self.mode_probes.write().remove(&id);
     }
 
