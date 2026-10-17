@@ -265,3 +265,62 @@ fn exemplars_drive_activation_and_never_inject() {
         "exemplars are activation metadata and never inject: {got:?}"
     );
 }
+
+/// Mode activation reads cached probes (embedding, validity, owner) instead of
+/// loading each rule from storage. A write to a rule must reach the very next
+/// recall: invalidating it deactivates it, and re-storing it with a new
+/// embedding moves its activation.
+#[test]
+fn rule_writes_reach_the_next_recall() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open_with_gate(dir.path(), 0.4, 4);
+    let rule = directive(
+        "When working on code changes, longterm root cause fixes only",
+        "code-change",
+        axis(0, 1.0),
+    );
+    let id = rule.id;
+    db.store(rule.clone()).unwrap();
+    // Topical memories dominate ordinary retrieval, so the rule can only
+    // arrive through the mode channel.
+    for i in 0..12 {
+        db.store(MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            format!("Topical fact {i} about payment retries"),
+            axis(3, 1.0),
+        ))
+        .unwrap();
+    }
+    // A turn mostly about the topic, faintly near activity axis `a`.
+    let turn = |a: usize| {
+        let mut t = vec![0.0; DIM];
+        t[a] = 0.45;
+        t[3] = 0.89;
+        t
+    };
+    let is_active = |db: &MenteDb, emb: &[f32]| {
+        inject(db, emb, 6)
+            .iter()
+            .any(|(r, c)| *r == SelectionReason::ModeRule && c.contains("longterm"))
+    };
+    // Twice, so the second recall runs from the cache.
+    assert!(is_active(&db, &turn(0)));
+    assert!(is_active(&db, &turn(0)));
+
+    // Re-stored with an embedding on another axis: the old activity no
+    // longer activates it, the new one does.
+    let mut moved = rule.clone();
+    moved.embedding = axis(2, 1.0);
+    db.store(moved).unwrap();
+    assert!(!is_active(&db, &turn(0)));
+    assert!(is_active(&db, &turn(2)));
+
+    // Invalidated: never activates again.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros() as u64;
+    db.invalidate_memory(id, now).unwrap();
+    assert!(!is_active(&db, &turn(2)));
+}

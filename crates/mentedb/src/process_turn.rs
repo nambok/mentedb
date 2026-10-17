@@ -937,7 +937,7 @@ impl MenteDb {
         };
         if !node.tags.iter().any(|t| t == "auto-correction") {
             node.tags.push("auto-correction".to_string());
-            self.storage.update_memory(pid, &node)?;
+            self.update_node(pid, &node)?;
         }
         Ok(Some(eid))
     }

@@ -649,6 +649,15 @@ pub struct MenteDb {
     scope_recount: parking_lot::Mutex<()>,
     /// Maps memory IDs to their storage page IDs for retrieval.
     page_map: RwLock<HashMap<MemoryId, PageId>>,
+    /// Embedding, validity and owner of the memories that decide whether an
+    /// activity mode is active (`trigger:` rules and `mode-exemplar:` turns),
+    /// so mode activation on every injection recall is dot products in memory
+    /// instead of a storage load per memory (thousands on large accounts).
+    /// Filled on first use, dropped for a memory whenever it is written.
+    mode_probes: RwLock<HashMap<MemoryId, std::sync::Arc<crate::injection::ModeProbe>>>,
+    /// Bumped on every memory write, so a probe loaded while a write raced it
+    /// is never cached.
+    write_epoch: std::sync::atomic::AtomicU64,
     /// Hot flushes since the last snapshot write; see flush_snapshot_interval.
     flushes_since_snapshot: std::sync::atomic::AtomicU32,
     /// Lifetime count of store operations (metrics).
@@ -936,6 +945,8 @@ impl MenteDb {
             scope_counts_ready: std::sync::atomic::AtomicBool::new(scope_counts_ready),
             scope_recount: parking_lot::Mutex::new(()),
             page_map: RwLock::new(page_map),
+            mode_probes: RwLock::new(HashMap::new()),
+            write_epoch: std::sync::atomic::AtomicU64::new(0),
             flushes_since_snapshot: std::sync::atomic::AtomicU32::new(0),
             stores: std::sync::atomic::AtomicU64::new(0),
             recalls: std::sync::atomic::AtomicU64::new(0),
@@ -1078,6 +1089,22 @@ impl MenteDb {
         }
     }
 
+    /// Persist an updated memory. Every in place update goes through here so
+    /// derived in memory state (the mode activation probes) stays current.
+    fn update_node(&self, page_id: PageId, node: &MemoryNode) -> MenteResult<()> {
+        self.storage.update_memory(page_id, node)?;
+        self.note_write(node.id);
+        Ok(())
+    }
+
+    /// Record that memory `id` was written: drop its cached mode probe and
+    /// advance the write epoch.
+    pub(crate) fn note_write(&self, id: MemoryId) {
+        self.write_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        self.mode_probes.write().remove(&id);
+    }
+
     /// Stores a memory node into the database.
     ///
     /// The node is persisted to storage, added to all indexes, and registered
@@ -1133,6 +1160,7 @@ impl MenteDb {
 
         let is_new = !self.page_map.read().contains_key(&id);
         let page_id = self.storage.store_memory(&node)?;
+        self.note_write(id);
         self.page_map.write().insert(id, page_id);
         self.index.index_memory(&node);
         self.graph.add_memory(id);
@@ -1361,7 +1389,7 @@ impl MenteDb {
             if drop.salience > keeper.salience {
                 keeper.salience = drop.salience;
             }
-            self.storage.update_memory(keep_pid, &keeper)?;
+            self.update_node(keep_pid, &keeper)?;
             self.forget(drop.id)?;
             merged += 1;
         }
@@ -1419,6 +1447,9 @@ impl MenteDb {
         }
 
         let page_ids = self.storage.store_memory_batch(&nodes)?;
+        for node in &nodes {
+            self.note_write(node.id);
+        }
 
         // Lock order: never hold `page_map` while taking the graph lock. Recall
         // holds both for reading, so a writer holding `page_map` while waiting
@@ -2006,7 +2037,7 @@ impl MenteDb {
             .ok_or(MenteError::MemoryNotFound(id))?;
         let mut node = self.storage.load_memory(page_id)?;
         node.invalidate(at);
-        self.storage.update_memory(page_id, &node)?;
+        self.update_node(page_id, &node)?;
         Ok(())
     }
 
@@ -2506,6 +2537,7 @@ impl MenteDb {
             // resurrect when the page map is rebuilt on reopen.
             self.storage.delete_memory(page_id)?;
         }
+        self.note_write(id);
 
         self.graph.remove_memory(id);
         self.page_map.write().remove(&id);
@@ -2838,7 +2870,7 @@ impl MenteDb {
                 if let Ok(mut node) = self.get_memory(memory) {
                     node.confidence = new_confidence;
                     if let Some(&pid) = self.page_map.read().get(&memory) {
-                        self.storage.update_memory(pid, &node)?;
+                        self.update_node(pid, &node)?;
                     }
                 }
             }
@@ -2851,7 +2883,7 @@ impl MenteDb {
                         if let Ok(mut affected_node) = self.get_memory(affected_id) {
                             affected_node.confidence = new_conf;
                             if let Some(&pid) = self.page_map.read().get(&affected_id)
-                                && let Err(e) = self.storage.update_memory(pid, &affected_node)
+                                && let Err(e) = self.update_node(pid, &affected_node)
                             {
                                 warn!("Failed to persist belief update for {affected_id}: {e}");
                             }
@@ -2868,7 +2900,7 @@ impl MenteDb {
                 if let Ok(mut node) = self.get_memory(memory) {
                     node.content = new_content;
                     if let Some(&pid) = self.page_map.read().get(&memory) {
-                        self.storage.update_memory(pid, &node)?;
+                        self.update_node(pid, &node)?;
                     }
                     self.index.remove_memory(memory, &node);
                     self.index.index_memory(&node);
@@ -2949,7 +2981,7 @@ impl MenteDb {
             if let Ok(mut node) = self.storage.load_memory(*pid) {
                 node.salience = max_salience;
                 node.accessed_at = now;
-                self.storage.update_memory(*pid, &node)?;
+                self.update_node(*pid, &node)?;
                 reset += 1;
             }
         }
@@ -3026,7 +3058,7 @@ impl MenteDb {
             }
             self.index.remove_vector_only(node.id);
             node.embedding = embedding;
-            self.storage.update_memory(*pid, &node)?;
+            self.update_node(*pid, &node)?;
             self.index.index_memory(&node);
             reembedded += 1;
         }
@@ -4709,7 +4741,7 @@ impl MenteDb {
                         .embed(summary)
                         .unwrap_or_else(|_| updated.embedding.clone());
                 }
-                self.storage.update_memory(*pid, &updated)?;
+                self.update_node(*pid, &updated)?;
                 existing_id = Some(updated.id);
                 break;
             }
@@ -4854,7 +4886,7 @@ impl MenteDb {
                         .embed(profile)
                         .unwrap_or_else(|_| updated.embedding.clone());
                 }
-                self.storage.update_memory(*pid, &updated)?;
+                self.update_node(*pid, &updated)?;
                 return Ok(updated.id);
             }
         }

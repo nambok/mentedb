@@ -686,27 +686,25 @@ impl MenteDb {
                 let exemplar_ids = self.index.bitmap.query_tag(&exemplar_tag);
                 if exemplar_ids.is_empty() {
                     for mid in self.index.bitmap.query_tag(&tag) {
-                        mode_loads += 1;
-                        if let Ok(node) = self.get_memory(mid)
-                            && node.is_valid_at(now)
-                            && !node.embedding.is_empty()
-                            && crate::agent_visible(node.agent_id, query.agent_id)
-                            && crate::user_visible(node.user_id, query.user_id)
+                        if let Some(probe) = self.mode_probe(mid, &mut mode_loads)
+                            && probe.is_valid_at(now)
+                            && !probe.embedding.is_empty()
+                            && crate::agent_visible(probe.agent_id, query.agent_id)
+                            && crate::user_visible(probe.user_id, query.user_id)
                         {
-                            let sim = cosine_similarity(query.embedding, &node.embedding);
+                            let sim = cosine_similarity(query.embedding, &probe.embedding);
                             activation = activation.max(sim);
                         }
                     }
                 } else {
                     for mid in exemplar_ids {
-                        mode_loads += 1;
-                        if let Ok(node) = self.get_memory(mid)
-                            && node.is_valid_at(now)
-                            && !node.embedding.is_empty()
-                            && crate::agent_visible(node.agent_id, query.agent_id)
-                            && crate::user_visible(node.user_id, query.user_id)
+                        if let Some(probe) = self.mode_probe(mid, &mut mode_loads)
+                            && probe.is_valid_at(now)
+                            && !probe.embedding.is_empty()
+                            && crate::agent_visible(probe.agent_id, query.agent_id)
+                            && crate::user_visible(probe.user_id, query.user_id)
                         {
-                            let sim = cosine_similarity(query.embedding, &node.embedding);
+                            let sim = cosine_similarity(query.embedding, &probe.embedding);
                             activation = activation.max(sim);
                         }
                     }
@@ -817,10 +815,66 @@ impl MenteDb {
 
             // Counter updates must not re-run write inference; write the
             // node in place.
-            self.storage.update_memory(pid, &node)?;
+            self.update_node(pid, &node)?;
             updated += 1;
         }
         Ok((updated, used_total))
+    }
+}
+
+/// What mode activation needs from a `trigger:` rule or `mode-exemplar:` turn:
+/// its embedding, validity window and owner. Cached per memory on the
+/// database so activation never loads the full memory from storage.
+pub(crate) struct ModeProbe {
+    pub(crate) embedding: Vec<f32>,
+    pub(crate) agent_id: AgentId,
+    pub(crate) user_id: UserId,
+    valid_from: Option<u64>,
+    valid_until: Option<u64>,
+}
+
+impl ModeProbe {
+    fn from_node(node: &MemoryNode) -> Self {
+        Self {
+            embedding: node.embedding.clone(),
+            agent_id: node.agent_id,
+            user_id: node.user_id,
+            valid_from: node.valid_from,
+            valid_until: node.valid_until,
+        }
+    }
+
+    /// Same rule as `MemoryNode::is_valid_at`.
+    pub(crate) fn is_valid_at(&self, at: u64) -> bool {
+        let from = self.valid_from.unwrap_or(0);
+        match self.valid_until {
+            Some(until) => at >= from && at < until,
+            None => at >= from,
+        }
+    }
+}
+
+impl MenteDb {
+    /// The cached mode probe for `id`, loading the memory once on a miss
+    /// (counted in `loads`). A probe loaded while a write raced it is returned
+    /// but not cached, so the cache never keeps a stale copy.
+    pub(crate) fn mode_probe(
+        &self,
+        id: MemoryId,
+        loads: &mut usize,
+    ) -> Option<std::sync::Arc<ModeProbe>> {
+        if let Some(p) = self.mode_probes.read().get(&id) {
+            return Some(std::sync::Arc::clone(p));
+        }
+        let epoch = self.write_epoch.load(std::sync::atomic::Ordering::Acquire);
+        *loads += 1;
+        let node = self.get_memory(id).ok()?;
+        let probe = std::sync::Arc::new(ModeProbe::from_node(&node));
+        let mut cache = self.mode_probes.write();
+        if self.write_epoch.load(std::sync::atomic::Ordering::Acquire) == epoch {
+            cache.insert(id, std::sync::Arc::clone(&probe));
+        }
+        Some(probe)
     }
 }
 
@@ -931,5 +985,32 @@ mod tests {
         assert_eq!(project_of(&node), Some("apex"));
         let untagged = node_with_tags(MemoryType::Semantic, &["session:s1"]);
         assert_eq!(project_of(&untagged), None);
+    }
+}
+
+#[cfg(test)]
+mod mode_probe_tests {
+    use super::*;
+    use mentedb_embedding::hash_provider::HashEmbeddingProvider;
+
+    #[test]
+    fn probes_load_once_and_reload_after_a_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = MenteDb::open_with_embedder(dir.path(), Box::new(HashEmbeddingProvider::new(16)))
+            .unwrap();
+        let emb = db.embed_text("rule").unwrap().unwrap();
+        let mut node = MemoryNode::new(AgentId::nil(), MemoryType::Procedural, "rule".into(), emb);
+        node.tags = vec!["trigger:x".into()];
+        let id = node.id;
+        db.store(node).unwrap();
+
+        let mut loads = 0;
+        assert!(db.mode_probe(id, &mut loads).is_some());
+        assert!(db.mode_probe(id, &mut loads).is_some());
+        assert_eq!(loads, 1, "second lookup must come from the cache");
+
+        db.note_write(id);
+        assert!(db.mode_probe(id, &mut loads).is_some());
+        assert_eq!(loads, 2, "a write must force a reload");
     }
 }
