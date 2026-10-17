@@ -248,6 +248,8 @@ pub struct DbMetrics {
     pub memory_count: u64,
     /// Lifetime store operations (writes).
     pub stores: u64,
+    /// Lifetime memories loaded from storage by id (`get_memory`).
+    pub memory_loads: u64,
     /// Lifetime recall/query operations (reads).
     pub recalls: u64,
     /// EMA of recent store op latency, microseconds. 0 until the first store.
@@ -659,6 +661,7 @@ pub struct MenteDb {
     flushes_since_snapshot: std::sync::atomic::AtomicU32,
     /// Lifetime count of store operations (metrics).
     stores: std::sync::atomic::AtomicU64,
+    memory_loads: std::sync::atomic::AtomicU64,
     /// Lifetime count of recall/query operations (metrics).
     recalls: std::sync::atomic::AtomicU64,
     /// EMA of store op latency, microseconds (metrics). 0 until the first store.
@@ -945,6 +948,7 @@ impl MenteDb {
             mode_probes: RwLock::new(HashMap::new()),
             flushes_since_snapshot: std::sync::atomic::AtomicU32::new(0),
             stores: std::sync::atomic::AtomicU64::new(0),
+            memory_loads: std::sync::atomic::AtomicU64::new(0),
             recalls: std::sync::atomic::AtomicU64::new(0),
             store_latency_us: std::sync::atomic::AtomicU64::new(0),
             search_latency_us: std::sync::atomic::AtomicU64::new(0),
@@ -2051,6 +2055,8 @@ impl MenteDb {
             .get(&id)
             .copied()
             .ok_or(MenteError::MemoryNotFound(id))?;
+        self.memory_loads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.storage.load_memory(page_id)
     }
 
@@ -2437,6 +2443,7 @@ impl MenteDb {
         DbMetrics {
             memory_count: self.memory_count() as u64,
             stores: self.stores.load(Relaxed),
+            memory_loads: self.memory_loads.load(Relaxed),
             recalls: self.recalls.load(Relaxed),
             avg_store_latency_us: self.store_latency_us.load(Relaxed),
             avg_search_latency_us: self.search_latency_us.load(Relaxed),

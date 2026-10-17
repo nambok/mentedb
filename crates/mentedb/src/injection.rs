@@ -674,6 +674,7 @@ impl MenteDb {
         if cfg.mode_trigger_gate > 0.0 && !query.embedding.is_empty() {
             let now = now_us();
             let mut mode_rules: Vec<(f32, MemoryNode)> = Vec::new();
+            let mut mode_candidates: Vec<(f32, MemoryId, String)> = Vec::new();
             for tag in self.index.bitmap.tags_with_prefix("trigger:") {
                 mode_tags += 1;
                 let trigger = tag.trim_start_matches("trigger:");
@@ -712,31 +713,46 @@ impl MenteDb {
                 if activation < cfg.mode_trigger_gate {
                     continue;
                 }
-                // The mode is active: inject its RULES (never exemplars).
+                // The mode is active: its RULES (never exemplars) become
+                // candidates. Validity and owner come from the cached probes;
+                // full memories are loaded below only for the few kept.
                 for mid in self.index.bitmap.query_tag(&tag) {
                     if excluded.contains(&mid)
                         || result.iter().any(|c| c.node.id == mid)
                         || selected.iter().any(|c| c.node.id == mid)
-                        || mode_rules.iter().any(|(_, n)| n.id == mid)
+                        || mode_candidates.iter().any(|(_, id, _)| *id == mid)
                     {
                         continue;
                     }
-                    mode_loads += 1;
-                    let Ok(node) = self.get_memory(mid) else {
+                    let Some(probe) = self.mode_probe(mid, &mut mode_loads) else {
                         continue;
                     };
-                    if !node.tags.iter().any(|t| t == &tag)
-                        || !node.is_valid_at(now)
-                        || !crate::agent_visible(node.agent_id, query.agent_id)
-                        || !crate::user_visible(node.user_id, query.user_id)
+                    if !probe.is_valid_at(now)
+                        || !crate::agent_visible(probe.agent_id, query.agent_id)
+                        || !crate::user_visible(probe.user_id, query.user_id)
                     {
                         continue;
                     }
+                    mode_candidates.push((activation, mid, tag.clone()));
+                }
+            }
+            // Strongest mode first (stable, so rules keep their index order
+            // within a mode), then load only until the cap is filled. A rule
+            // whose stored tags no longer carry the trigger is skipped, as
+            // before.
+            mode_candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+            for (activation, mid, tag) in mode_candidates {
+                if mode_rules.len() >= cfg.mode_rules_max {
+                    break;
+                }
+                mode_loads += 1;
+                let Ok(node) = self.get_memory(mid) else {
+                    continue;
+                };
+                if node.tags.iter().any(|t| t == &tag) {
                     mode_rules.push((activation, node));
                 }
             }
-            mode_rules.sort_by(|a, b| b.0.total_cmp(&a.0));
-            mode_rules.truncate(cfg.mode_rules_max);
             for (sim, node) in mode_rules {
                 result.push(InjectionCandidate {
                     node,

@@ -324,3 +324,47 @@ fn rule_writes_reach_the_next_recall() {
     db.invalidate_memory(id, now).unwrap();
     assert!(!is_active(&db, &turn(2)));
 }
+
+/// An active mode with hundreds of rules loads only the few it injects. Ranking
+/// uses cached probes, so a warm recall loads at most `mode_rules_max` full
+/// memories for the mode channel, not every rule in the mode.
+#[test]
+fn an_active_mode_loads_only_the_rules_it_keeps() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open_with_gate(dir.path(), 0.4, 4);
+    for i in 0..300 {
+        db.store(directive(
+            &format!("Working rule {i}: longterm root cause fixes only"),
+            "code-change",
+            axis(0, 1.0),
+        ))
+        .unwrap();
+    }
+    for i in 0..12 {
+        db.store(MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Semantic,
+            format!("Topical fact {i} about payment retries"),
+            axis(3, 1.0),
+        ))
+        .unwrap();
+    }
+    let mut turn = vec![0.0; DIM];
+    turn[0] = 0.45;
+    turn[3] = 0.89;
+
+    // The first recall fills the probe cache.
+    let first = inject(&db, &turn, 6);
+    let kept = first
+        .iter()
+        .filter(|(r, _)| *r == SelectionReason::ModeRule)
+        .count();
+    assert_eq!(kept, 4, "the mode injects its cap: {first:?}");
+
+    let before = db.metrics().memory_loads;
+    let second = inject(&db, &turn, 6);
+    let loads = db.metrics().memory_loads - before;
+    assert_eq!(first, second, "the warm recall picks the same memories");
+    // Hybrid candidates plus the 4 kept rules; never the 300 in the mode.
+    assert!(loads < 100, "warm recall loaded {loads} memories");
+}
