@@ -1416,15 +1416,21 @@ impl MenteDb {
 
         let page_ids = self.storage.store_memory_batch(&nodes)?;
 
+        // Lock order: never hold `page_map` while taking the graph lock. Recall
+        // holds both for reading, so a writer holding `page_map` while waiting
+        // on the graph deadlocks against it (and every later call queues).
+        {
+            let mut page_map = self.page_map.write();
+            for (node, page_id) in nodes.iter().zip(page_ids.iter()) {
+                page_map.insert(node.id, *page_id);
+            }
+        }
         let mut ids = Vec::with_capacity(nodes.len());
-        let mut page_map = self.page_map.write();
-        for (node, page_id) in nodes.iter().zip(page_ids.iter()) {
-            page_map.insert(node.id, *page_id);
+        for node in &nodes {
             self.index.index_memory(node);
             self.graph.add_memory(node.id);
             ids.push(node.id);
         }
-        drop(page_map);
         self.stores
             .fetch_add(ids.len() as u64, std::sync::atomic::Ordering::Relaxed);
 
@@ -1785,8 +1791,9 @@ impl MenteDb {
         let results = self.index.hybrid_search_with_query_mode(
             embedding, query_text, tags, tags_or, time_range, fetch_k,
         );
-        let graph = self.graph.graph();
+        // Lock order when both are held: `page_map` first, then the graph.
         let pm = self.page_map.read();
+        let graph = self.graph.graph();
         // (id, score, content for a reranker, embedding for the MMR pass); the
         // last two are captured only when their stage is active.
         type ScoredCandidate = (MemoryId, f32, Option<String>, Option<Vec<f32>>);
@@ -3866,8 +3873,33 @@ impl MenteDb {
     where
         F: Fn(&str) -> Option<(String, Vec<MemoryId>, Option<Vec<f32>>)>,
     {
-        if self.cognitive_config.speculative_cache {
-            self.speculative.write().pre_assemble(predictions, builder);
+        if !self.cognitive_config.speculative_cache {
+            return;
+        }
+        // The builder embeds, recalls and loads memories, which can take
+        // seconds or hang on the network. Build with no lock held so recall's
+        // cache check and flush never wait on it; lock only to insert.
+        let pending: Vec<String> = {
+            let cache = self.speculative.read();
+            predictions
+                .into_iter()
+                .filter(|t| !cache.contains_topic(t))
+                .collect()
+        };
+        let built: Vec<_> = pending
+            .into_iter()
+            .filter_map(|topic| builder(&topic).map(|b| (topic, b)))
+            .collect();
+        if built.is_empty() {
+            return;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
+        let mut cache = self.speculative.write();
+        for (topic, b) in built {
+            cache.insert_built(topic, b, now);
         }
     }
 

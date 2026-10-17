@@ -92,26 +92,44 @@ impl SpeculativeCache {
             .as_micros() as u64;
 
         for topic in predictions {
-            if self.entries.iter().any(|e| e.topic == topic) {
+            if self.contains_topic(&topic) {
                 continue;
             }
-
-            if let Some((context_text, memory_ids, embedding)) = builder(&topic) {
-                if self.entries.len() >= self.max_size {
-                    self.evict_lru();
-                }
-
-                self.entries.push(CacheEntry {
-                    topic,
-                    topic_embedding: embedding,
-                    context_text,
-                    memory_ids,
-                    created_at: now,
-                    hit_count: 0,
-                    last_accessed: now,
-                });
+            if let Some(built) = builder(&topic) {
+                self.insert_built(topic, built, now);
             }
         }
+    }
+
+    /// Whether an entry for `topic` is already cached.
+    pub fn contains_topic(&self, topic: &str) -> bool {
+        self.entries.iter().any(|e| e.topic == topic)
+    }
+
+    /// Insert an entry built elsewhere, evicting the least recently used one
+    /// when full. A topic already cached is left as is. Lets callers run the
+    /// (slow, possibly networked) build without holding the cache lock.
+    pub fn insert_built(
+        &mut self,
+        topic: String,
+        (context_text, memory_ids, embedding): (String, Vec<MemoryId>, Option<Vec<f32>>),
+        now: u64,
+    ) {
+        if self.contains_topic(&topic) {
+            return;
+        }
+        if self.entries.len() >= self.max_size {
+            self.evict_lru();
+        }
+        self.entries.push(CacheEntry {
+            topic,
+            topic_embedding: embedding,
+            context_text,
+            memory_ids,
+            created_at: now,
+            hit_count: 0,
+            last_accessed: now,
+        });
     }
 
     /// Try to find a cached context for this query. Uses cosine similarity on
