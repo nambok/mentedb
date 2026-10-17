@@ -355,6 +355,9 @@ pub struct CognitiveConfig {
     /// duplicates, `0.5` diversifies harder. Runs after any reranker, over the
     /// same over-fetched pool, so it can pull a distinct memory into the top k.
     pub mmr_lambda: f32,
+    /// An injection recall at or above this many milliseconds logs its phase
+    /// timings and how many memories each phase loaded.
+    pub slow_recall_log_ms: u64,
     /// Maximum pain signals to retain.
     pub pain_max_warnings: usize,
     /// Configuration for injection attention selection.
@@ -473,6 +476,7 @@ impl Default for CognitiveConfig {
             project_scope_penalty: 0.5,
             rerank_pool_factor: 4,
             mmr_lambda: 1.0,
+            slow_recall_log_ms: 1000,
             pain_max_warnings: 5,
             injection_config: injection::InjectionConfig::default(),
             flush_snapshot_interval: 8,

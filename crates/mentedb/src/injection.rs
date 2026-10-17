@@ -335,6 +335,9 @@ impl MenteDb {
         let excluded: HashSet<MemoryId> = query.exclude_ids.iter().copied().collect();
         let session_tag = query.session_id.map(|s| format!("session:{s}"));
 
+        // Phase timings, logged when a call is slow, so a slow recall in
+        // production names the phase and how many memories it loaded.
+        let t_start = std::time::Instant::now();
         // Candidate pool from hybrid recall.
         let hits = self
             .recall_hybrid_scoped_at_mode(
@@ -351,6 +354,8 @@ impl MenteDb {
             )
             .unwrap_or_default();
 
+        let t_hybrid = t_start.elapsed();
+        let hybrid_hits = hits.len();
         let mut candidates: Vec<(MemoryNode, f32, f32)> = Vec::new();
         for (id, score) in hits {
             if excluded.contains(&id) {
@@ -639,11 +644,14 @@ impl MenteDb {
         // near-zero) so this loads only the handful of matches; the old path
         // scanned every page on every injection call, which thrashed the
         // buffer pool against disk on large accounts.
+        let t_selected = t_start.elapsed();
+        let mut pinned_loads = 0usize;
         let mut result: Vec<InjectionCandidate> = Vec::new();
         for mid in self.index.bitmap.query_tag("scope:always") {
             if excluded.contains(&mid) {
                 continue;
             }
+            pinned_loads += 1;
             if let Ok(node) = self.get_memory(mid)
                 && crate::agent_visible(node.agent_id, query.agent_id)
                 && crate::user_visible(node.user_id, query.user_id)
@@ -660,10 +668,14 @@ impl MenteDb {
         // the login timeout" even though they share no words; the turn's
         // embedding landing near the rule's own stored embedding is the
         // activation, cognitive and self defining, dot products only.
+        let t_pinned = t_start.elapsed();
+        let mut mode_tags = 0usize;
+        let mut mode_loads = 0usize;
         if cfg.mode_trigger_gate > 0.0 && !query.embedding.is_empty() {
             let now = now_us();
             let mut mode_rules: Vec<(f32, MemoryNode)> = Vec::new();
             for tag in self.index.bitmap.tags_with_prefix("trigger:") {
+                mode_tags += 1;
                 let trigger = tag.trim_start_matches("trigger:");
                 // Activation signal: the trigger's exemplar turns when it
                 // has any (model emitted examples of requests that enter
@@ -674,6 +686,7 @@ impl MenteDb {
                 let exemplar_ids = self.index.bitmap.query_tag(&exemplar_tag);
                 if exemplar_ids.is_empty() {
                     for mid in self.index.bitmap.query_tag(&tag) {
+                        mode_loads += 1;
                         if let Ok(node) = self.get_memory(mid)
                             && node.is_valid_at(now)
                             && !node.embedding.is_empty()
@@ -686,6 +699,7 @@ impl MenteDb {
                     }
                 } else {
                     for mid in exemplar_ids {
+                        mode_loads += 1;
                         if let Ok(node) = self.get_memory(mid)
                             && node.is_valid_at(now)
                             && !node.embedding.is_empty()
@@ -709,6 +723,7 @@ impl MenteDb {
                     {
                         continue;
                     }
+                    mode_loads += 1;
                     let Ok(node) = self.get_memory(mid) else {
                         continue;
                     };
@@ -734,6 +749,21 @@ impl MenteDb {
         }
 
         result.extend(selected);
+        let total = t_start.elapsed();
+        if total >= std::time::Duration::from_millis(self.cognitive_config.slow_recall_log_ms) {
+            tracing::info!(
+                total_ms = total.as_millis() as u64,
+                hybrid_ms = t_hybrid.as_millis() as u64,
+                select_ms = (t_selected - t_hybrid).as_millis() as u64,
+                pinned_ms = (t_pinned - t_selected).as_millis() as u64,
+                mode_ms = (total - t_pinned).as_millis() as u64,
+                hybrid_hits,
+                pinned_loads,
+                mode_tags,
+                mode_loads,
+                "slow injection recall"
+            );
+        }
         Ok(result)
     }
 
