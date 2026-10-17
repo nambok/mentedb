@@ -158,6 +158,10 @@ jobs:
           persist-credentials: false
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      # release-pr runs cargo-semver-checks, which builds mentedb-server and
+      # its gRPC code generation needs protoc.
+      - name: Install protobuf compiler
+        run: sudo apt-get install -y protobuf-compiler
       - name: Run release-plz
         uses: release-plz/action@v0.5
         with:
