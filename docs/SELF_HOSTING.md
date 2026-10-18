@@ -423,7 +423,7 @@ inference profile for extraction):
       "Resource": [
         "arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-english-v3",
         "arn:aws:bedrock:us-east-1:<account-id>:inference-profile/us.anthropic.claude-haiku-5-5",
-        "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5*"
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-5-5"
       ]
     }
   ]
