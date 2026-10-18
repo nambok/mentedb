@@ -283,13 +283,14 @@ mentedb-server --data-dir ./data          # REST on :6677
 ```
 
 ```bash
-curl -X POST http://localhost:6677/v1/ingest \
+curl -X POST http://localhost:6677/v1/process_turn \
   -H "Content-Type: application/json" \
   -d '{"user_message":"I switched from Postgres to SQLite","assistant_response":"Noted.","turn_id":0}'
 ```
 
 See [Self-hosting](./SELF_HOSTING.md) for LLM config, embeddings, auth, and the
-overnight maintenance the server runs to keep memory healthy.
+overnight maintenance the server runs to keep memory healthy, and the
+[server API reference](./SERVER_API.md) for every endpoint.
 
 ## What `process_turn` returns
 
@@ -306,7 +307,9 @@ field you use most is `context`. The rest is signal you can act on or ignore.
 | `predicted_topics` | Where the conversation is likely heading (from trajectory analysis). |
 
 Node returns these in camelCase (`factsExtracted`, `contradictionCount`); Python
-and the REST payload use snake_case.
+uses snake_case. The self-hosted server's REST payload is snake_case too, with
+`contradictions` and `pain_warnings` as counts (see
+[`POST /process_turn`](./SERVER_API.md#post-process_turn)).
 
 ## Next steps
 

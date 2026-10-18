@@ -231,7 +231,8 @@ The result: a clean, curated memory that actually helps the AI perform better.
 - **Type Safe IDs** MemoryId, AgentId, SpaceId newtypes prevent accidental mixing
 - **Binary Embeddings** Base64 encoded storage, 65% smaller than JSON arrays
 - **Local Candle Embeddings** Zero config semantic search using all-MiniLM-L6-v2 (384 dims), no API key required (Docker image includes it; source builds need `--features local-embeddings`)
-- **AWS Bedrock Embeddings** Native Amazon Titan embeddings via a lightweight SigV4 signer (no async AWS SDK); enable `mentedb-embedding`'s `bedrock` feature, credentials from the standard AWS environment variables. Also available from the Python SDK as `embedding_provider="bedrock"`
+- **AWS Bedrock Embeddings** Cohere Embed v3 (batches of 96) and Amazon Titan embeddings via a lightweight SigV4 signer (no async AWS SDK); enable `mentedb-embedding`'s `bedrock` feature. Credentials come from AWS environment keys or the ECS task role / EKS Pod Identity endpoint, refreshed before they expire. Also available from the Python SDK as `embedding_provider="bedrock"`
+- **Self-Hosted Server** One process serves many databases (`/v1/db/{name}/...`, one directory and lock per tenant), tokens scoped to databases and optionally read only (verifiable with a public key, so no shared secret on the server), native HTTPS, Bedrock embeddings and extraction through the task role, and REST endpoints for hybrid search, heads-up context, pins, history, graph neighbors, conflicts, documents, maintenance and backups. See the [server API reference](docs/SERVER_API.md)
 - **gRPC + REST + MCP** Three integration paths for any use case
 
 ### Entity-Centric Memory
@@ -300,18 +301,27 @@ See [mentedb-mcp](https://github.com/nambok/mentedb-mcp) for setup, configuratio
 
 ```bash
 # Start the server
-cargo run -p mentedb-server -- --data-dir ./data --jwt-secret-file ./secret.key
+cargo run -p mentedb-server -- --data-dir ./data --jwt-secret "$MENTEDB_JWT_SECRET"
 
 # Store a memory
 curl -X POST http://localhost:6677/v1/memories \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"agent_id": "...", "content": "User prefers dark mode", "memory_type": "semantic"}'
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"agent_id": "...", "content": "User prefers dark mode", "memory_type": "semantic", "tags": ["preferences"]}'
 
-# Recall memories
+# Hybrid search (vector + keyword) with text the server embeds
+curl -X POST http://localhost:6677/v1/search/hybrid \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"query": "what theme does the user like", "k": 5}'
+
+# Recall with MQL
 curl -X POST http://localhost:6677/v1/recall \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"mql": "RECALL memories WHERE tag = \"preferences\" LIMIT 10"}'
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"query": "RECALL memories WHERE tag = \"preferences\" LIMIT 10"}'
 ```
+
+Every route also works per database under `/v1/db/{name}/...`. The full list of
+endpoints, fields, auth rules and error codes is in the
+[server API reference](docs/SERVER_API.md).
 
 ### 3. gRPC
 
@@ -698,18 +708,20 @@ MenteDB is organized as a Cargo workspace with 13 crates:
 | `mentedb-consolidation` | Temporal decay, memory consolidation, salience management, archival |
 | `mentedb-embedding` | Embedding provider abstraction |
 | `mentedb-extraction` | LLM powered memory extraction pipeline |
-| `mentedb-server` | REST + gRPC server with JWT auth, space ACLs, rate limiting |
+| `mentedb-server` | REST + gRPC server with named databases, scoped JWT auth, HTTPS, space ACLs, rate limiting |
 | `mentedb-replication` | Raft based replication (experimental) |
 
 ## Security
 
 MenteDB includes production security features:
 
-- **JWT Authentication** on all REST and gRPC endpoints
+- **JWT Authentication** on all REST and gRPC endpoints, verified with a shared secret (HS256) or a public key (RS256, ES256, EdDSA) so tokens can be signed elsewhere
+- **Database Scoped Tokens** `dbs` and `read_only` claims limit a token to some databases and to reads
 - **Agent Isolation** JWT claims enforce per agent data access
 - **Space ACLs** fine grained permissions for multi agent setups
-- **Admin Keys** separate admin authentication for token issuance
-- **Rate Limiting** per agent write rate enforcement
+- **Admin Keys** separate admin authentication for token issuance, database management and backups
+- **HTTPS** the server terminates TLS for REST and gRPC itself (`--tls-cert`, `--tls-key`)
+- **Rate Limiting** per client IP token bucket on every request
 - **Embedding Validation** dimension mismatch returns errors, not panics
 
 ```bash
@@ -728,13 +740,16 @@ Configure the extraction pipeline via environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MENTEDB_LLM_PROVIDER` | openai, anthropic, ollama, none | none |
-| `MENTEDB_LLM_API_KEY` | API key for the provider | |
+| `MENTEDB_LLM_PROVIDER` | openai, anthropic, ollama, bedrock, none | none |
+| `MENTEDB_LLM_API_KEY` | API key for the provider (not used by ollama or bedrock) | |
 | `MENTEDB_LLM_MODEL` | Model name | Provider default |
 | `MENTEDB_LLM_BASE_URL` | Custom base URL (Ollama, proxies) | Provider default |
 | `MENTEDB_EXTRACTION_QUALITY_THRESHOLD` | Min confidence to store (0.0 to 1.0) | 0.7 |
 | `MENTEDB_EXTRACTION_DEDUP_THRESHOLD` | Similarity threshold for dedup (0.0 to 1.0) | 0.85 |
-| `MENTEDB_EMBEDDING_PROVIDER` | Server embeddings: candle, hash, none | candle when built with `local-embeddings`, else hash |
+| `MENTEDB_EMBEDDING_PROVIDER` | Server embeddings: candle, bedrock, hash, none | candle when built with `local-embeddings`, else hash |
+| `MENTEDB_EMBEDDING_MODEL` | Bedrock embedding model | `cohere.embed-english-v3` |
+
+Every server variable (auth, databases, TLS, Bedrock, backups) is listed in [Self-hosting](docs/SELF_HOSTING.md#environment-variable-reference).
 
 Semantic search, auto-linking, and contradiction detection all depend on real embeddings. The Docker image ships with local Candle embeddings; a plain `cargo install mentedb-server` falls back to non-semantic hash embeddings and warns loudly at startup — build with `--features local-embeddings` for full quality.
 
