@@ -298,6 +298,15 @@ pub struct EntitySeparation {
     pub name_b: String,
 }
 
+/// What [`MenteDb::store_with_outcome`] did with a memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreOutcome {
+    /// Written under its own id.
+    Stored,
+    /// Not written: it duplicates the existing memory `of`.
+    Duplicate { of: MemoryId },
+}
+
 /// Configuration for the cognitive engine subsystems.
 #[derive(Debug, Clone)]
 pub struct CognitiveConfig {
@@ -1119,7 +1128,14 @@ impl MenteDb {
     /// - Create relationship edges (Related, Supersedes, Contradicts)
     /// - Invalidate superseded memories
     /// - Propagate confidence changes through the graph
-    pub fn store(&self, mut node: MemoryNode) -> MenteResult<()> {
+    pub fn store(&self, node: MemoryNode) -> MenteResult<()> {
+        self.store_with_outcome(node).map(|_| ())
+    }
+
+    /// [`Self::store`], reporting whether the memory was written or skipped as
+    /// a duplicate of an existing one. Callers that hand the id back to a user
+    /// must use this: a skipped memory's own id does not exist afterwards.
+    pub fn store_with_outcome(&self, mut node: MemoryNode) -> MenteResult<StoreOutcome> {
         let started = std::time::Instant::now();
         // A memory stored without a vector is invisible to semantic search,
         // contradiction checks and dedup. Embed it here when an embedder is
@@ -1149,10 +1165,10 @@ impl MenteDb {
         if self.cognitive_config.always_dedup
             && !node.embedding.is_empty()
             && node.tags.iter().any(|t| t == "scope:always")
-            && self.is_duplicate_standing_rule(&node)
+            && let Some(of) = self.find_duplicate_standing_rule(&node)
         {
             debug!("scope:always dedup: {id} matches an existing standing rule, skipping insert");
-            return Ok(());
+            return Ok(StoreOutcome::Duplicate { of });
         }
 
         // Regular-memory paraphrase dedup: repeated extraction produces reworded
@@ -1164,10 +1180,10 @@ impl MenteDb {
         if self.cognitive_config.memory_dedup
             && !node.embedding.is_empty()
             && !node.tags.iter().any(|t| t == "scope:always")
-            && self.is_paraphrase_duplicate(&node)
+            && let Some(of) = self.find_paraphrase_duplicate_of(&node)
         {
             debug!("memory dedup: {id} is a paraphrase of an existing memory, skipping insert");
-            return Ok(());
+            return Ok(StoreOutcome::Duplicate { of });
         }
 
         let is_new = !self.page_map.read().contains_key(&id);
@@ -1197,7 +1213,7 @@ impl MenteDb {
         }
 
         Self::record_latency(&self.store_latency_us, started.elapsed());
-        Ok(())
+        Ok(StoreOutcome::Stored)
     }
 
     /// Whether `node` (a `scope:always` memory) duplicates an existing standing
@@ -1205,7 +1221,8 @@ impl MenteDb {
     /// Compared only against the standing-rule set (fetched directly from the tag
     /// index), which the cap keeps small, so this stays cheap and exact rather
     /// than relying on approximate recall ranking.
-    fn is_duplicate_standing_rule(&self, node: &MemoryNode) -> bool {
+    /// The existing standing rule `node` duplicates, if any.
+    fn find_duplicate_standing_rule(&self, node: &MemoryNode) -> Option<MemoryId> {
         let threshold = self.cognitive_config.always_dedup_threshold;
         for id in self.index.bitmap.query_tag("scope:always") {
             if id == node.id {
@@ -1221,25 +1238,16 @@ impl MenteDb {
                 continue;
             }
             if existing.content.trim() == node.content.trim() {
-                return true;
+                return Some(id);
             }
             if !existing.embedding.is_empty()
                 && Self::cosine(&node.embedding, &existing.embedding) >= threshold
+                && Self::number_sequence(&node.content) == Self::number_sequence(&existing.content)
             {
-                return true;
+                return Some(id);
             }
         }
-        false
-    }
-
-    /// Whether `node` is a near-identical paraphrase of an existing memory with
-    /// the SAME owner on both axes. Candidates come from a small owner-scoped
-    /// vector search; a candidate counts only when embedding cosine reaches
-    /// `memory_dedup_threshold` AND token-set jaccard reaches
-    /// `memory_dedup_token_overlap`, the two-gate design that keeps genuine
-    /// value updates storable.
-    fn is_paraphrase_duplicate(&self, node: &MemoryNode) -> bool {
-        self.find_paraphrase_duplicate_of(node).is_some()
+        None
     }
 
     /// The stored memory `node` duplicates, if any: same owner, same scope
@@ -1337,6 +1345,14 @@ impl MenteDb {
             if old_tokens.is_empty() {
                 continue;
             }
+            // Same words with different numbers ("May 3 at 4pm" and "May 4
+            // at 3pm", "record 3-4" and "record 4-3") are different facts: the
+            // token set ignores order, so require the numbers to match in
+            // order before calling two memories the same.
+
+            if Self::number_sequence(&node.content) != Self::number_sequence(&existing.content) {
+                continue;
+            }
             let inter = new_tokens.intersection(&old_tokens).count() as f32;
             let union = new_tokens.union(&old_tokens).count() as f32;
             if union > 0.0 && inter / union >= min_overlap {
@@ -1413,6 +1429,14 @@ impl MenteDb {
 
     /// Lowercased alphanumeric token set of a content string, for the
     /// paraphrase-dedup overlap gate.
+    /// The numbers in `s`, in order of appearance.
+    fn number_sequence(s: &str) -> Vec<&str> {
+        s.split(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .map(|t| t.trim_matches('.'))
+            .filter(|t| t.chars().any(|c| c.is_ascii_digit()))
+            .collect()
+    }
+
     fn token_set(s: &str) -> std::collections::HashSet<String> {
         s.split(|c: char| !c.is_alphanumeric())
             .filter(|t| !t.is_empty())

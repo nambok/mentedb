@@ -248,14 +248,18 @@ impl MemoryService for MemoryServiceImpl {
         };
 
         let db = &*self.state.db;
-        db.store(node).map_err(|e| {
+        let outcome = db.store_with_outcome(node).map_err(|e| {
             error!("gRPC store failed: {e}");
             Status::internal(format!("store failed: {e}"))
         })?;
 
+        let (id, status) = match outcome {
+            mentedb::StoreOutcome::Stored => (id, "stored"),
+            mentedb::StoreOutcome::Duplicate { of } => (of, "duplicate"),
+        };
         Ok(Response::new(pb::StoreResponse {
             id: id.to_string(),
-            status: "stored".into(),
+            status: status.into(),
         }))
     }
 

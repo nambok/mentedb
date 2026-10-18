@@ -136,13 +136,23 @@ pub async fn store_memory(
     };
 
     let handle = db.handle.clone();
-    tokio::task::spawn_blocking(move || handle.store(node))
+    let outcome = tokio::task::spawn_blocking(move || handle.store_with_outcome(node))
         .await
         .map_err(|e| ApiError::Internal(format!("store task failed: {e}")))?
         .map_err(|e| {
             error!("store failed: {e}");
             ApiError::Internal(format!("store failed: {e}"))
         })?;
+    // A duplicate was not written: hand back the memory that already holds
+    // the fact, never the new id, which does not exist.
+    if let mentedb::StoreOutcome::Duplicate { of } = outcome {
+        return Ok((
+            StatusCode::OK,
+            Json(
+                json!({ "id": of.to_string(), "status": "duplicate", "duplicate_of": of.to_string() }),
+            ),
+        ));
+    }
 
     // Auto-extract: if enabled and content looks like a conversation, queue extraction
     if state.auto_extract
@@ -515,6 +525,7 @@ async fn run_extraction(
         .as_micros() as u64;
 
     let mut stored_ids = Vec::new();
+    let mut duplicate_ids = Vec::new();
     for memory in &quality_passed {
         let memory_type = map_extraction_type_to_memory_type(&memory.memory_type);
         let id = MemoryId::new();
@@ -537,8 +548,9 @@ async fn run_extraction(
             valid_until: None,
             context: None,
         };
-        match db.store(node) {
-            Ok(()) => stored_ids.push(id.to_string()),
+        match db.store_with_outcome(node) {
+            Ok(mentedb::StoreOutcome::Stored) => stored_ids.push(id.to_string()),
+            Ok(mentedb::StoreOutcome::Duplicate { of }) => duplicate_ids.push(of.to_string()),
             Err(e) => {
                 tracing::warn!(error = %e, "failed to store extracted memory, skipping");
             }
@@ -548,7 +560,8 @@ async fn run_extraction(
     Ok(json!({
         "memories_stored": stored_ids.len(),
         "rejected_low_quality": rejected_low_quality,
-        "rejected_duplicate": 0,
+        "rejected_duplicate": duplicate_ids.len(),
+        "duplicate_of": duplicate_ids,
         "contradictions": 0,
         "stored_ids": stored_ids,
     }))

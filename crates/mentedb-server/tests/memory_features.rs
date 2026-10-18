@@ -692,3 +692,45 @@ async fn agent_bound_tokens_only_reach_their_own_memories() {
     let (_, body) = send(&app, "GET", "/v1/recent", None, Some(&mine)).await;
     assert_eq!(ids_in(&body["memories"]), vec![id]);
 }
+
+#[tokio::test]
+async fn storing_a_duplicate_returns_the_memory_that_holds_it() {
+    let (app, _tmp) = build_app(false);
+    let body = json!({
+        "agent_id": AGENT,
+        "memory_type": "semantic",
+        "content": "The deploy pipeline runs on GitHub Actions",
+    });
+    let (status, first) = send(
+        &app,
+        "POST",
+        "/v1/db/dup/memories",
+        Some(body.clone()),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(first["status"], "stored");
+    let (status, again) = send(&app, "POST", "/v1/db/dup/memories", Some(body), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again["status"], "duplicate");
+    assert_eq!(
+        again["id"], first["id"],
+        "the existing memory, not a new id"
+    );
+    assert_eq!(again["duplicate_of"], first["id"]);
+    let id = again["id"].as_str().unwrap();
+    let (status, fetched) = send(
+        &app,
+        "GET",
+        &format!("/v1/db/dup/memories/{id}"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the returned id can be fetched");
+    assert_eq!(
+        fetched["content"],
+        "The deploy pipeline runs on GitHub Actions"
+    );
+}

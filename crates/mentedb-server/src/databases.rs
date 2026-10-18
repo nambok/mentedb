@@ -7,9 +7,9 @@
 //! and back `/v1/db/{name}/...`. They open on first use, and the least recently
 //! used idle handle is flushed and closed once more than `max_open` are open.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Instant;
 
 use mentedb::{CognitiveConfig, MenteDb};
@@ -65,6 +65,15 @@ struct OpenDb {
     last_used: Instant,
 }
 
+/// Open handles plus the names whose old handle is still being closed. A
+/// name in `closing` must not be reopened until its close has released the
+/// directory lock, or the open fails with "locked by another process".
+#[derive(Default)]
+struct Registry {
+    open: HashMap<String, OpenDb>,
+    closing: HashSet<String>,
+}
+
 /// Registry of the default database and the named ones.
 pub struct Databases {
     root: PathBuf,
@@ -72,7 +81,9 @@ pub struct Databases {
     embedder: Option<Arc<dyn EmbeddingProvider>>,
     cognitive: CognitiveConfig,
     config: DatabasesConfig,
-    open: Mutex<HashMap<String, OpenDb>>,
+    registry: Mutex<Registry>,
+    /// Signalled whenever a name leaves `Registry::closing`.
+    closed: Condvar,
 }
 
 impl Databases {
@@ -91,7 +102,8 @@ impl Databases {
             embedder,
             cognitive,
             config,
-            open: Mutex::new(HashMap::new()),
+            registry: Mutex::new(Registry::default()),
+            closed: Condvar::new(),
         })
     }
 
@@ -110,6 +122,43 @@ impl Databases {
         self.embedder.clone()
     }
 
+    fn lock(&self) -> MutexGuard<'_, Registry> {
+        self.registry.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Wait until no close of `name` is in flight. Returns the reacquired
+    /// guard.
+    fn wait_until_closed<'a>(
+        &'a self,
+        mut reg: MutexGuard<'a, Registry>,
+        name: &str,
+    ) -> MutexGuard<'a, Registry> {
+        while reg.closing.contains(name) {
+            reg = self.closed.wait(reg).unwrap_or_else(|e| e.into_inner());
+        }
+        reg
+    }
+
+    /// Close handles taken out of the registry, then release their names so
+    /// waiting opens can proceed. Each handle is dropped (releasing its
+    /// directory lock) before its name is released.
+    fn finish_closing(&self, handles: Vec<(String, Arc<MenteDb>)>) {
+        let mut names = Vec::with_capacity(handles.len());
+        for (name, handle) in handles {
+            if let Err(e) = handle.close() {
+                tracing::warn!(db = %name, error = %e, "closing idle database failed");
+            }
+            drop(handle);
+            names.push(name);
+        }
+        let mut reg = self.lock();
+        for name in names {
+            reg.closing.remove(&name);
+        }
+        drop(reg);
+        self.closed.notify_all();
+    }
+
     fn dir(&self, name: &str) -> PathBuf {
         self.root.join("dbs").join(name)
     }
@@ -126,8 +175,9 @@ impl Databases {
             return Ok(self.default.clone());
         }
         validate_name(name)?;
-        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = open.get_mut(name) {
+        let reg = self.lock();
+        let mut reg = self.wait_until_closed(reg, name);
+        if let Some(entry) = reg.open.get_mut(name) {
             entry.last_used = Instant::now();
             return Ok(entry.db.clone());
         }
@@ -148,19 +198,20 @@ impl Databases {
             open_at(&dir, self.embedder.clone(), self.cognitive.clone())
                 .map_err(|e| ApiError::Internal(format!("open database '{name}': {e}")))?,
         );
-        open.insert(
+        reg.open.insert(
             name.to_string(),
             OpenDb {
                 db: db.clone(),
                 last_used: Instant::now(),
             },
         );
-        let evicted = take_idle_overflow(&mut open, self.config.max_open);
-        drop(open);
-        for (evicted_name, handle) in evicted {
-            if let Err(e) = handle.close() {
-                tracing::warn!(db = %evicted_name, error = %e, "closing idle database failed");
-            }
+        let evicted = take_idle_overflow(&mut reg.open, self.config.max_open);
+        for (evicted_name, _) in &evicted {
+            reg.closing.insert(evicted_name.clone());
+        }
+        drop(reg);
+        if !evicted.is_empty() {
+            self.finish_closing(evicted);
         }
         Ok(db)
     }
@@ -186,15 +237,18 @@ impl Databases {
             ));
         }
         validate_name(name)?;
-        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(entry) = open.get(name)
+        let reg = self.lock();
+        let mut reg = self.wait_until_closed(reg, name);
+        if let Some(entry) = reg.open.get(name)
             && Arc::strong_count(&entry.db) > 1
         {
             return Err(ApiError::Conflict(format!(
                 "database '{name}' is in use; retry"
             )));
         }
-        if let Some(entry) = open.remove(name) {
+        // Closed and removed while holding the registry, so no open of this
+        // name can start until the directory is gone.
+        if let Some(entry) = reg.open.remove(name) {
             let _ = entry.db.close();
         }
         let dir = self.dir(name);
@@ -217,22 +271,22 @@ impl Databases {
     /// Every currently open database, the default first.
     pub fn open_handles(&self) -> Vec<(String, Arc<MenteDb>)> {
         let mut all = vec![(DEFAULT_DB.to_string(), self.default.clone())];
-        let open = self.open.lock().unwrap_or_else(|e| e.into_inner());
-        all.extend(open.iter().map(|(n, e)| (n.clone(), e.db.clone())));
+        let reg = self.lock();
+        all.extend(reg.open.iter().map(|(n, e)| (n.clone(), e.db.clone())));
         all
     }
 
     /// Flush and close every open database. Used at shutdown.
     pub fn close_all(&self) {
         let handles: Vec<(String, Arc<MenteDb>)> = {
-            let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
-            open.drain().map(|(n, e)| (n, e.db)).collect()
-        };
-        for (name, db) in handles {
-            if let Err(e) = db.close() {
-                tracing::warn!(db = %name, error = %e, "closing database failed");
+            let mut reg = self.lock();
+            let drained: Vec<_> = reg.open.drain().map(|(n, e)| (n, e.db)).collect();
+            for (n, _) in &drained {
+                reg.closing.insert(n.clone());
             }
-        }
+            drained
+        };
+        self.finish_closing(handles);
         if let Err(e) = self.default.close() {
             tracing::warn!(error = %e, "closing default database failed");
         }
@@ -426,6 +480,43 @@ mod tests {
             Err(ApiError::NotFound(_))
         ));
         assert!(dbs.get("nobody", true).is_ok(), "explicit create works");
+    }
+
+    /// More tenants than `max_open`, hit from many threads at once, so idle
+    /// handles are closed while other threads reopen the same names. Every
+    /// lookup must succeed; a reopen must never race the close of the old
+    /// handle and find the directory still locked.
+    #[test]
+    fn reopening_a_database_while_it_is_being_closed_waits_for_the_close() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dbs = Arc::new(registry(tmp.path(), 2));
+        let names: Vec<String> = (0..8).map(|i| format!("t{i}")).collect();
+        let errors = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let threads: Vec<_> = (0..16)
+            .map(|t| {
+                let dbs = dbs.clone();
+                let names = names.clone();
+                let errors = errors.clone();
+                std::thread::spawn(move || {
+                    for i in 0..40 {
+                        let name = &names[(t * 7 + i) % names.len()];
+                        match dbs.get(name, false) {
+                            Ok(db) => {
+                                let _ = db.memory_count();
+                            }
+                            Err(e) => {
+                                eprintln!("{name}: {e}");
+                                errors.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            }
+                        }
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert_eq!(errors.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]
