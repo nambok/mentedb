@@ -141,7 +141,7 @@ impl BackupManager {
     }
 
     /// Read only the manifest header from a backup file.
-    fn read_manifest(backup_path: &Path) -> MenteResult<BackupManifest> {
+    pub fn read_manifest(backup_path: &Path) -> MenteResult<BackupManifest> {
         let mut file = fs::File::open(backup_path)?;
         let mut len_buf = [0u8; 4];
         file.read_exact(&mut len_buf)?;

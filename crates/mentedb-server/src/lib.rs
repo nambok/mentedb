@@ -31,6 +31,8 @@ pub mod handlers;
 pub mod handlers_memory;
 /// Operations endpoints.
 pub mod handlers_ops;
+/// Rule based maintenance sweep (consolidate, decay, archive).
+pub mod maintenance;
 pub mod metrics;
 /// Token bucket rate limiting middleware.
 pub mod rate_limit;

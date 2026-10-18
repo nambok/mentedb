@@ -100,6 +100,11 @@ impl Databases {
         self.default.clone()
     }
 
+    /// The data directory root (the default database's directory).
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// The shared embedder, when one is configured.
     pub fn embedder(&self) -> Option<Arc<dyn EmbeddingProvider>> {
         self.embedder.clone()
