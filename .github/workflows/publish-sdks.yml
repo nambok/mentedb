@@ -169,18 +169,19 @@ jobs:
       - name: Compile TypeScript
         working-directory: sdks/typescript
         run: npx tsc
+      # Trusted publishing (OIDC via id-token: write) needs npm 11.5.1 or
+      # later, and replaces the long-lived token npm now rejects.
+      - name: Update npm for trusted publishing
+        run: npm install -g npm@latest
       - name: Publish to npm
         working-directory: sdks/typescript
         run: |
           CURRENT=$(node -p "require('./package.json').version")
-          PUBLISHED=$(npm view mentedb version 2>/dev/null || echo "0.0.0")
-          if [ "$CURRENT" = "$PUBLISHED" ]; then
+          if npm view "mentedb@$CURRENT" version >/dev/null 2>&1; then
             echo "Version $CURRENT already published, skipping"
           else
             npm publish --access public --provenance
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-integrations:
     name: Publish LangChain & CrewAI
