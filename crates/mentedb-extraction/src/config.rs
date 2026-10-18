@@ -92,9 +92,41 @@ pub struct ExtractionConfig {
     pub enable_deduplication: bool,
     /// Number of extraction passes (1 = single pass, 2 = first pass + verification).
     pub extraction_passes: usize,
+    /// Output token ceiling for each LLM call. Claude 5.5 models think before
+    /// answering by default and the thinking counts against this budget, so it
+    /// must leave room for both. Only tokens actually produced are billed.
+    #[serde(default = "default_max_output_tokens")]
+    pub max_output_tokens: u32,
+    /// Reasoning effort for Claude models, sent as `output_config.effort`
+    /// ("low", "medium", "high"). `None` keeps the model default. Lower effort
+    /// thinks less, which is faster and cheaper.
+    #[serde(default)]
+    pub effort: Option<String>,
+}
+
+/// Default output token ceiling, sized so thinking plus a full extraction fits.
+pub fn default_max_output_tokens() -> u32 {
+    16_000
 }
 
 impl ExtractionConfig {
+    /// Apply `MENTEDB_LLM_MAX_OUTPUT_TOKENS` and `MENTEDB_LLM_EFFORT` from the
+    /// environment, keeping the current values when they are unset or invalid.
+    pub fn with_output_env(mut self) -> Self {
+        if let Some(n) = std::env::var("MENTEDB_LLM_MAX_OUTPUT_TOKENS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|n| *n > 0)
+        {
+            self.max_output_tokens = n;
+        }
+        if let Ok(v) = std::env::var("MENTEDB_LLM_EFFORT") {
+            let v = v.trim().to_lowercase();
+            self.effort = (!v.is_empty()).then_some(v);
+        }
+        self
+    }
+
     /// Create a config for OpenAI with the given API key.
     pub fn openai(api_key: impl Into<String>) -> Self {
         Self {
@@ -158,6 +190,8 @@ impl Default for ExtractionConfig {
             enable_contradiction_check: true,
             enable_deduplication: true,
             extraction_passes: 1,
+            max_output_tokens: default_max_output_tokens(),
+            effort: None,
         }
     }
 }

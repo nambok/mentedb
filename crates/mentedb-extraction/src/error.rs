@@ -31,6 +31,16 @@ pub enum ExtractionError {
     #[error("embedding error: {0}")]
     EmbeddingError(String),
 
+    /// The model stopped at the output token limit before finishing its answer.
+    #[error(
+        "{model} hit the output limit of {max_output_tokens} tokens before finishing; \
+         raise max_output_tokens (MENTEDB_LLM_MAX_OUTPUT_TOKENS) or lower effort"
+    )]
+    Truncated {
+        model: String,
+        max_output_tokens: u32,
+    },
+
     /// Rate limit exceeded after all retry attempts.
     #[error("rate limit exceeded after {attempts} attempts")]
     RateLimitExceeded { attempts: usize },

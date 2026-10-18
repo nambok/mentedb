@@ -51,6 +51,16 @@ mentedb-server --data-dir ./data --auto-extract
 a fully local setup, point `MENTEDB_LLM_PROVIDER=ollama` and
 `MENTEDB_LLM_BASE_URL=http://localhost:11434`.
 
+Claude 5.5 models think before answering by default, and the thinking counts
+against the output limit. Two optional settings control this:
+
+- `MENTEDB_LLM_MAX_OUTPUT_TOKENS` (default 16000): output ceiling per call,
+  thinking included. You are billed only for tokens actually produced. A call
+  that hits the ceiling fails with a clear error instead of returning a
+  partial answer.
+- `MENTEDB_LLM_EFFORT` (`low`, `medium`, `high`; unset keeps the model
+  default): lower effort thinks less, which is faster and cheaper.
+
 ## Step 3: Choose an embedding provider
 
 **What it does:** embeddings power semantic search, auto-linking, and

@@ -169,12 +169,93 @@ pub trait ExtractionProvider: Send + Sync {
 }
 
 /// HTTP-based extraction provider that calls OpenAI, Anthropic, or Ollama APIs.
+/// Messages API request body shared by the Anthropic and Bedrock paths.
+///
+/// No temperature: Claude 5.5 models reject it. `max_tokens` covers thinking
+/// and the answer together, and `output_config.effort` is sent only when set,
+/// so models that predate it are unaffected by default.
+fn claude_body(
+    config: &ExtractionConfig,
+    system_prompt: &str,
+    conversation: &str,
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "max_tokens": config.max_output_tokens,
+        "system": system_prompt,
+        "messages": [
+            { "role": "user", "content": conversation }
+        ]
+    });
+    if let Some(effort) = &config.effort {
+        body["output_config"] = serde_json::json!({ "effort": effort });
+    }
+    body
+}
+
+/// Bedrock wraps the Messages API body with its own version field.
+#[cfg(feature = "bedrock")]
+fn bedrock_body(
+    config: &ExtractionConfig,
+    system_prompt: &str,
+    conversation: &str,
+) -> serde_json::Value {
+    let mut body = claude_body(config, system_prompt, conversation);
+    body["anthropic_version"] = serde_json::json!("bedrock-2023-05-31");
+    body
+}
+
+/// Answer text of a Messages API response.
+///
+/// Thinking and other non-text blocks are skipped. A response that stopped at
+/// the output limit is an error rather than a partial or empty answer, since
+/// thinking alone can use the whole budget.
+fn claude_text(
+    parsed: &serde_json::Value,
+    config: &ExtractionConfig,
+    provider: &str,
+    raw: &str,
+) -> Result<String, ExtractionError> {
+    if parsed["stop_reason"].as_str() == Some("max_tokens") {
+        return Err(ExtractionError::Truncated {
+            model: config.model.clone(),
+            max_output_tokens: config.max_output_tokens,
+        });
+    }
+    let text: String = parsed["content"]
+        .as_array()
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter(|block| block["type"].as_str() == Some("text"))
+                .filter_map(|block| block["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    if text.trim().is_empty() {
+        tracing::warn!(
+            model = %config.model,
+            response_preview = mentedb_core::text::truncate_on_char_boundary(raw, 300),
+            "No text block found in {provider} response"
+        );
+        return Ok("{\"memories\": []}".to_string());
+    }
+    Ok(text)
+}
+
 pub struct HttpExtractionProvider {
     client: reqwest::Client,
     config: ExtractionConfig,
 }
 
 impl HttpExtractionProvider {
+    fn truncated(&self) -> ExtractionError {
+        ExtractionError::Truncated {
+            model: self.config.model.clone(),
+            max_output_tokens: self.config.max_output_tokens,
+        }
+    }
+
     pub fn new(config: ExtractionConfig) -> Result<Self, ExtractionError> {
         // Ollama needs no auth; Bedrock authenticates with AWS credentials from
         // the environment (verified below), not an api_key. Every other
@@ -330,6 +411,9 @@ impl HttpExtractionProvider {
         }
 
         let parsed: serde_json::Value = serde_json::from_str(&text)?;
+        if parsed["choices"][0]["finish_reason"].as_str() == Some("length") {
+            return Err(self.truncated());
+        }
         parsed["choices"][0]["message"]["content"]
             .as_str()
             .map(|s| s.to_string())
@@ -378,6 +462,9 @@ impl HttpExtractionProvider {
         }
 
         let parsed: serde_json::Value = serde_json::from_str(&text)?;
+        if parsed["choices"][0]["finish_reason"].as_str() == Some("length") {
+            return Err(self.truncated());
+        }
         parsed["choices"][0]["message"]["content"]
             .as_str()
             .map(|s| s.to_string())
@@ -391,16 +478,8 @@ impl HttpExtractionProvider {
         conversation: &str,
         system_prompt: &str,
     ) -> Result<String, ExtractionError> {
-        let body = serde_json::json!({
-            "model": self.config.model,
-            "max_tokens": 4096,
-            // No temperature: Claude 5.5 models reject it, and the Bedrock
-            // path already omits it.
-            "system": system_prompt,
-            "messages": [
-                { "role": "user", "content": conversation }
-            ]
-        });
+        let mut body = claude_body(&self.config, system_prompt, conversation);
+        body["model"] = serde_json::json!(self.config.model);
 
         let api_key = self.config.api_key.as_deref().unwrap_or_default();
 
@@ -427,43 +506,7 @@ impl HttpExtractionProvider {
         }
 
         let parsed: serde_json::Value = serde_json::from_str(&text)?;
-
-        // Anthropic may return multiple content blocks; find the first text block
-        let content_text = parsed["content"]
-            .as_array()
-            .and_then(|blocks| {
-                blocks.iter().find_map(|block| {
-                    if block["type"].as_str() == Some("text") {
-                        block["text"].as_str().map(|s| s.to_string())
-                    } else {
-                        None
-                    }
-                })
-            })
-            .or_else(|| {
-                // Fallback: try the old path for backwards compat
-                parsed["content"][0]["text"].as_str().map(|s| s.to_string())
-            });
-
-        match content_text {
-            Some(t) if !t.trim().is_empty() => Ok(t),
-            Some(_) => {
-                tracing::warn!(
-                    model = %self.config.model,
-                    "Anthropic returned empty text content"
-                );
-                Ok("{\"memories\": []}".to_string())
-            }
-            None => {
-                tracing::warn!(
-                    model = %self.config.model,
-                    response_preview =
-                        mentedb_core::text::truncate_on_char_boundary(&text, 300),
-                    "No text block found in Anthropic response"
-                );
-                Ok("{\"memories\": []}".to_string())
-            }
-        }
+        claude_text(&parsed, &self.config, "Anthropic", &text)
     }
 
     /// Call AWS Bedrock's Anthropic Messages API, signed with SigV4.
@@ -484,15 +527,7 @@ impl HttpExtractionProvider {
             .clone()
             .unwrap_or_else(crate::config::default_bedrock_region);
 
-        let body_json = serde_json::json!({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 4096,
-            "system": system_prompt,
-            "messages": [
-                { "role": "user", "content": conversation }
-            ]
-        });
-        let body = serde_json::to_vec(&body_json)?;
+        let body = serde_json::to_vec(&bedrock_body(&self.config, system_prompt, conversation))?;
 
         let creds = mentedb_embedding::AwsCredentials::from_env().map_err(|e| {
             ExtractionError::ConfigError(format!(
@@ -539,31 +574,7 @@ impl HttpExtractionProvider {
         }
 
         let parsed: serde_json::Value = serde_json::from_str(&text)?;
-
-        // Bedrock returns the Anthropic content-block shape: concatenate all
-        // text blocks (mirrors call_anthropic's fallback behavior on empty).
-        let content_text: String = parsed["content"]
-            .as_array()
-            .map(|blocks| {
-                blocks
-                    .iter()
-                    .filter(|block| block["type"].as_str() == Some("text"))
-                    .filter_map(|block| block["text"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("")
-            })
-            .unwrap_or_default();
-
-        if content_text.trim().is_empty() {
-            tracing::warn!(
-                model = %self.config.model,
-                response_preview =
-                    mentedb_core::text::truncate_on_char_boundary(&text, 300),
-                "No text block found in Bedrock response"
-            );
-            return Ok("{\"memories\": []}".to_string());
-        }
-        Ok(content_text)
+        claude_text(&parsed, &self.config, "Bedrock", &text)
     }
 
     /// Feature-disabled stub: when built without `--features bedrock`, selecting
@@ -822,6 +833,73 @@ impl ExtractionProvider for MockExtractionProvider {
     }
 }
 
+#[cfg(test)]
+mod claude_tests {
+    use super::*;
+
+    fn cfg() -> ExtractionConfig {
+        ExtractionConfig::anthropic("k")
+    }
+
+    #[test]
+    fn body_leaves_room_for_thinking_and_omits_temperature() {
+        let body = claude_body(&cfg(), "sys", "usr");
+        assert_eq!(body["max_tokens"], 16_000);
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("output_config").is_none());
+    }
+
+    #[test]
+    fn effort_is_sent_only_when_set() {
+        let mut c = cfg();
+        c.effort = Some("low".to_string());
+        c.max_output_tokens = 2_000;
+        let body = claude_body(&c, "sys", "usr");
+        assert_eq!(body["output_config"]["effort"], "low");
+        assert_eq!(body["max_tokens"], 2_000);
+    }
+
+    #[test]
+    fn thinking_blocks_are_skipped() {
+        let parsed = serde_json::json!({
+            "stop_reason": "end_turn",
+            "content": [
+                { "type": "thinking", "thinking": "let me see" },
+                { "type": "text", "text": "{\"memories\": [1]}" }
+            ]
+        });
+        let text = claude_text(&parsed, &cfg(), "Anthropic", "").unwrap();
+        assert_eq!(text, "{\"memories\": [1]}");
+    }
+
+    #[test]
+    fn output_limit_hit_during_thinking_is_an_error() {
+        // The exact shape Bedrock returned for Sonnet 5.5 with a small limit:
+        // only a thinking block, stopped at max_tokens.
+        let parsed = serde_json::json!({
+            "stop_reason": "max_tokens",
+            "content": [{ "type": "thinking", "thinking": "partial" }]
+        });
+        let err = claude_text(&parsed, &cfg(), "Bedrock", "").unwrap_err();
+        assert!(matches!(
+            err,
+            ExtractionError::Truncated {
+                max_output_tokens: 16_000,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn output_limit_hit_mid_answer_is_an_error() {
+        let parsed = serde_json::json!({
+            "stop_reason": "max_tokens",
+            "content": [{ "type": "text", "text": "{\"memories\": [" }]
+        });
+        assert!(claude_text(&parsed, &cfg(), "Anthropic", "").is_err());
+    }
+}
+
 #[cfg(all(test, feature = "bedrock"))]
 mod bedrock_tests {
     use super::*;
@@ -830,15 +908,8 @@ mod bedrock_tests {
     /// Build the exact JSON body call_bedrock sends, so the test and the real
     /// code stay in sync on the wire format.
     fn bedrock_body(system: &str, user: &str) -> Vec<u8> {
-        let body_json = serde_json::json!({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 4096,
-            "system": system,
-            "messages": [
-                { "role": "user", "content": user }
-            ]
-        });
-        serde_json::to_vec(&body_json).unwrap()
+        let cfg = ExtractionConfig::bedrock("us-east-1");
+        serde_json::to_vec(&super::bedrock_body(&cfg, system, user)).unwrap()
     }
 
     /// Construct a signed Bedrock request with fixed credentials and timestamp
@@ -877,7 +948,9 @@ mod bedrock_tests {
         // Body is valid Anthropic-Bedrock JSON with system + user message.
         let parsed: serde_json::Value = serde_json::from_slice(&signed.body).unwrap();
         assert_eq!(parsed["anthropic_version"], "bedrock-2023-05-31");
-        assert_eq!(parsed["max_tokens"], 4096);
+        assert_eq!(parsed["max_tokens"], 16_000);
+        assert!(parsed.get("temperature").is_none());
+        assert!(parsed.get("output_config").is_none());
         assert_eq!(parsed["system"], system);
         assert_eq!(parsed["messages"][0]["role"], "user");
         assert_eq!(parsed["messages"][0]["content"], user);

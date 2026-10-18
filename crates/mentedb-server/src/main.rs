@@ -591,19 +591,23 @@ fn build_extraction_config(config: &ServerConfig) -> Option<ExtractionConfig> {
         .clone()
         .unwrap_or_else(|| provider.default_model().to_string());
 
-    Some(ExtractionConfig {
-        provider,
-        api_key: config.llm_api_key.clone(),
-        api_url,
-        model,
-        region: config.llm_region.clone(),
-        max_extractions_per_conversation: 50,
-        quality_threshold: config.extraction_quality_threshold.unwrap_or(0.7),
-        deduplication_threshold: config.extraction_dedup_threshold.unwrap_or(0.85),
-        enable_contradiction_check: true,
-        enable_deduplication: true,
-        extraction_passes: 1,
-    })
+    Some(
+        ExtractionConfig {
+            provider,
+            api_key: config.llm_api_key.clone(),
+            api_url,
+            model,
+            region: config.llm_region.clone(),
+            max_extractions_per_conversation: 50,
+            quality_threshold: config.extraction_quality_threshold.unwrap_or(0.7),
+            deduplication_threshold: config.extraction_dedup_threshold.unwrap_or(0.85),
+            enable_contradiction_check: true,
+            enable_deduplication: true,
+            extraction_passes: 1,
+            ..ExtractionConfig::default()
+        }
+        .with_output_env(),
+    )
 }
 
 async fn shutdown_signal() {

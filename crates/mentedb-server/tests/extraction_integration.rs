@@ -50,6 +50,7 @@ fn mock_extraction_config() -> ExtractionConfig {
         enable_contradiction_check: true,
         enable_deduplication: true,
         extraction_passes: 1,
+        ..ExtractionConfig::default()
     }
 }
 
