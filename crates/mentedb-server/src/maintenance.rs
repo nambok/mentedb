@@ -154,7 +154,7 @@ pub async fn detect_conflicts(db: &MenteDb, config: &Option<ExtractionConfig>) -
 /// 0 disables the scheduler (run the `maintenance` subcommand from cron instead).
 /// When an LLM is configured, each cycle also canonicalizes recent topics.
 pub fn spawn_scheduler(
-    db: Arc<MenteDb>,
+    databases: Arc<crate::databases::Databases>,
     interval_hours: u64,
     extraction_config: Option<ExtractionConfig>,
 ) {
@@ -167,18 +167,23 @@ pub fn spawn_scheduler(
         let interval = Duration::from_secs(interval_hours * 3600);
         loop {
             tokio::time::sleep(interval).await;
-            let db_sweep = Arc::clone(&db);
-            match tokio::task::spawn_blocking(move || run_sweep(&db_sweep)).await {
-                Ok(r) => info!(
-                    consolidated = r.consolidated,
-                    decayed = r.decayed,
-                    forgotten = r.forgotten,
-                    "maintenance sweep complete"
-                ),
-                Err(e) => warn!("maintenance sweep task panicked: {e}"),
+            // Every open database; idle ones closed by the registry are swept
+            // the next time they are open at sweep time.
+            for (name, db) in databases.open_handles() {
+                let db_sweep = Arc::clone(&db);
+                match tokio::task::spawn_blocking(move || run_sweep(&db_sweep)).await {
+                    Ok(r) => info!(
+                        db = %name,
+                        consolidated = r.consolidated,
+                        decayed = r.decayed,
+                        forgotten = r.forgotten,
+                        "maintenance sweep complete"
+                    ),
+                    Err(e) => warn!(db = %name, "maintenance sweep task panicked: {e}"),
+                }
+                canonicalize_topics(&db, &extraction_config).await;
+                detect_conflicts(&db, &extraction_config).await;
             }
-            canonicalize_topics(&db, &extraction_config).await;
-            detect_conflicts(&db, &extraction_config).await;
         }
     });
 }

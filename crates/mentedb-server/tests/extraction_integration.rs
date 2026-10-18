@@ -19,9 +19,19 @@ fn test_state(
     auto_extract: bool,
 ) -> (Arc<AppState>, TempDir) {
     let tmp = TempDir::new().unwrap();
-    let db = MenteDb::open(tmp.path()).unwrap();
+    let databases = Arc::new(
+        mentedb_server::databases::Databases::open(
+            tmp.path(),
+            None,
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap(),
+    );
     let state = Arc::new(AppState {
-        db: Arc::new(db),
+        db: databases.default_db(),
+        databases: databases.clone(),
+        verifier: None,
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: None,
         admin_key: None,

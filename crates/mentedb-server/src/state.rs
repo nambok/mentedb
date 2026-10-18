@@ -8,8 +8,17 @@ use crate::extraction_queue::ExtractionSender;
 
 #[derive(Clone)]
 pub struct AppState {
+    /// The default database (data directory root). Same handle as
+    /// `databases.default_db()`; kept for the gRPC, WebSocket and metrics
+    /// paths, which serve the default database only.
     pub db: Arc<MenteDb>,
+    /// The default database plus the named per-tenant ones.
+    pub databases: Arc<crate::databases::Databases>,
+    /// Checks bearer tokens. `None` disables auth (development mode).
+    pub verifier: Option<Arc<crate::auth::TokenVerifier>>,
     pub spaces: Arc<tokio::sync::RwLock<mentedb_core::SpaceManager>>,
+    /// HS256 secret for issuing tokens at /v1/auth/token. Unset when tokens
+    /// are verified with a public key only.
     pub jwt_secret: Option<String>,
     pub admin_key: Option<String>,
     pub start_time: Instant,

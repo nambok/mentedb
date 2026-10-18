@@ -21,6 +21,7 @@ use serde_json::{Map, Value, json};
 use tracing::error;
 use uuid::Uuid;
 
+use crate::databases::Db;
 use crate::error::ApiError;
 use crate::state::AppState;
 use mentedb_core::types::{AgentId, MemoryId, SpaceId, UserId};
@@ -44,12 +45,15 @@ pub async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 // ---------------------------------------------------------------------------
 
 /// Returns database statistics (memory count, index size, etc.).
-pub async fn stats(State(state): State<Arc<AppState>>) -> Result<impl IntoResponse, ApiError> {
+pub async fn stats(
+    State(state): State<Arc<AppState>>,
+    db: Db,
+) -> Result<impl IntoResponse, ApiError> {
     let uptime = state.start_time.elapsed().as_secs();
-    let db = &*state.db;
     let memory_count = db.memory_count();
 
     Ok(Json(json!({
+        "database": db.name,
         "memory_count": memory_count,
         "uptime_seconds": uptime,
     })))
@@ -63,20 +67,11 @@ pub async fn stats(State(state): State<Arc<AppState>>) -> Result<impl IntoRespon
 pub async fn store_memory(
     State(state): State<Arc<AppState>>,
     agent: Option<Extension<AuthenticatedAgent>>,
+    db: Db,
     Json(req): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     let agent_id = AgentId(parse_uuid(&req, "agent_id")?);
-    if let Some(Extension(ref authed)) = agent {
-        let tid: AgentId = authed
-            .agent_id
-            .parse()
-            .map_err(|_| ApiError::Internal("token contains invalid agent_id UUID".into()))?;
-        if tid != agent_id {
-            return Err(ApiError::Forbidden(
-                "agent_id in request body does not match token".into(),
-            ));
-        }
-    }
+    check_body_agent(&agent, agent_id)?;
     let memory_type = parse_memory_type(&req)?;
 
     let content = req
@@ -121,7 +116,9 @@ pub async fn store_memory(
     let node = MemoryNode {
         id,
         agent_id,
-        user_id: UserId::nil(),
+        user_id: parse_optional_uuid(&req, "user_id")?
+            .map(UserId)
+            .unwrap_or_else(UserId::nil),
         memory_type,
         embedding,
         content: content.clone(),
@@ -138,11 +135,14 @@ pub async fn store_memory(
         context: None,
     };
 
-    let db = &*state.db;
-    db.store(node).map_err(|e| {
-        error!("store failed: {e}");
-        ApiError::Internal(format!("store failed: {e}"))
-    })?;
+    let handle = db.handle.clone();
+    tokio::task::spawn_blocking(move || handle.store(node))
+        .await
+        .map_err(|e| ApiError::Internal(format!("store task failed: {e}")))?
+        .map_err(|e| {
+            error!("store failed: {e}");
+            ApiError::Internal(format!("store failed: {e}"))
+        })?;
 
     // Auto-extract: if enabled and content looks like a conversation, queue extraction
     if state.auto_extract
@@ -155,7 +155,7 @@ pub async fn store_memory(
             content: content.clone(),
             agent_id,
             space_id,
-            db: state.db.clone(),
+            db: db.handle.clone(),
         };
         if tx.try_send(req).is_err() {
             tracing::warn!("extraction queue full, skipping auto-extract");
@@ -174,30 +174,15 @@ pub async fn store_memory(
 
 /// Retrieves a single memory by its UUID.
 pub async fn get_memory(
-    State(state): State<Arc<AppState>>,
     agent: Option<Extension<AuthenticatedAgent>>,
-    Path(id_str): Path<String>,
+    db: Db,
+    Path(params): Path<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let id: MemoryId = id_str
-        .parse()
-        .map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
-
-    let db = &*state.db;
+    let id = memory_id_param(&params)?;
     let node = db
         .get_memory(id)
         .map_err(|_| ApiError::NotFound(format!("memory {id} not found")))?;
-
-    if let Some(Extension(ref authed)) = agent {
-        let tid: AgentId = authed
-            .agent_id
-            .parse()
-            .map_err(|_| ApiError::Internal("token contains invalid agent_id UUID".into()))?;
-        if node.agent_id != tid {
-            return Err(ApiError::Forbidden(
-                "memory belongs to a different agent".into(),
-            ));
-        }
-    }
+    check_owner(&agent, &node)?;
 
     Ok(Json(memory_node_to_json(&node)))
 }
@@ -208,44 +193,16 @@ pub async fn get_memory(
 
 /// Deletes a memory from the database.
 pub async fn forget_memory(
-    State(state): State<Arc<AppState>>,
     agent: Option<Extension<AuthenticatedAgent>>,
-    Path(id_str): Path<String>,
+    db: Db,
+    Path(params): Path<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let id: MemoryId = id_str
-        .parse()
-        .map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
-
-    let db = &*state.db;
-    if let Some(Extension(ref authed)) = agent {
-        let tid: AgentId = authed
-            .agent_id
-            .parse()
-            .map_err(|_| ApiError::Internal("token contains invalid agent_id UUID".into()))?;
-        let window = db.recall("RECALL memories LIMIT 1000").map_err(|e| {
-            error!("recall failed: {e}");
-            ApiError::Internal(format!("recall failed: {e}"))
-        })?;
-        let mut found = false;
-        for block in &window.blocks {
-            for scored in &block.memories {
-                if scored.memory.id == id {
-                    if scored.memory.agent_id != tid {
-                        return Err(ApiError::Forbidden(
-                            "memory belongs to a different agent".into(),
-                        ));
-                    }
-                    found = true;
-                    break;
-                }
-            }
-            if found {
-                break;
-            }
-        }
-        if !found {
-            return Err(ApiError::NotFound(format!("memory {id} not found")));
-        }
+    let id = memory_id_param(&params)?;
+    if agent.is_some() {
+        let node = db
+            .get_memory(id)
+            .map_err(|_| ApiError::NotFound(format!("memory {id} not found")))?;
+        check_owner(&agent, &node)?;
     }
     db.forget(id).map_err(|e| {
         error!("forget failed: {e}");
@@ -261,7 +218,7 @@ pub async fn forget_memory(
 
 /// Recalls memories matching an MQL query string.
 pub async fn recall_memories(
-    State(state): State<Arc<AppState>>,
+    db: Db,
     Json(req): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     let query = req
@@ -269,7 +226,6 @@ pub async fn recall_memories(
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::BadRequest("missing 'query' field".into()))?;
 
-    let db = &*state.db;
     let window = db.recall(query).map_err(|e| {
         error!("recall failed: {e}");
         ApiError::Internal(format!("recall failed: {e}"))
@@ -288,14 +244,14 @@ pub async fn recall_memories(
 // ---------------------------------------------------------------------------
 
 /// Searches for memories similar to a given embedding vector.
-pub async fn search_similar(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<Value>,
-) -> Result<impl IntoResponse, ApiError> {
-    let embedding = parse_embedding(&req, true)?;
+pub async fn search_similar(db: Db, Json(req): Json<Value>) -> Result<impl IntoResponse, ApiError> {
     let k = req.get("k").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+    // Either a raw vector, or text the server embeds with its own embedder.
+    let embedding = match req.get("query").and_then(|v| v.as_str()) {
+        Some(text) if req.get("embedding").is_none() => embed_query(&db, text).await?,
+        _ => parse_embedding(&req, true)?,
+    };
 
-    let db = &*state.db;
     let results = db.recall_similar(&embedding, k).map_err(|e| {
         error!("search failed: {e}");
         ApiError::Internal(format!("search failed: {e}"))
@@ -314,10 +270,7 @@ pub async fn search_similar(
 // ---------------------------------------------------------------------------
 
 /// Creates a typed, weighted edge between two memories.
-pub async fn create_edge(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<Value>,
-) -> Result<impl IntoResponse, ApiError> {
+pub async fn create_edge(db: Db, Json(req): Json<Value>) -> Result<impl IntoResponse, ApiError> {
     let source = MemoryId(parse_uuid(&req, "source")?);
     let target = MemoryId(parse_uuid(&req, "target")?);
 
@@ -353,7 +306,6 @@ pub async fn create_edge(
             .map(|s| s.to_string()),
     };
 
-    let db = &*state.db;
     db.relate(edge).map_err(|e| {
         error!("relate failed: {e}");
         ApiError::Internal(format!("relate failed: {e}"))
@@ -370,20 +322,11 @@ pub async fn create_edge(
 pub async fn ingest_conversation(
     State(state): State<Arc<AppState>>,
     agent: Option<Extension<AuthenticatedAgent>>,
+    db: Db,
     Json(req): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     let agent_id = AgentId(parse_uuid(&req, "agent_id")?);
-    if let Some(Extension(ref authed)) = agent {
-        let tid: AgentId = authed
-            .agent_id
-            .parse()
-            .map_err(|_| ApiError::Internal("token contains invalid agent_id UUID".into()))?;
-        if tid != agent_id {
-            return Err(ApiError::Forbidden(
-                "agent_id in request body does not match token".into(),
-            ));
-        }
-    }
+    check_body_agent(&agent, agent_id)?;
 
     let extraction_config = state.extraction_config.as_ref().ok_or_else(|| {
         ApiError::ServiceUnavailable(
@@ -404,14 +347,7 @@ pub async fn ingest_conversation(
         None => SpaceId::nil(),
     };
 
-    let stats = run_extraction(
-        extraction_config,
-        conversation,
-        agent_id,
-        space_id,
-        &state.db,
-    )
-    .await?;
+    let stats = run_extraction(extraction_config, conversation, agent_id, space_id, &db).await?;
 
     Ok((StatusCode::OK, Json(stats)))
 }
@@ -428,6 +364,7 @@ pub async fn ingest_conversation(
 pub async fn process_turn(
     State(state): State<Arc<AppState>>,
     agent: Option<Extension<AuthenticatedAgent>>,
+    db: Db,
     Json(req): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     let user_message = req
@@ -469,16 +406,8 @@ pub async fn process_turn(
         .transpose()?;
 
     // A scoped token must only process turns for its own agent.
-    if let (Some(Extension(authed)), Some(aid)) = (&agent, agent_id) {
-        let tid: AgentId = authed
-            .agent_id
-            .parse()
-            .map_err(|_| ApiError::Internal("token contains invalid agent_id UUID".into()))?;
-        if tid != AgentId(aid) {
-            return Err(ApiError::Forbidden(
-                "agent_id in request body does not match token".into(),
-            ));
-        }
+    if let Some(aid) = agent_id {
+        check_body_agent(&agent, AgentId(aid))?;
     }
 
     let input = mentedb::process_turn::ProcessTurnInput {
@@ -495,14 +424,14 @@ pub async fn process_turn(
     // multi-agent server keeps one delta stream per agent. Taken out of the
     // map for the duration of the blocking call, then put back, so the mutex
     // is never held across the engine turn.
-    let tracker_key = agent_id.unwrap_or_else(Uuid::nil).to_string();
+    let tracker_key = format!("{}/{}", db.name, agent_id.unwrap_or_else(Uuid::nil));
     let mut tracker = {
         let mut map = state.turn_trackers.lock().await;
         map.remove(&tracker_key)
             .unwrap_or_else(mentedb::context::DeltaTracker::new)
     };
 
-    let db = Arc::clone(&state.db);
+    let db = db.handle.clone();
     let joined = tokio::task::spawn_blocking(move || {
         let result = db.process_turn(&input, &mut tracker);
         (result, tracker)
@@ -637,7 +566,78 @@ fn looks_like_conversation(content: &str) -> bool {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn parse_uuid(val: &Value, field: &str) -> Result<Uuid, ApiError> {
+/// Reject a body `agent_id` that differs from the agent the token is bound to.
+/// Tokens scoped to databases rather than an agent carry no agent to check.
+pub(crate) fn check_body_agent(
+    agent: &Option<Extension<AuthenticatedAgent>>,
+    agent_id: AgentId,
+) -> Result<(), ApiError> {
+    if let Some(Extension(authed)) = agent
+        && let Some(tid) = authed.agent()?
+        && tid != agent_id
+    {
+        return Err(ApiError::Forbidden(
+            "agent_id in request body does not match token".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Reject reading or changing a memory owned by another agent.
+pub(crate) fn check_owner(
+    agent: &Option<Extension<AuthenticatedAgent>>,
+    node: &MemoryNode,
+) -> Result<(), ApiError> {
+    if let Some(Extension(authed)) = agent
+        && !authed.admin
+        && let Some(tid) = authed.agent()?
+        && node.agent_id != tid
+    {
+        return Err(ApiError::Forbidden(
+            "memory belongs to a different agent".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The `{id}` path parameter as a memory id.
+pub(crate) fn memory_id_param(params: &HashMap<String, String>) -> Result<MemoryId, ApiError> {
+    params
+        .get("id")
+        .ok_or_else(|| ApiError::BadRequest("missing memory ID".into()))?
+        .parse()
+        .map_err(|_| ApiError::BadRequest("invalid memory ID".into()))
+}
+
+/// Embed query text with the database's embedder, off the async workers.
+pub(crate) async fn embed_query(db: &Db, text: &str) -> Result<Vec<f32>, ApiError> {
+    let handle = db.handle.clone();
+    let text = text.to_string();
+    tokio::task::spawn_blocking(move || handle.embed_text(&text))
+        .await
+        .map_err(|e| ApiError::Internal(format!("embed task failed: {e}")))?
+        .map_err(|e| ApiError::ServiceUnavailable(format!("embedding failed: {e}")))?
+        .ok_or_else(|| {
+            ApiError::BadRequest(
+                "this server has no embedder; send an 'embedding' vector instead".into(),
+            )
+        })
+}
+
+pub(crate) fn parse_optional_uuid(val: &Value, field: &str) -> Result<Option<Uuid>, ApiError> {
+    match val
+        .get(field)
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        Some(s) => Uuid::parse_str(s)
+            .map(Some)
+            .map_err(|_| ApiError::BadRequest(format!("invalid UUID for '{field}'"))),
+        None => Ok(None),
+    }
+}
+
+pub(crate) fn parse_uuid(val: &Value, field: &str) -> Result<Uuid, ApiError> {
     val.get(field)
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::BadRequest(format!("missing '{field}'")))
@@ -647,7 +647,7 @@ fn parse_uuid(val: &Value, field: &str) -> Result<Uuid, ApiError> {
         })
 }
 
-fn parse_memory_type(val: &Value) -> Result<MemoryType, ApiError> {
+pub(crate) fn parse_memory_type(val: &Value) -> Result<MemoryType, ApiError> {
     let s = val
         .get("memory_type")
         .and_then(|v| v.as_str())
@@ -664,7 +664,7 @@ fn parse_memory_type(val: &Value) -> Result<MemoryType, ApiError> {
     }
 }
 
-fn parse_edge_type(s: &str) -> Option<EdgeType> {
+pub(crate) fn parse_edge_type(s: &str) -> Option<EdgeType> {
     match s.to_lowercase().as_str() {
         "caused" => Some(EdgeType::Caused),
         "before" => Some(EdgeType::Before),
@@ -678,7 +678,7 @@ fn parse_edge_type(s: &str) -> Option<EdgeType> {
     }
 }
 
-fn parse_embedding(val: &Value, required: bool) -> Result<Vec<f32>, ApiError> {
+pub(crate) fn parse_embedding(val: &Value, required: bool) -> Result<Vec<f32>, ApiError> {
     match val.get("embedding").and_then(|v| v.as_array()) {
         Some(arr) => {
             let mut emb = Vec::with_capacity(arr.len());
@@ -695,7 +695,7 @@ fn parse_embedding(val: &Value, required: bool) -> Result<Vec<f32>, ApiError> {
     }
 }
 
-fn parse_attributes(val: Option<&Value>) -> HashMap<String, AttributeValue> {
+pub(crate) fn parse_attributes(val: Option<&Value>) -> HashMap<String, AttributeValue> {
     let mut map = HashMap::new();
     if let Some(Value::Object(obj)) = val {
         for (k, v) in obj {
@@ -719,7 +719,7 @@ fn parse_attributes(val: Option<&Value>) -> HashMap<String, AttributeValue> {
     map
 }
 
-fn memory_node_to_json(node: &MemoryNode) -> Value {
+pub(crate) fn memory_node_to_json(node: &MemoryNode) -> Value {
     let mut attrs = Map::new();
     for (k, v) in &node.attributes {
         let jv = match v {
@@ -871,6 +871,7 @@ fn memory_type_from_str(s: &str) -> Result<MemoryType, ApiError> {
 /// GET /v1/admin/memories: a bounded, paginated page of memories for the console.
 pub async fn admin_list_memories(
     State(state): State<Arc<AppState>>,
+    db: Db,
     headers: HeaderMap,
     Query(p): Query<AdminListParams>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -891,8 +892,7 @@ pub async fn admin_list_memories(
     };
     let q = p.q.as_deref().filter(|s| !s.is_empty());
 
-    let (total, nodes) = state
-        .db
+    let (total, nodes) = db
         .list_memories(limit, offset, agent, mtype, q)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let memories: Vec<_> = nodes.iter().map(memory_node_to_json).collect();
@@ -907,16 +907,13 @@ pub async fn admin_list_memories(
 /// DELETE /v1/admin/memories/{id}: forget a memory from the console.
 pub async fn admin_delete_memory(
     State(state): State<Arc<AppState>>,
+    db: Db,
     headers: HeaderMap,
-    Path(id_str): Path<String>,
+    Path(params): Path<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, ApiError> {
     crate::auth::admin_authorized(&headers, &state.admin_key)?;
-    let id: MemoryId = id_str
-        .parse()
-        .map_err(|_| ApiError::BadRequest("invalid memory ID".into()))?;
-    state
-        .db
-        .forget(id)
+    let id = memory_id_param(&params)?;
+    db.forget(id)
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     Ok(Json(json!({ "status": "deleted", "id": id.to_string() })))
 }
@@ -925,6 +922,7 @@ pub async fn admin_delete_memory(
 /// console query box and the `mentedb` CLI's remote mode.
 pub async fn admin_run_mql(
     State(state): State<Arc<AppState>>,
+    db: Db,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -933,8 +931,7 @@ pub async fn admin_run_mql(
         .get("mql")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ApiError::BadRequest("missing 'mql'".into()))?;
-    let scored = state
-        .db
+    let scored = db
         .query(mql)
         .map_err(|e| ApiError::BadRequest(format!("query error: {e}")))?;
     let memories: Vec<Value> = scored

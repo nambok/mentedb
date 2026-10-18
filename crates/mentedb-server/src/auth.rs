@@ -9,7 +9,7 @@ use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use http_body_util::BodyExt;
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -18,30 +18,165 @@ use crate::state::AppState;
 
 #[derive(Debug, Clone)]
 pub struct AuthenticatedAgent {
+    /// Agent the token was issued for; empty when the token is scoped to
+    /// databases rather than to one agent.
     pub agent_id: String,
     pub admin: bool,
+    /// Databases this token may use. `None` means every database (tokens
+    /// issued before database scopes existed, and admin tokens).
+    pub dbs: Option<Vec<String>>,
+    /// Read-only tokens may search and read but not write.
+    pub read_only: bool,
+}
+
+impl AuthenticatedAgent {
+    /// Allow or refuse access to database `name`.
+    pub fn authorize_db(&self, name: &str, write: bool) -> Result<(), ApiError> {
+        if write && self.read_only {
+            return Err(ApiError::Forbidden("token is read-only".into()));
+        }
+        if self.admin {
+            return Ok(());
+        }
+        match &self.dbs {
+            None => Ok(()),
+            Some(list) if list.iter().any(|d| d == "*" || d == name) => Ok(()),
+            Some(_) => Err(ApiError::Forbidden(format!(
+                "token is not scoped to database '{name}'"
+            ))),
+        }
+    }
+
+    /// The agent the token is bound to, if any.
+    pub fn agent(&self) -> Result<Option<mentedb_core::types::AgentId>, ApiError> {
+        if self.agent_id.is_empty() {
+            return Ok(None);
+        }
+        self.agent_id
+            .parse()
+            .map(Some)
+            .map_err(|_| ApiError::Unauthorized("token contains invalid agent_id UUID".into()))
+    }
 }
 
 /// JWT claims embedded in every token.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    /// The agent ID this token was issued for.
+    /// The agent ID this token was issued for. Optional for tokens scoped to
+    /// databases instead.
+    #[serde(default)]
     pub agent_id: String,
     /// Whether this token grants admin privileges.
     #[serde(default)]
     pub admin: bool,
     /// Token expiration as a Unix timestamp.
     pub exp: usize,
+    /// Databases the token may use (`"*"` for all). Absent means all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dbs: Option<Vec<String>>,
+    /// Read-only access.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+}
+
+impl Claims {
+    fn into_agent(self) -> AuthenticatedAgent {
+        AuthenticatedAgent {
+            agent_id: self.agent_id,
+            admin: self.admin,
+            dbs: self.dbs,
+            read_only: self.read_only,
+        }
+    }
+}
+
+/// How bearer tokens are checked.
+///
+/// A shared secret (HS256) lets the server issue tokens itself. A public key
+/// (RS256, ES256 or EdDSA) lets another service sign tokens, for example one
+/// per database, while the server holds no secret at all.
+pub struct TokenVerifier {
+    key: DecodingKey,
+    validation: Validation,
+}
+
+impl TokenVerifier {
+    /// Verify HS256 tokens signed with `secret`.
+    pub fn shared_secret(secret: &str) -> Self {
+        Self {
+            key: DecodingKey::from_secret(secret.as_bytes()),
+            validation: Validation::default(),
+        }
+    }
+
+    /// Verify tokens signed by the private half of a PEM public key. The
+    /// algorithm follows the key: RSA keys use RS256, EC P-256 keys ES256,
+    /// Ed25519 keys EdDSA.
+    pub fn public_key_pem(pem: &[u8]) -> Result<Self, String> {
+        let text = String::from_utf8_lossy(pem);
+        let (key, alg) = if let Ok(k) = DecodingKey::from_rsa_pem(pem) {
+            (k, Algorithm::RS256)
+        } else if let Ok(k) = DecodingKey::from_ec_pem(pem) {
+            (k, Algorithm::ES256)
+        } else if let Ok(k) = DecodingKey::from_ed_pem(pem) {
+            (k, Algorithm::EdDSA)
+        } else {
+            return Err(format!(
+                "not an RSA, EC or Ed25519 public key in PEM form ({} bytes)",
+                text.len()
+            ));
+        };
+        Ok(Self {
+            key,
+            validation: Validation::new(alg),
+        })
+    }
+
+    /// Also require these `iss` / `aud` values when set.
+    pub fn with_issuer_audience(
+        mut self,
+        issuer: Option<String>,
+        audience: Option<String>,
+    ) -> Self {
+        if let Some(iss) = issuer {
+            self.validation.set_issuer(&[iss]);
+        }
+        match audience {
+            Some(aud) => self.validation.set_audience(&[aud]),
+            None => self.validation.validate_aud = false,
+        }
+        self
+    }
+
+    /// Validate a token and return its claims.
+    pub fn verify(&self, token: &str) -> Result<Claims, ApiError> {
+        decode::<Claims>(token, &self.key, &self.validation)
+            .map(|data| data.claims)
+            .map_err(|e| ApiError::Unauthorized(format!("invalid token: {e}")))
+    }
+
+    /// Validate a token into the caller it represents.
+    pub fn authenticate(&self, token: &str) -> Result<AuthenticatedAgent, ApiError> {
+        self.verify(token).map(Claims::into_agent)
+    }
 }
 
 /// Request body for the token generation endpoint.
 #[derive(Deserialize)]
 pub struct TokenRequest {
-    /// The agent ID to issue a token for.
+    /// The agent ID to issue a token for (may be empty for a token scoped to
+    /// databases).
+    #[serde(default)]
     pub agent_id: String,
     /// How many hours until the token expires (default: 24).
     #[serde(default = "default_expiry_hours")]
     pub expiry_hours: u64,
+    /// Databases the token may use. Absent means all.
+    #[serde(default)]
+    pub dbs: Option<Vec<String>>,
+    /// Issue a read-only token.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 fn default_expiry_hours() -> u64 {
@@ -50,11 +185,25 @@ fn default_expiry_hours() -> u64 {
 
 /// Create a signed JWT for the given agent.
 pub fn create_token(secret: &str, agent_id: &str, admin: bool, expiry_hours: u64) -> String {
+    create_scoped_token(secret, agent_id, admin, expiry_hours, None, false)
+}
+
+/// Create a signed JWT limited to `dbs` (all when `None`).
+pub fn create_scoped_token(
+    secret: &str,
+    agent_id: &str,
+    admin: bool,
+    expiry_hours: u64,
+    dbs: Option<Vec<String>>,
+    read_only: bool,
+) -> String {
     let exp = jsonwebtoken::get_current_timestamp() as usize + (expiry_hours as usize * 3600);
     let claims = Claims {
         agent_id: agent_id.to_string(),
         admin,
         exp,
+        dbs,
+        read_only,
     };
     encode(
         &Header::default(),
@@ -147,8 +296,25 @@ pub async fn generate_token(
         .to_bytes();
     let req: TokenRequest = serde_json::from_slice(&body_bytes)
         .map_err(|e| ApiError::BadRequest(format!("invalid JSON: {e}")))?;
-    let token = create_token(secret, &req.agent_id, false, req.expiry_hours);
-    Ok(Json(json!({ "token": token, "agent_id": req.agent_id })))
+    if let Some(dbs) = &req.dbs {
+        for name in dbs.iter().filter(|d| d.as_str() != "*") {
+            crate::databases::validate_name(name)?;
+        }
+    }
+    let token = create_scoped_token(
+        secret,
+        &req.agent_id,
+        false,
+        req.expiry_hours,
+        req.dbs.clone(),
+        req.read_only,
+    );
+    Ok(Json(json!({
+        "token": token,
+        "agent_id": req.agent_id,
+        "dbs": req.dbs,
+        "read_only": req.read_only,
+    })))
 }
 
 /// Middleware that enforces JWT auth when a secret is configured.
@@ -157,9 +323,9 @@ pub async fn auth_middleware(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let secret = match &state.jwt_secret {
-        Some(s) => s.clone(),
-        // No secret configured means development mode; skip auth.
+    let verifier = match &state.verifier {
+        Some(v) => v.clone(),
+        // No secret or key configured means development mode; skip auth.
         None => return next.run(request).await,
     };
 
@@ -168,6 +334,7 @@ pub async fn auth_middleware(
     // Admin endpoints are gated by the admin key inside the handler, not the JWT,
     // so the bundled console (which sends x-api-key) can reach them.
     if path == "/v1/health"
+        || path == "/v1/ready"
         || path == "/v1/auth/token"
         || path == "/metrics"
         || path == "/console"
@@ -194,12 +361,9 @@ pub async fn auth_middleware(
         }
     };
 
-    match validate_token(&secret, token) {
-        Ok(claims) => {
-            request.extensions_mut().insert(AuthenticatedAgent {
-                agent_id: claims.agent_id,
-                admin: claims.admin,
-            });
+    match verifier.authenticate(token) {
+        Ok(agent) => {
+            request.extensions_mut().insert(agent);
             next.run(request).await
         }
         Err(e) => e.into_response(),

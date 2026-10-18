@@ -3,10 +3,13 @@
 mod auth;
 mod cluster;
 mod console;
+mod databases;
 mod error;
 mod extraction_queue;
 mod grpc;
 mod handlers;
+mod handlers_memory;
+mod handlers_ops;
 mod maintenance;
 mod metrics;
 mod rate_limit;
@@ -462,33 +465,48 @@ async fn main() -> Result<()> {
         config.jwt_secret.clone(),
     );
     let admin_key = config.admin_key.clone();
-    if config.require_auth && jwt_secret.is_none() {
-        eprintln!("Error: --require-auth was set but no --jwt-secret provided");
+    let verifier = match build_verifier(&jwt_secret) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    };
+    if config.require_auth && verifier.is_none() {
+        eprintln!(
+            "Error: --require-auth was set but neither --jwt-secret nor \
+             MENTEDB_JWT_PUBLIC_KEY_FILE is configured"
+        );
         std::process::exit(1);
     }
-    if jwt_secret.is_none() {
+    if verifier.is_none() {
         eprintln!(
-            "WARNING: Running without authentication. All endpoints are open. Set --jwt-secret for production use."
+            "WARNING: Running without authentication. All endpoints are open. Set --jwt-secret \
+             or MENTEDB_JWT_PUBLIC_KEY_FILE for production use."
         );
     }
 
     std::fs::create_dir_all(&data_dir)?;
 
-    let db = match build_embedder(config.embedding_provider.as_deref()) {
-        Some(embedder) => MenteDb::open_with_embedder(&data_dir, embedder)?,
-        None => MenteDb::open(&data_dir)?,
-    };
-    let db = Arc::new(db);
+    let embedder: Option<Arc<dyn mentedb_embedding::provider::EmbeddingProvider>> =
+        build_embedder(config.embedding_provider.as_deref()).map(Arc::from);
+    let databases = Arc::new(databases::Databases::open(
+        &data_dir,
+        embedder,
+        cognitive_config_from_env(),
+        databases_config_from_env(),
+    )?);
+    let db = databases.default_db();
 
     // Background maintenance sweep (self-hosted overnight jobs). Default every
     // 24h; 0 disables it (run the `maintenance` subcommand from cron instead).
     maintenance::spawn_scheduler(
-        db.clone(),
+        databases.clone(),
         maintenance_interval_hours,
         extraction_config.clone(),
     );
 
-    let auth_mode = if jwt_secret.is_some() {
+    let auth_mode = if verifier.is_some() {
         "enabled"
     } else {
         "disabled (development mode)"
@@ -512,6 +530,8 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(AppState {
         db: db.clone(),
+        databases: databases.clone(),
+        verifier: verifier.map(Arc::new),
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: jwt_secret.clone(),
         admin_key: admin_key.clone(),
@@ -604,10 +624,63 @@ async fn main() -> Result<()> {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(10), handle).await;
     }
 
-    db.close()?;
+    drop(db);
+    databases.close_all();
     info!("MenteDB server stopped");
 
     Ok(())
+}
+
+/// Token verification from the HS256 secret or, when
+/// `MENTEDB_JWT_PUBLIC_KEY_FILE` is set, a PEM public key (RS256, ES256 or
+/// EdDSA) so tokens can be signed elsewhere and no secret lives on the server.
+/// `MENTEDB_JWT_ISSUER` / `MENTEDB_JWT_AUDIENCE` add `iss` / `aud` checks.
+fn build_verifier(jwt_secret: &Option<String>) -> Result<Option<auth::TokenVerifier>, String> {
+    let issuer = env::var("MENTEDB_JWT_ISSUER")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let audience = env::var("MENTEDB_JWT_AUDIENCE")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let verifier = match env::var("MENTEDB_JWT_PUBLIC_KEY_FILE")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        Some(path) => {
+            let pem = std::fs::read(&path)
+                .map_err(|e| format!("reading MENTEDB_JWT_PUBLIC_KEY_FILE {path}: {e}"))?;
+            Some(
+                auth::TokenVerifier::public_key_pem(&pem)
+                    .map_err(|e| format!("MENTEDB_JWT_PUBLIC_KEY_FILE {path}: {e}"))?,
+            )
+        }
+        None => jwt_secret
+            .as_deref()
+            .map(auth::TokenVerifier::shared_secret),
+    };
+    Ok(verifier.map(|v| v.with_issuer_audience(issuer, audience)))
+}
+
+/// Limits for named databases from `MENTEDB_MAX_OPEN_DATABASES` and
+/// `MENTEDB_AUTO_CREATE_DATABASES` (default on).
+fn databases_config_from_env() -> databases::DatabasesConfig {
+    let mut cfg = databases::DatabasesConfig::default();
+    if let Some(n) = env::var("MENTEDB_MAX_OPEN_DATABASES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+    {
+        cfg.max_open = n;
+    }
+    if let Ok(v) = env::var("MENTEDB_AUTO_CREATE_DATABASES") {
+        cfg.auto_create = !matches!(v.to_lowercase().as_str(), "0" | "false" | "no" | "off");
+    }
+    cfg
+}
+
+/// Engine settings every database opens with.
+fn cognitive_config_from_env() -> mentedb::CognitiveConfig {
+    mentedb::CognitiveConfig::default()
 }
 
 /// Build an ExtractionConfig from the ServerConfig's LLM settings.
