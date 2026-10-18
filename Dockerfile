@@ -9,8 +9,10 @@ WORKDIR /build
 COPY . .
 
 # local-embeddings bundles the Candle model loader so the container has
-# zero-config semantic search (model downloads on first start).
-RUN cargo build --release --bin mentedb-server --features mentedb-server/local-embeddings
+# zero-config semantic search (model downloads on first start). bedrock adds
+# Bedrock extraction and embeddings, authenticated by the task role, so the
+# image runs on AWS with no API keys and no model download.
+RUN cargo build --release --bin mentedb-server --features mentedb-server/local-embeddings,mentedb-server/bedrock
 
 # Production stage
 FROM debian:bookworm-slim

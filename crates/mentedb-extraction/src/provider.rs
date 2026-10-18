@@ -246,6 +246,10 @@ fn claude_text(
 pub struct HttpExtractionProvider {
     client: reqwest::Client,
     config: ExtractionConfig,
+    /// AWS credentials for Bedrock: static keys or the container role,
+    /// refreshed before they expire. Set only for the Bedrock provider.
+    #[cfg(feature = "bedrock")]
+    aws: Option<mentedb_embedding::AwsCredentialSource>,
 }
 
 impl HttpExtractionProvider {
@@ -266,32 +270,34 @@ impl HttpExtractionProvider {
                 "API key is required for this provider".to_string(),
             ));
         }
+        // Fail fast with a clear message if AWS credentials are missing,
+        // rather than at the first extraction call.
+        #[cfg(feature = "bedrock")]
+        let aws = if config.provider == LlmProvider::Bedrock {
+            Some(
+                mentedb_embedding::AwsCredentialSource::from_env()
+                    .map_err(|e| ExtractionError::ConfigError(format!("Bedrock: {e}")))?,
+            )
+        } else {
+            None
+        };
+        #[cfg(not(feature = "bedrock"))]
         if config.provider == LlmProvider::Bedrock {
-            #[cfg(feature = "bedrock")]
-            {
-                // Fail fast with a clear message if AWS creds are missing,
-                // rather than at the first extraction call.
-                mentedb_embedding::AwsCredentials::from_env().map_err(|e| {
-                    ExtractionError::ConfigError(format!(
-                        "Bedrock requires AWS credentials in the environment \
-                         (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, and \
-                         AWS_SESSION_TOKEN for temporary/SSO credentials): {e}"
-                    ))
-                })?;
-            }
-            #[cfg(not(feature = "bedrock"))]
-            {
-                return Err(ExtractionError::ConfigError(
-                    "bedrock support not compiled in (build with --features bedrock)".to_string(),
-                ));
-            }
+            return Err(ExtractionError::ConfigError(
+                "bedrock support not compiled in (build with --features bedrock)".to_string(),
+            ));
         }
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .connect_timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| ExtractionError::ConfigError(format!("HTTP client error: {}", e)))?;
-        Ok(Self { client, config })
+        Ok(Self {
+            client,
+            config,
+            #[cfg(feature = "bedrock")]
+            aws,
+        })
     }
 
     /// Expand a search query into multiple sub-queries via LLM.
@@ -529,13 +535,15 @@ impl HttpExtractionProvider {
 
         let body = serde_json::to_vec(&bedrock_body(&self.config, system_prompt, conversation))?;
 
-        let creds = mentedb_embedding::AwsCredentials::from_env().map_err(|e| {
-            ExtractionError::ConfigError(format!(
-                "Bedrock requires AWS credentials in the environment \
-                 (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, and AWS_SESSION_TOKEN \
-                 for temporary/SSO credentials): {e}"
-            ))
+        let source = self.aws.clone().ok_or_else(|| {
+            ExtractionError::ConfigError("Bedrock credentials were not initialized".to_string())
         })?;
+        // A cached read is instant; a refresh calls the container endpoint
+        // with a blocking client, so keep it off the async workers.
+        let creds = tokio::task::spawn_blocking(move || source.credentials())
+            .await
+            .map_err(|e| ExtractionError::ProviderError(format!("credentials task failed: {e}")))?
+            .map_err(|e| ExtractionError::ConfigError(format!("Bedrock: {e}")))?;
 
         let now = chrono::Utc::now();
         let amzdate = now.format("%Y%m%dT%H%M%SZ").to_string();

@@ -191,7 +191,9 @@ fn parse_args() -> ServerConfig {
                     embedding_provider = Some(args[i + 1].clone());
                     i += 2;
                 } else {
-                    eprintln!("Error: --embedding-provider requires a value (candle, hash, none)");
+                    eprintln!(
+                        "Error: --embedding-provider requires a value (candle, bedrock, hash, none)"
+                    );
                     std::process::exit(1);
                 }
             }
@@ -299,7 +301,8 @@ fn parse_args() -> ServerConfig {
 /// server always wires one and is loud about quality degradation.
 ///
 /// Selection: `candle` (semantic, requires the `local-embeddings` build
-/// feature), `hash` (deterministic but non-semantic), `none` (disable).
+/// feature), `bedrock` (AWS Bedrock, requires the `bedrock` build feature),
+/// `hash` (deterministic but non-semantic), `none` (disable).
 /// Default: candle when compiled in, hash otherwise.
 fn build_embedder(
     choice: Option<&str>,
@@ -346,6 +349,57 @@ fn build_embedder(
                 std::process::exit(1);
             }
         }
+        "bedrock" => {
+            #[cfg(feature = "bedrock")]
+            {
+                // Cohere v3 by default: measurably better recall than Titan
+                // and the same model the cloud platform uses.
+                let model = env::var("MENTEDB_EMBEDDING_MODEL")
+                    .unwrap_or_else(|_| "cohere.embed-english-v3".to_string());
+                let region = env::var("MENTEDB_EMBEDDING_REGION")
+                    .or_else(|_| env::var("AWS_REGION"))
+                    .unwrap_or_else(|_| "us-east-1".to_string());
+                let config = match mentedb_embedding::BedrockEmbeddingConfig::for_model(
+                    region.clone(),
+                    &model,
+                ) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("Error: --embedding-provider bedrock: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                let provider = match mentedb_embedding::BedrockEmbeddingProvider::new(config) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("Error: --embedding-provider bedrock: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                // One real call so a missing permission or model agreement
+                // shows up in the startup log, not on the first write. A
+                // failure here is logged, not fatal, so a brief Bedrock outage
+                // does not crash loop the server.
+                use mentedb_embedding::provider::EmbeddingProvider as _;
+                match provider.embed("startup check") {
+                    Ok(_) => tracing::info!(%model, %region, "using Bedrock embeddings"),
+                    Err(e) => tracing::warn!(
+                        %model,
+                        %region,
+                        error = %e,
+                        "Bedrock embedding check failed; writes will fail until this is fixed"
+                    ),
+                }
+                Some(Box::new(provider))
+            }
+            #[cfg(not(feature = "bedrock"))]
+            {
+                eprintln!(
+                    "Error: --embedding-provider bedrock requires a build with --features bedrock"
+                );
+                std::process::exit(1);
+            }
+        }
         "hash" => {
             eprintln!(
                 "WARNING: using non-semantic hash embeddings. Only byte-identical text matches; \
@@ -355,7 +409,9 @@ fn build_embedder(
             Some(Box::new(mentedb_embedding::HashEmbeddingProvider::new(384)))
         }
         other => {
-            eprintln!("Error: unknown embedding provider '{other}' (expected candle, hash, none)");
+            eprintln!(
+                "Error: unknown embedding provider '{other}' (expected candle, bedrock, hash, none)"
+            );
             std::process::exit(1);
         }
     }

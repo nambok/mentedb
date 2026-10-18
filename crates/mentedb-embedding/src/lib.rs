@@ -5,6 +5,8 @@
 
 /// Native AWS Bedrock (Amazon Titan) embedding provider (sync ureq + SigV4).
 #[cfg(feature = "bedrock")]
+pub mod aws_credentials;
+#[cfg(feature = "bedrock")]
 pub mod bedrock_provider;
 /// LRU embedding cache with hit/miss tracking.
 pub mod cache;
@@ -21,7 +23,11 @@ pub mod manager;
 pub mod provider;
 
 #[cfg(feature = "bedrock")]
-pub use bedrock_provider::{AwsCredentials, BedrockEmbeddingConfig, BedrockEmbeddingProvider};
+pub use aws_credentials::{AwsCredentialSource, AwsCredentials, CredentialRefreshConfig};
+#[cfg(feature = "bedrock")]
+pub use bedrock_provider::{
+    BedrockEmbeddingConfig, BedrockEmbeddingFamily, BedrockEmbeddingProvider,
+};
 pub use cache::{CacheStats, CachedEmbedding, EmbeddingCache};
 #[cfg(feature = "local")]
 pub use candle_provider::CandleEmbeddingProvider;
