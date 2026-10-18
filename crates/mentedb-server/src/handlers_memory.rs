@@ -2,7 +2,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use axum::extract::{FromRequestParts, Path, Query};
+use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -107,25 +107,6 @@ pub fn routes_with_limits(limits: MemoryApiLimits) -> Router<Arc<AppState>> {
         .layer(Extension(Arc::new(limits)))
 }
 
-/// The database for a POST that only reads but whose path the shared
-/// extractor does not count as a read (`/search/hybrid`). Token scope is
-/// checked as for a GET, so read-only tokens may search.
-struct ReadDb(Db);
-
-impl FromRequestParts<Arc<AppState>> for ReadDb {
-    type Rejection = ApiError;
-
-    async fn from_request_parts(
-        parts: &mut axum::http::request::Parts,
-        state: &Arc<AppState>,
-    ) -> Result<Self, ApiError> {
-        let method = std::mem::replace(&mut parts.method, axum::http::Method::GET);
-        let db = Db::from_request_parts(parts, state).await;
-        parts.method = method;
-        db.map(ReadDb)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // POST /v1/search/hybrid
 // ---------------------------------------------------------------------------
@@ -135,7 +116,7 @@ impl FromRequestParts<Arc<AppState>> for ReadDb {
 async fn search_hybrid(
     agent: Caller,
     Extension(limits): Limits,
-    ReadDb(db): ReadDb,
+    db: Db,
     Json(req): Json<Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     let k = bounded(body_usize(&req, "k")?, limits.default_k, limits.max_k);

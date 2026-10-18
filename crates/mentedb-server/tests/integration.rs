@@ -10,7 +10,6 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::middleware;
 use http_body_util::BodyExt;
-use mentedb::MenteDb;
 use mentedb_server::auth;
 use mentedb_server::rate_limit::RateLimiter;
 use mentedb_server::routes;

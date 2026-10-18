@@ -6,7 +6,6 @@ use std::time::Instant;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use mentedb::MenteDb;
 use mentedb_extraction::{ExtractionConfig, LlmProvider};
 use mentedb_server::routes;
 use mentedb_server::state::AppState;

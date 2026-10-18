@@ -213,17 +213,6 @@ pub fn create_scoped_token(
     .expect("JWT encoding should not fail with valid inputs")
 }
 
-/// Validate a JWT and return the embedded claims.
-pub fn validate_token(secret: &str, token: &str) -> Result<Claims, ApiError> {
-    decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default(),
-    )
-    .map(|data| data.claims)
-    .map_err(|e| ApiError::Unauthorized(format!("invalid token: {e}")))
-}
-
 /// Handler: POST /v1/auth/token: generate a new JWT.
 fn extract_admin_key(request: &Request<Body>) -> Option<String> {
     if let Some(v) = request
