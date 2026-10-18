@@ -26,11 +26,15 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 anyhow = { workspace = true }
 bytes = { workspace = true }
 axum = { version = "0.8", features = ["ws"] }
+# Native HTTPS for the REST API (--tls-cert / --tls-key). rustls on the ring
+# provider, the same crypto backend reqwest already uses, so no aws-lc build.
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tower = "0.5"
 tower-http = { version = "0.7", features = ["cors", "trace", "compression-gzip"] }
 http-body-util = "0.1"
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
-tonic = "0.13"
+tonic = { version = "0.13", features = ["tls-ring"] }
 prost = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 prometheus = { version = "0.13", features = ["process"] }
@@ -57,6 +61,7 @@ tempfile = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 mentedb-extraction = { workspace = true }
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "ring"] }
 
 [package.metadata.docs.rs]
 all-features = true

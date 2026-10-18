@@ -53,7 +53,7 @@ use mentedb_cognitive::speculative::{CacheEntry, CacheStats, SpeculativeCache};
 use mentedb_cognitive::stream::{CognitionStream, StreamAlert, StreamConfig};
 use mentedb_cognitive::trajectory::{TrajectoryNode, TrajectoryTracker};
 use mentedb_cognitive::write_inference::{
-    InferredAction, WriteInferenceConfig, WriteInferenceEngine,
+    ContradictionPolicy, InferredAction, WriteInferenceConfig, WriteInferenceEngine,
 };
 use mentedb_consolidation::archival::{ArchivalConfig, ArchivalDecision, ArchivalPipeline};
 use mentedb_consolidation::compression::{CompressedMemory, MemoryCompressor};
@@ -1862,6 +1862,8 @@ impl MenteDb {
         let results = self.index.hybrid_search_with_query_mode(
             embedding, query_text, tags, tags_or, time_range, fetch_k,
         );
+        let contradicts_hides = self.cognitive_config.inference_config.contradiction_policy
+            == ContradictionPolicy::Supersede;
         // Lock order when both are held: `page_map` first, then the graph.
         let pm = self.page_map.read();
         let graph = self.graph.graph();
@@ -1872,10 +1874,13 @@ impl MenteDb {
             .into_iter()
             .filter_map(|(id, raw_score)| {
                 // Exclude memories that an active Supersedes/Contradicts edge
-                // has invalidated.
+                // has invalidated. Under the Flag contradiction policy a
+                // Contradicts edge is a hint for the caller, so both sides stay
+                // recallable and only Supersedes hides a memory.
                 let incoming = graph.incoming(id);
                 let has_active_supersede = incoming.iter().any(|(_, e)| {
-                    (e.edge_type == EdgeType::Supersedes || e.edge_type == EdgeType::Contradicts)
+                    (e.edge_type == EdgeType::Supersedes
+                        || (e.edge_type == EdgeType::Contradicts && contradicts_hides))
                         && e.is_valid_at(at)
                 });
                 if has_active_supersede {

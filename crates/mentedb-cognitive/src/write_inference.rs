@@ -70,8 +70,41 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if denom == 0.0 { 0.0 } else { dot / denom }
 }
 
+/// What write inference does when it finds that a new memory contradicts an
+/// older one (a value update on the same sentence frame, or an LLM verdict that
+/// one memory replaces the other).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContradictionPolicy {
+    /// Close the losing memory: set its valid_until, record a Supersedes edge
+    /// and decay its confidence, so recall serves only the winner.
+    #[default]
+    Supersede,
+    /// Hint mode: keep both memories valid and record a Contradicts edge
+    /// between them, so the caller can surface the conflict and decide. Under
+    /// this policy recall keeps serving both sides of a Contradicts edge.
+    /// Memories stored with the explicit Correction type still supersede,
+    /// because the caller already made that decision.
+    Flag,
+}
+
+impl std::str::FromStr for ContradictionPolicy {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "supersede" => Ok(Self::Supersede),
+            "flag" => Ok(Self::Flag),
+            other => Err(format!(
+                "unknown contradiction policy '{other}' (expected supersede or flag)"
+            )),
+        }
+    }
+}
+
 /// Configuration for write-time inference thresholds.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct WriteInferenceConfig {
     /// Similarity above which two memories may contradict (default: 0.95).
     pub contradiction_threshold: f32,
@@ -118,6 +151,9 @@ pub struct WriteInferenceConfig {
     /// Maximum differing value tokens per side (default: 4). Larger middles
     /// mean genuinely different statements, not a value change.
     pub value_update_max_tail: usize,
+    /// What to do when a new memory contradicts an older one (default:
+    /// supersede the older one).
+    pub contradiction_policy: ContradictionPolicy,
 }
 
 impl Default for WriteInferenceConfig {
@@ -134,6 +170,7 @@ impl Default for WriteInferenceConfig {
             value_update_min_similarity: 0.3,
             value_update_prefix_share: 0.6,
             value_update_max_tail: 4,
+            contradiction_policy: ContradictionPolicy::Supersede,
         }
     }
 }
@@ -351,16 +388,16 @@ impl WriteInferenceEngine {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_micros() as u64;
-                    actions.push(InferredAction::InvalidateMemory {
-                        memory: loser,
-                        superseded_by: winner,
-                        valid_until: now,
-                    });
-                    actions.push(InferredAction::UpdateConfidence {
-                        memory: loser,
-                        new_confidence: (loser_confidence * self.config.confidence_decay_factor)
-                            .max(self.config.confidence_floor),
-                    });
+                    self.resolve_contradiction(
+                        &mut actions,
+                        existing.id,
+                        new_memory.id,
+                        loser,
+                        winner,
+                        loser_confidence,
+                        now,
+                        "value update: same sentence frame with a different value",
+                    );
                 }
                 // else: no correction signal and equal timestamps, so the two are
                 // kept as coexisting facts (a multi-valued attribute) rather than
@@ -437,20 +474,19 @@ impl WriteInferenceEngine {
                 // LLM invalidation check
                 if let Ok(verdict) = llm.judge_invalidation(&old_summary, &new_summary).await {
                     match verdict {
-                        InvalidationVerdict::Invalidate { reason: _ } => {
+                        InvalidationVerdict::Invalidate { reason } => {
                             // InvalidateMemory sets valid_until and creates the
                             // Supersedes edge; no separate MarkObsolete/CreateEdge.
-                            actions.push(InferredAction::InvalidateMemory {
-                                memory: existing.id,
-                                superseded_by: new_memory.id,
-                                valid_until: new_memory.created_at,
-                            });
-                            actions.push(InferredAction::UpdateConfidence {
-                                memory: existing.id,
-                                new_confidence: (existing.confidence
-                                    * self.config.confidence_decay_factor)
-                                    .max(self.config.confidence_floor),
-                            });
+                            self.resolve_contradiction(
+                                &mut actions,
+                                existing.id,
+                                new_memory.id,
+                                existing.id,
+                                new_memory.id,
+                                existing.confidence,
+                                new_memory.created_at,
+                                &reason,
+                            );
                             // Skip contradiction check since we already know the relationship
                             continue;
                         }
@@ -484,18 +520,29 @@ impl WriteInferenceEngine {
                                 reason,
                             });
                         }
-                        ContradictionVerdict::Supersedes { winner, reason: _ } => {
+                        ContradictionVerdict::Supersedes { winner, reason } => {
                             let winner_is_new = winner == new_memory.id.to_string();
                             let (obsolete, superseder) = if winner_is_new {
                                 (existing.id, new_memory.id)
                             } else {
                                 (new_memory.id, existing.id)
                             };
-                            actions.push(InferredAction::InvalidateMemory {
-                                memory: obsolete,
-                                superseded_by: superseder,
-                                valid_until: new_memory.created_at,
-                            });
+                            match self.config.contradiction_policy {
+                                ContradictionPolicy::Supersede => {
+                                    actions.push(InferredAction::InvalidateMemory {
+                                        memory: obsolete,
+                                        superseded_by: superseder,
+                                        valid_until: new_memory.created_at,
+                                    });
+                                }
+                                ContradictionPolicy::Flag => {
+                                    actions.push(InferredAction::FlagContradiction {
+                                        existing: existing.id,
+                                        new: new_memory.id,
+                                        reason,
+                                    });
+                                }
+                            }
                         }
                         ContradictionVerdict::Compatible { .. } => {}
                     }
@@ -540,6 +587,46 @@ impl WriteInferenceEngine {
         }
 
         actions
+    }
+}
+
+impl WriteInferenceEngine {
+    /// Record a detected contradiction between `existing` and `new` according
+    /// to the configured policy: supersede the loser (close it and decay its
+    /// confidence) or flag the pair and keep both valid.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_contradiction(
+        &self,
+        actions: &mut Vec<InferredAction>,
+        existing: MemoryId,
+        new: MemoryId,
+        loser: MemoryId,
+        winner: MemoryId,
+        loser_confidence: f32,
+        valid_until: u64,
+        reason: &str,
+    ) {
+        match self.config.contradiction_policy {
+            ContradictionPolicy::Supersede => {
+                actions.push(InferredAction::InvalidateMemory {
+                    memory: loser,
+                    superseded_by: winner,
+                    valid_until,
+                });
+                actions.push(InferredAction::UpdateConfidence {
+                    memory: loser,
+                    new_confidence: (loser_confidence * self.config.confidence_decay_factor)
+                        .max(self.config.confidence_floor),
+                });
+            }
+            ContradictionPolicy::Flag => {
+                actions.push(InferredAction::FlagContradiction {
+                    existing,
+                    new,
+                    reason: reason.to_string(),
+                });
+            }
+        }
     }
 }
 

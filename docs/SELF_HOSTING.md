@@ -25,8 +25,34 @@ mentedb-server --data-dir ./data
 **With Docker** (the image bundles the local embedding model):
 
 ```bash
-docker run -p 6677:6677 -v mentedb-data:/data ghcr.io/nambok/mentedb:latest
+docker run -p 6677:6677 -v mentedb-data:/var/mentedb/data ghcr.io/nambok/mentedb:latest
 ```
+
+The image runs as a non-root user, uid and gid `10001`, and keeps its data in
+`/var/mentedb/data`. A named volume picks up that ownership automatically; for
+a bind mount, give the directory to that user first:
+
+```bash
+mkdir -p ./data && sudo chown 10001:10001 ./data
+docker run -p 6677:6677 -v "$PWD/data:/var/mentedb/data" ghcr.io/nambok/mentedb:latest
+```
+
+The local embedding model (about 90 MB) downloads on first start into
+`/var/mentedb/.cache/huggingface`, under the service user's home. Mount a
+volume at `/var/mentedb/.cache` too if you want to skip the download when the
+container is recreated.
+
+The image has a Docker `HEALTHCHECK` that calls `GET /v1/ready` on port 6677
+every 30 seconds (60 second start period, 3 retries), so `docker ps` and
+orchestrators that read Docker health see when the server can take traffic.
+If you turn on TLS (see [HTTPS](#https)), override the check, for example
+`--health-cmd "curl -fsSk https://localhost:6677/v1/ready || exit 1"`.
+
+Release images are tagged with the version (for example `0.38.0`), the short
+commit (`sha-1a2b3c4`) and `latest`, and carry the OCI labels
+`org.opencontainers.image.revision`, `version` and `source`, so you can pin a
+deployment to an exact release and trace it back to the commit it was built
+from.
 
 The server listens on `6677` (REST) and `6678` (gRPC). Data lives in `--data-dir`.
 The image runs the overnight maintenance sweep automatically (every 24h by
@@ -73,6 +99,27 @@ contradiction detection. Without a real embedder only keyword recall works.
 
 ```bash
 mentedb-server --data-dir ./data --embedding-provider candle
+```
+
+### Contradictions: supersede or flag
+
+When a new memory contradicts an older one (the same sentence with a changed
+value, like "my favorite coffee is a cortado" then "... a flat white", or an
+LLM verdict that one fact replaces the other), the engine resolves it at write
+time. `MENTEDB_CONTRADICTION_POLICY` picks how:
+
+- `supersede` (default): the older memory is closed. Its `valid_until` is set,
+  a `supersedes` edge links the two, and recall serves only the newer one.
+- `flag`: both memories stay valid and recallable, and a `contradicts` edge
+  links them. Use this when your application wants to show the conflict to a
+  person or an agent and let it decide.
+
+Memories stored with the explicit `correction` type always supersede, under
+either policy, because the caller already made the decision. Any other value
+of the variable stops the server at startup.
+
+```bash
+MENTEDB_CONTRADICTION_POLICY=flag mentedb-server --data-dir ./data
 ```
 
 ## Step 4: Use it
@@ -124,7 +171,7 @@ mentedb-server --data-dir ./data --maintenance-interval-hours 0   # disable
 **Or run it one-shot from cron** (set the interval to 0 to avoid double-running):
 
 ```bash
-# /etc/cron.d/mentedb  — 2am daily
+# /etc/cron.d/mentedb, 2am daily
 0 2 * * *  mentedb-server maintenance --data-dir /var/lib/mentedb
 ```
 
@@ -137,16 +184,20 @@ skip it.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `MENTEDB_LLM_PROVIDER` | `none` | `openai`, `anthropic`, `ollama`, or `none` |
-| `MENTEDB_LLM_API_KEY` | — | LLM API key |
+| `MENTEDB_LLM_API_KEY` | unset | LLM API key |
 | `MENTEDB_LLM_MODEL` | provider default | Model name |
-| `MENTEDB_LLM_BASE_URL` | — | For Ollama or a proxy |
+| `MENTEDB_LLM_BASE_URL` | unset | For Ollama or a proxy |
 | `MENTEDB_AUTO_EXTRACT` | `false` | Per-turn fact extraction (`--auto-extract`) |
 | `MENTEDB_EMBEDDING_PROVIDER` | `candle`/`hash` | `candle`, `hash`, or `none` |
 | `MENTEDB_MAINTENANCE_INTERVAL_HOURS` | `24` | Sweep interval; `0` disables |
-| `MENTEDB_JWT_SECRET` | — | Enables auth; required with `--require-auth` |
-| `MENTEDB_ADMIN_KEY` | — | Admin token issuance |
+| `MENTEDB_JWT_SECRET` | unset | Enables auth; required with `--require-auth` |
+| `MENTEDB_ADMIN_KEY` | unset | Admin token issuance |
 | `MENTEDB_EXTRACTION_QUALITY_THRESHOLD` | `0.7` | Min confidence to store an extracted fact |
 | `MENTEDB_EXTRACTION_DEDUP_THRESHOLD` | `0.85` | Similarity above which an extraction is a duplicate |
+| `MENTEDB_CONTRADICTION_POLICY` | `supersede` | `supersede` closes the older of two contradicting memories, `flag` keeps both and links them with a `contradicts` edge |
+| `MENTEDB_TLS_CERT_FILE` | unset | PEM certificate chain; with the key, serves HTTPS and gRPC over TLS (`--tls-cert`) |
+| `MENTEDB_TLS_KEY_FILE` | unset | PEM private key for the certificate (`--tls-key`) |
+| `MENTEDB_SHUTDOWN_DRAIN_SECS` | `10` | Seconds open HTTPS connections get to finish on shutdown |
 
 ## Production notes
 
@@ -159,3 +210,38 @@ mentedb-server --data-dir ./data --require-auth
 
 Without `--require-auth` every endpoint is open, fine for local, not for a
 public host.
+
+### HTTPS
+
+The server can terminate TLS itself, no proxy needed. Pass a PEM certificate
+chain and its private key:
+
+```bash
+mentedb-server --data-dir ./data \
+  --tls-cert /etc/mentedb/fullchain.pem \
+  --tls-key /etc/mentedb/privkey.pem
+```
+
+or set `MENTEDB_TLS_CERT_FILE` and `MENTEDB_TLS_KEY_FILE`. With both set, the
+REST API on 6677 serves HTTPS only (HTTP/1.1 and HTTP/2) and gRPC on 6678 uses
+TLS with the same certificate. With neither set the server speaks plain HTTP.
+Setting only one of the two, an unreadable file, or a key that does not match
+the certificate stops the server at startup with an error, so a typo never
+falls back to plaintext. The files are read once at start; restart the server
+after renewing the certificate.
+
+In Docker, mount the files read only and point the variables at them:
+
+```bash
+docker run -p 6677:6677 -p 6678:6678 \
+  -v mentedb-data:/var/mentedb/data \
+  -v /etc/mentedb/tls:/tls:ro \
+  -e MENTEDB_TLS_CERT_FILE=/tls/fullchain.pem \
+  -e MENTEDB_TLS_KEY_FILE=/tls/privkey.pem \
+  --health-cmd "curl -fsSk https://localhost:6677/v1/ready || exit 1" \
+  ghcr.io/nambok/mentedb:latest
+```
+
+The files must be readable by uid `10001`. Without TLS, keep the server on a
+private network or behind a proxy that terminates TLS, since tokens and memory
+content would otherwise cross the network in the clear.
