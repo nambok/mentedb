@@ -3,11 +3,11 @@
 // The binary links the library's modules instead of compiling its own copy,
 // so library items the binary does not call are not dead code here and new
 // library modules need no declaration in this file.
-mod maintenance;
 mod tls;
 
 use mentedb_server::{
-    auth, cluster, databases, extraction_queue, grpc, metrics, rate_limit, routes, state,
+    auth, cluster, databases, extraction_queue, grpc, maintenance, metrics, rate_limit, routes,
+    state,
 };
 
 use std::env;
