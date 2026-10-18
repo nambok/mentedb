@@ -28,7 +28,7 @@ The system detects knowledge gaps. When you mention something it has no informat
 Context is ordered using a U curve that respects how transformers actually attend to token sequences. Critical information goes at the beginning and end of context (high attention zones). Supporting information fills the middle. Five attention zones with different placement strategies.
 
 ### Delta Serving
-The system tracks what the agent already knows. On subsequent turns it only sends what changed. 90% reduction in memory retrieval tokens over multi turn conversations.
+The system tracks what the agent already knows. On subsequent turns it only sends what changed. In the bundled 20 turn benchmarks this cuts memory retrieval tokens by 80 to 91 percent.
 
 ### Cognitive Memory Tiers
 Six memory types (Episodic, Semantic, Procedural, AntiPattern, Reasoning, Correction) and five cognitive tiers (Working, Episodic, Semantic, Procedural, Archival) that mirror human memory architecture.
@@ -37,32 +37,32 @@ Six memory types (Episodic, Semantic, Procedural, AntiPattern, Reasoning, Correc
 CSR/CSC graph with eight edge types, BFS/DFS traversal, subgraph extraction, shortest path, and transitive contradiction and cycle detection.
 
 ### Custom Storage Engine
-Built from scratch in Rust. Write ahead log with LZ4 compression and CRC32 integrity. CLOCK eviction buffer pool. 32KB aligned pages. Crash recovery via WAL replay. No external database dependencies.
+Built from scratch in Rust. Write ahead log with LZ4 compression and CRC32 integrity. CLOCK eviction buffer pool. 64KB pages. Crash recovery via WAL replay. No external database dependencies.
 
 ### HNSW Vector Index
 From scratch multi layer approximate nearest neighbor search with hybrid scoring that fuses vector similarity, tag filters, temporal recency, and salience.
 
 ### LLM Extraction Pipeline
-Automatic memory extraction from raw conversations. Multi provider support (OpenAI, Anthropic, Ollama). Quality filtering, deduplication, and contradiction checking on extracted memories.
+Automatic memory extraction from raw conversations. Multi provider support (OpenAI, Anthropic, Ollama, AWS Bedrock). Quality filtering, deduplication, and contradiction checking on extracted memories.
 
 ### Consolidation and Decay
-Exponential half life decay with logarithmic access boost. Union Find clustering for memory merging. Archival pipeline for old low salience memories. GDPR compliant deletion planning.
+Exponential half life decay with logarithmic access boost. Union Find clustering for memory merging. Archival pipeline for old low salience memories. Deletion planning for GDPR style forget requests.
 
 ### Trajectory Tracking
 Records decision states across turns. Tracks open questions, completed decisions, and interrupted threads. Predicts what topics might come up next.
+
+### One Call Per Turn
+`process_turn` runs the cognitive pipeline on every interaction: speculative cache, hybrid retrieval, delta aware context, pain warnings, episodic storage with write inference and belief propagation, phantom and contradiction checks, trajectory and cache updates.
+
+### Temporal Validity
+Memories and edges carry `valid_from` and `valid_until` timestamps. A superseded fact is invalidated with a timestamp instead of being deleted, so full history is preserved and "what did the agent believe at time X?" is a query: `recall_similar_at` in Rust, or `AS OF` in MQL.
 
 ---
 
 ## What's In Progress
 
-### Wiring the Hot Path
-The most impactful near term work. The context assembler, HNSW index, and belief propagation all exist as standalone features but need to be fully connected in the primary `process_turn` path so every interaction benefits from the full cognitive pipeline.
-
 ### Persisting Cognitive State
-Pain signals, phantom memories, and trajectory tracking currently live in memory. They need to survive restarts by persisting through the storage engine.
-
-### Temporal Validity
-Adding `valid_at` and `invalid_at` timestamps to memory edges. When a fact is contradicted, the old edge gets invalidated with a timestamp rather than just creating a Supersedes edge. This preserves full temporal history and enables "what did the agent believe at time X?" queries.
+Trajectory transitions, the speculative cache, and entity aliases already persist across restarts. Pain signals and phantom memories still live in memory and need to survive restarts by persisting through the storage engine.
 
 ---
 
