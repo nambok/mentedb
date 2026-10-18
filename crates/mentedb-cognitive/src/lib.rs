@@ -67,4 +67,6 @@ pub use phantom::{EntityRegistry, PhantomConfig, PhantomMemory, PhantomPriority,
 pub use speculative::{CacheEntry, CacheStats, SpeculativeCache};
 pub use stream::{CognitionStream, StreamAlert, StreamConfig, TokenEvent};
 pub use trajectory::{DecisionState, TrajectoryNode, TrajectoryTracker, TransitionMap};
-pub use write_inference::{InferredAction, WriteInferenceConfig, WriteInferenceEngine};
+pub use write_inference::{
+    ContradictionPolicy, InferredAction, WriteInferenceConfig, WriteInferenceEngine,
+};
