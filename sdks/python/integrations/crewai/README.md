@@ -1,6 +1,8 @@
 # mentedb-crewai
 
-MenteDB integration for CrewAI and AutoGen. Gives your multi agent teams persistent, cognitive memory that survives across sessions and tracks reasoning quality over time.
+MenteDB helpers for CrewAI and AutoGen style multi agent setups: a memory class
+that stores and searches team memories in MenteDB, and a tool class that runs
+MQL queries.
 
 ## Installation
 
@@ -8,85 +10,77 @@ MenteDB integration for CrewAI and AutoGen. Gives your multi agent teams persist
 pip install mentedb-crewai
 ```
 
+## Status
+
+`MenteDBCrewMemory` and `MenteDBTool` are plain Python classes. They do not
+subclass CrewAI's memory or `BaseTool` types, so CrewAI rejects them when they
+are passed directly as `Agent(memory=...)` or `Agent(tools=[...])` (checked
+with CrewAI 1.15). Call them from your own code, or wrap them in a CrewAI tool
+yourself, as shown below.
+
+Only one MenteDB instance can open a data directory at a time. Give every
+`MenteDBCrewMemory` and `MenteDBTool` its own `data_dir`, or share one object
+between agents.
+
 ## Components
 
 ### MenteDBCrewMemory
 
-A memory backend for CrewAI agents that stores and retrieves memories through MenteDB. Each agent can have its own memory space, or agents on the same team can share a common space for collaborative recall.
+Stores memories tagged with a `space` name (and the optional `agent_name`) and
+searches within that space.
 
 ```python
-from crewai import Agent, Crew, Task
 from mentedb_crewai import MenteDBCrewMemory
 
-memory = MenteDBCrewMemory(
-    data_dir="./crew-memory",
-    space="research-team",
-)
-
-researcher = Agent(
-    role="Senior Researcher",
-    goal="Find comprehensive information on the topic",
-    memory=memory,
-)
-
-writer = Agent(
-    role="Technical Writer",
-    goal="Write clear documentation from research",
-    memory=MenteDBCrewMemory(
-        data_dir="./crew-memory",
-        space="research-team",
-        agent_name="writer",
-    ),
-)
-
-task = Task(
-    description="Research and document the latest trends in vector databases",
-    agent=researcher,
-)
-
-crew = Crew(agents=[researcher, writer], tasks=[task])
-crew.kickoff()
-```
-
-Memory is stored persistently, so the next time the crew runs it can recall findings from previous sessions.
-
-### MenteDBTool
-
-A tool that lets agents query MenteDB directly using MQL (Mente Query Language). Attach it to any agent so the agent can search and retrieve from the team's knowledge base during task execution.
-
-```python
-from crewai import Agent
-from mentedb_crewai import MenteDBTool
-
-memory_tool = MenteDBTool(data_dir="./crew-memory")
-
-agent = Agent(
-    role="Analyst",
-    goal="Analyze data using historical context",
-    tools=[memory_tool],
-)
-```
-
-The agent can then invoke the tool during its reasoning to recall past decisions, find related context, or check what the team already knows about a topic.
-
-## Usage with AutoGen
-
-MenteDB works with AutoGen agents through the same memory and tool interfaces. Use `MenteDBCrewMemory` to give AutoGen agents persistent memory, or `MenteDBTool` to let them query the knowledge base.
-
-```python
-from mentedb_crewai import MenteDBCrewMemory, MenteDBTool
-
-memory = MenteDBCrewMemory(data_dir="./autogen-memory", space="dev-team")
-tool = MenteDBTool(data_dir="./autogen-memory")
+memory = MenteDBCrewMemory(data_dir="./crew-memory", space="dev-team")
 
 # Store context from agent work
 memory.store("The team decided to use PostgreSQL for the main database.")
 
-# Search for relevant memories
+# Search for relevant memories in this space
 results = memory.search("database decision", k=5)
+# -> [{"content": ..., "score": ..., "id": ..., "memory_type": ...}]
 
-# Get assembled context within a token budget
-context = memory.get_context("Plan the database migration", token_budget=2000)
+# Text of memories matching the task (MQL recall, up to 10 memories)
+context = memory.get_context("Plan the database migration")
+```
+
+Memory is stored on disk, so a later run that opens the same `data_dir` can
+search what earlier runs stored.
+
+### MenteDBTool
+
+Runs an MQL (Mente Query Language) query and returns the assembled text.
+
+```python
+from mentedb_crewai import MenteDBTool
+
+memory_tool = MenteDBTool(data_dir="./tool-memory")
+print(memory_tool.run("RECALL similar(\"database decision\") LIMIT 5"))
+```
+
+### Using it from a CrewAI agent
+
+Wrap the call in a CrewAI tool:
+
+```python
+from crewai import Agent
+from crewai.tools import tool
+from mentedb_crewai import MenteDBCrewMemory
+
+memory = MenteDBCrewMemory(data_dir="./crew-memory", space="research-team")
+
+@tool("Team memory search")
+def team_memory(query: str) -> str:
+    """Search what the team already knows about a topic."""
+    return "\n".join(r["content"] for r in memory.search(query, k=5))
+
+analyst = Agent(
+    role="Analyst",
+    goal="Analyze data using historical context",
+    backstory="Knows the team's past decisions.",
+    tools=[team_memory],
+)
 ```
 
 ## Configuration
@@ -94,8 +88,10 @@ context = memory.get_context("Plan the database migration", token_budget=2000)
 | Parameter | Default | Description |
 |---|---|---|
 | `data_dir` | `./mentedb-data` | Path to the MenteDB data directory |
-| `space` | `default` | Memory space name for agent isolation or sharing |
-| `agent_name` | `None` | Optional agent name for per agent memory scoping |
+| `space` | `default` | Tag used to group and filter memories (MenteDBCrewMemory) |
+| `agent_name` | `None` | Extra tag added to stored memories (MenteDBCrewMemory) |
+
+`get_context` accepts a `token_budget` argument, but it is currently ignored.
 
 ## License
 

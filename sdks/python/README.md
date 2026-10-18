@@ -6,18 +6,21 @@ performance from Python.
 
 ## Installation
 
+### From PyPI
+
+```bash
+pip install mentedb
+```
+
+Prebuilt wheels are published for macOS arm64, Linux x86_64 and aarch64, and
+Windows x86_64 (Python 3.9+).
+
 ### From source (development)
 
 ```bash
 cd sdks/python
 pip install maturin
 maturin develop
-```
-
-### From PyPI (once published)
-
-```bash
-pip install mentedb
 ```
 
 On Debian and Ubuntu systems pip refuses system wide installs (PEP 668). Use a virtual environment or pipx:
@@ -30,7 +33,7 @@ python3 -m venv .venv && .venv/bin/pip install mentedb
 ## Quick start
 
 ```python
-from mentedb import MenteDB
+from mentedb import MenteDB, MemoryType, EdgeType
 
 with MenteDB("./agent-memory") as db:
     # process_turn — the primary API, one call does everything
@@ -43,13 +46,11 @@ with MenteDB("./agent-memory") as db:
     # result.facts_extracted — what was learned this turn
     # result.contradiction_count — conflicting beliefs detected
     # Optional kwargs: project_context, agent_id, session_id (tags stored
-    # turns so injection recall can exclude the requesting session)
+    # turns so injection recall can exclude the requesting session), user_id
+    # (agent_id and user_id must be UUID strings)
 
-    # Sleeptime enrichment runs automatically after process_turn:
-    # - Extracts semantic facts from conversations
-    # - Links and deduplicates entities
-    # - Builds community summaries and user profile
-    # Requires LLM config: MENTEDB_OPENAI_API_KEY or MENTEDB_ANTHROPIC_API_KEY
+    # Enrichment (LLM fact extraction, entity linking, community summaries,
+    # user profile) is a separate call; see "Sleeptime enrichment" below.
 
     # Or use low-level APIs directly:
 
@@ -111,20 +112,29 @@ monitoring, conversation trajectory tracking, and pain signal management.
 
 ## Sleeptime Enrichment
 
-MenteDB automatically enriches memories in the background after `process_turn`. The pipeline extracts semantic facts, links and deduplicates entities, groups them into communities with summaries, and builds a user profile — all feeding back into future `process_turn` context retrieval.
+The embedded SDK does not enrich on its own. `process_turn` marks when
+enrichment is due; check `db.needs_enrichment()` and call
+`db.run_enrichment()` (for example from a background worker). The pipeline
+extracts semantic facts, links and deduplicates entities, groups them into
+communities with summaries, and builds a user profile, all of which feed later
+`process_turn` context retrieval.
 
-Requires an LLM provider: set `MENTEDB_OPENAI_API_KEY` or `MENTEDB_ANTHROPIC_API_KEY`. Without one, the engine works normally — enrichment just doesn't run.
+Requires an LLM provider: set `MENTEDB_LLM_PROVIDER` (`openai`, `anthropic` or
+`ollama`) and `MENTEDB_LLM_API_KEY`. Without them the engine works normally
+and `run_enrichment` raises an error.
 
 ## Cognitive subsystems
 
 ```python
+import uuid
 from mentedb._mentedb_python import CognitionStream, TrajectoryTracker, PainRegistry
 
-# Stream monitoring
+# Stream monitoring (fact ids must be UUID strings)
+fact_id = str(uuid.uuid4())
 stream = CognitionStream(buffer_size=500)
 stream.feed_token("The")
 stream.feed_token(" sky")
-alerts = stream.check_alerts([("some-uuid", "the sky is blue")])
+alerts = stream.check_alerts([(fact_id, "the sky is blue")])
 
 # Trajectory tracking
 tracker = TrajectoryTracker(max_turns=50)
@@ -133,7 +143,7 @@ context = tracker.get_resume_context()
 
 # Pain registry
 pain = PainRegistry(max_warnings=3)
-pain.record_pain("some-uuid", 0.8, ["timeout", "deploy"], "deploy timed out")
+pain.record_pain(str(uuid.uuid4()), 0.8, ["timeout", "deploy"], "deploy timed out")
 warnings = pain.check_triggers(["deploy"])
 ```
 
@@ -143,13 +153,19 @@ warnings = pain.check_triggers(["deploy"])
 
 | Method | Description |
 |--------|-------------|
-| `process_turn(user_message, assistant_response, turn_id, project_context, agent_id)` | **Primary API.** Process a conversation turn through the full cognitive pipeline |
-| `store(content, memory_type, embedding, agent_id, tags)` | Store a memory, returns its UUID |
+| `process_turn(user_message, assistant_response, turn_id, project_context, agent_id, session_id, user_id)` | **Primary API.** Process a conversation turn through the full cognitive pipeline |
+| `store(content, memory_type, embedding, agent_id, tags, created_at)` | Store a memory, returns its UUID |
 | `recall(query)` | Recall memories using MQL |
 | `search(embedding, k)` | Vector similarity search |
-| `relate(source, target, edge_type, weight)` | Add a relationship |
+| `search_text(query, k, tags, after, before)` | Similarity search with the configured embedding provider |
+| `get_memory(memory_id)` | Fetch one memory as a dict |
+| `relate(source, target, edge_type, weight, valid_from, valid_until)` | Add a relationship |
 | `forget(memory_id)` | Remove a memory |
+| `needs_enrichment()` / `run_enrichment(provider, current_turn)` | Check for and run sleeptime enrichment (needs an LLM) |
 | `close()` | Flush and close the database |
+
+Only one `MenteDB` instance can hold a data directory at a time; opening the
+same directory again raises a "locked by another process" error.
 
 ### Types
 

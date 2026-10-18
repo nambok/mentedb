@@ -5,8 +5,8 @@ The mind database for AI agents. TypeScript/Node.js SDK powered by napi-rs.
 MenteDB is a purpose built database engine for AI agent memory. It provides
 vector similarity search, a typed knowledge graph, token budget aware context
 assembly, and cognitive features such as contradiction detection and trajectory
-tracking. This package delivers the full Rust engine as a native Node.js addon
-with zero runtime dependencies.
+tracking. This package delivers the Rust engine as a native Node.js addon with
+no runtime npm dependencies.
 
 ## Install
 
@@ -14,9 +14,10 @@ with zero runtime dependencies.
 npm install mentedb
 ```
 
-The package ships a prebuilt native binary. If no prebuild is available for your
-platform, `npm run build` compiles from source (requires Rust and
-[napi-rs](https://napi.rs)).
+The package ships prebuilt native binaries for macOS (arm64, x64), Linux
+(x64, arm64, glibc) and Windows (x64). On any other platform, clone the
+repository and build the addon from `sdks/typescript` (see "Building from
+source"; requires Rust and [napi-rs](https://napi.rs)).
 
 ## Quick start
 
@@ -25,8 +26,8 @@ import { MenteDB, MemoryType, EdgeType } from 'mentedb';
 
 const db = new MenteDB('./my-agent-memory');
 
-// Primary API — one call does everything
-const result = await db.processTurn(
+// Primary API — one call does everything (synchronous)
+const result = db.processTurn(
   "I prefer using TypeScript for backend services",
   "Noted! TypeScript is great for type-safe backends.",
   0 // turn_id
@@ -35,9 +36,7 @@ const result = await db.processTurn(
 );
 
 console.log(result.context);     // relevant memories
-console.log(result.stored);      // number of new memories
-// Enrichment runs automatically — builds semantic facts,
-// entity graphs, and user profile over time
+console.log(result.storedIds);   // ids of the memories stored this turn
 
 // Low-level APIs:
 
@@ -69,8 +68,9 @@ db.close();
 
 ### CognitionStream
 
-Monitor an LLM token stream for contradictions and reinforcements against
-stored facts.
+Buffer an LLM token stream. The Node.js binding exposes only feeding and
+draining the buffer; the alert checks against stored facts are available in
+the Python SDK.
 
 ```typescript
 import { CognitionStream } from 'mentedb';
@@ -101,11 +101,13 @@ const resume = tracker.getResumeContext();
 const next = tracker.predictNextTopics();
 ```
 
-## Sleeptime Enrichment
+## LLM features
 
-MenteDB automatically enriches memories in the background after `processTurn`. The pipeline extracts semantic facts, links and deduplicates entities, groups them into communities with summaries, and builds a user profile — all feeding back into future `processTurn` context retrieval.
-
-Requires an LLM provider: set `MENTEDB_OPENAI_API_KEY` or `MENTEDB_ANTHROPIC_API_KEY`. Without one, the engine works normally — enrichment just doesn't run.
+`processTurn` stores and recalls without an LLM. Sleeptime
+enrichment (LLM fact extraction, entity linking, community summaries, user
+profile) is not exposed by the Node.js package; use the Python SDK or the
+server for it. `ingest` calls an LLM and needs `MENTEDB_LLM_PROVIDER`
+(`openai`, `anthropic` or `ollama`) and `MENTEDB_LLM_API_KEY`.
 
 ## API reference
 
@@ -118,7 +120,7 @@ Requires an LLM provider: set `MENTEDB_OPENAI_API_KEY` or `MENTEDB_ANTHROPIC_API
 | `recall(query)` | Recall memories via an MQL query. Returns `RecallResult`. |
 | `search(embedding, k)` | Vector similarity search. Returns `SearchResult[]`. |
 | `relate(source, target, edgeType?, weight?)` | Create a typed edge between two memories. |
-| `processTurn(userMessage, assistantResponse?, turnId?, projectContext?, agentId?)` | **Primary API.** Process a conversation turn through the full cognitive pipeline. Returns context, actions, sentiment, predictions, and more. |
+| `processTurn(userMessage, assistantResponse?, turnId?, projectContext?, agentId?, sessionId?)` | **Primary API.** Process a conversation turn through the full cognitive pipeline. Returns `ProcessTurnResult` (context, stored ids, actions, sentiment, predictions, and more). |
 | `forget(memoryId)` | Remove a memory by ID. |
 | `ingest(conversation, provider?, agentId?)` | **Deprecated** — use `processTurn` instead. Extract and store memories from a conversation via LLM. |
 | `close()` | Flush and close the database. |
@@ -175,9 +177,10 @@ interface SearchResult {
 
 ```bash
 cd sdks/typescript
-cargo check          # verify Rust compiles
-npm run build        # build the native addon
-npm test             # run tests
+npm install -g @napi-rs/cli   # the napi CLI is not a devDependency
+cargo check                   # verify Rust compiles
+npm run build                 # build the native addon (napi build --release)
+npx tsc                       # compile the npm/ wrapper
 ```
 
 ## License

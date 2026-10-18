@@ -8,9 +8,12 @@ yourself and open an issue.
 
 - **Ingest cost and speed**: on real LongMemEval-S conversations, MenteDB
   ingested the same histories for roughly **7x fewer tokens, ~6x lower dollar
-  cost, and ~1.4x faster** than mem0. This is the robust result and it is
-  structural (mem0 issues multiple LLM calls per `add`; MenteDB does one
-  extract-plus-contradiction call per turn).
+  cost, and ~1.4x faster** than mem0. The gap is structural (mem0 issues
+  several LLM calls per `add`; the MenteDB path in this harness makes one
+  extraction call per turn, which also names any fact it contradicts).
+  The output of that run is not committed to this repository, so these
+  figures cannot be checked against a stored log; rerun the harness to
+  reproduce them.
 - **Accuracy**: **comparable**. On the sample below MenteDB answered 3/5 and
   mem0 2/5. That is a one-question difference on five questions, i.e. within
   noise. We do **not** claim an accuracy advantage.
@@ -19,20 +22,25 @@ This page is about measured cost and efficiency on identical inputs, nothing mor
 
 ## Fairness controls
 
-- **Same questions**: real items from LongMemEval-S, from the long categories
-  (multi-session, temporal-reasoning, knowledge-update), full ~200-exchange
-  histories, no trimming.
+- **Same questions**: real items from LongMemEval-S, from the multi-session,
+  temporal-reasoning and knowledge-update categories, full histories, no
+  trimming. To fit the budget the harness takes the questions with the
+  shortest histories first, so with the default of 5 it runs the five shortest
+  in those categories (197 to 209 user/assistant exchanges each; the median
+  LongMemEval-S history is 243). They are not a random sample.
 - **Same extraction model** for both systems: AWS Bedrock Claude Haiku 4.5.
 - **Same embedder** for both: `fastembed` BAAI/bge-small-en-v1.5 (local).
 - **Same judge**: Claude Sonnet 4.5 answers from each system's retrieved context
   and grades strictly (a wrong value, a hedge, or an evasive non-answer is
-  marked incorrect). The judge and the answerer are validated: on a control set
-  the judge fails stale/hedged/wrong/confabulated answers, and the answerer says
-  "I don't know" on empty context and repeats the stale fact when given only
-  that, i.e. it follows retrieval rather than its own knowledge.
+  marked incorrect). The answerer is told to use only the retrieved memories
+  and to reply "I don't know" otherwise. The control checks on the judge and
+  answerer were run by hand and are not part of this repository.
 - **Exact token accounting**: every Bedrock call each system makes is
   intercepted (Converse `usage` and the InvokeModel response body) and summed.
   MenteDB `store` + `relate` make no LLM call, so its write path is deterministic.
+- **What the MenteDB side is**: the MenteDB path is written in the harness
+  (`ingest_mentedb`): one Haiku extraction call per turn, then `store` and a
+  `supersedes` edge for any contradiction. It is not `process_turn`.
 
 ### The honest caveats
 
