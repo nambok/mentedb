@@ -19,17 +19,19 @@ each turn:
   3. process_turn(user_message, reply)  ->  returns `context` for next turn
 ```
 
-`process_turn` embeds the user message, runs hybrid recall (vector + keyword +
-graph) over everything stored so far, saves the new turn, and returns the
-relevant memories as `context`. On the first turn `context` is empty because
+`process_turn` embeds the user message, runs hybrid recall (vector + keyword)
+over everything stored so far, saves the new turn, and returns the relevant
+memories as `context`. On the first turn `context` is empty because
 nothing has been learned yet. By turn two it carries the facts, preferences, and
 corrections from earlier in the conversation, and across sessions.
 
-Fact extraction and contradiction detection need an LLM. On **cloud** that is
-wired up for you. When **self-hosting** you set `MENTEDB_LLM_PROVIDER` and
-`MENTEDB_LLM_API_KEY`; without them you still get storage and recall, just no
-automatic extraction. There is no `configure_llm()` call, it is environment or
-platform config.
+The embedded `process_turn` needs no LLM: it extracts simple facts with rules
+and flags contradictions by embedding similarity. LLM extraction (pulling
+preferences and corrections out of a conversation as separate memories) is a
+layer on top. On **cloud** that is wired up for you. When **self-hosting** you
+set `MENTEDB_LLM_PROVIDER` and `MENTEDB_LLM_API_KEY` and call `ingest` (SDK
+`db.ingest(conversation)`, or `POST /v1/ingest` on the server). There is no
+`configure_llm()` call, it is environment or platform config.
 
 ## Which example do I want?
 
@@ -48,8 +50,10 @@ call the server's REST API, shown [at the end](#self-hosted--any-language).
 
 ## Cloud + Python
 
-No SDK. Get a key at [app.mentedb.com](https://app.mentedb.com), then call the
-REST endpoint with any HTTP client.
+No SDK needed. Get a key at [app.mentedb.com](https://app.mentedb.com), then call
+the REST endpoint with any HTTP client. (If you already `pip install mentedb`, it
+also ships `MenteDBClient(api_key=...)`, a standard library wrapper over the same
+endpoint with the same `process_turn` verb as the embedded engine.)
 
 ```bash
 export MENTEDB_API_KEY=mdb_your_key_here
@@ -135,7 +139,7 @@ The engine runs in your process. Data lives on local disk. Install the SDK:
 
 ```bash
 pip install mentedb
-# for automatic fact extraction, point it at an LLM:
+# optional, for LLM extraction via db.ingest(...):
 export MENTEDB_LLM_PROVIDER=anthropic      # openai | anthropic | ollama
 export MENTEDB_LLM_API_KEY=sk-ant-...
 ```
@@ -160,7 +164,7 @@ result = db.process_turn(
 for memory in result.context:
     print(memory.content)
 
-# result.facts_extracted     -> facts learned this turn (needs an LLM)
+# result.facts_extracted     -> facts learned this turn (rule based)
 # result.contradiction_count -> conflicts with existing beliefs
 db.close()
 ```
@@ -184,7 +188,7 @@ Same embedded engine, native Node binding. Install the SDK:
 
 ```bash
 npm install mentedb
-# for automatic fact extraction, point it at an LLM:
+# optional, for LLM extraction via db.ingest(...):
 export MENTEDB_LLM_PROVIDER=anthropic      # openai | anthropic | ollama
 export MENTEDB_LLM_API_KEY=sk-ant-...
 ```
@@ -201,12 +205,12 @@ db.processTurn("I switched from Postgres to SQLite for side projects", "Noted.",
 const result = db.processTurn("what database am I using for side projects?", undefined, 1);
 for (const memory of result.context) console.log(memory.content);
 
-// result.factsExtracted      -> facts learned this turn (needs an LLM)
+// result.factsExtracted      -> facts learned this turn (rule based)
 // result.contradictionCount  -> conflicts with existing beliefs
 db.close();
 ```
 
-`processTurn(userMessage, assistantResponse?, turnId?, projectContext?, agentId?, sessionId?)`
+`processTurn(userMessage, assistantResponse?, turnId?, projectContext?, agentId?, sessionId?, userId?)`
 is synchronous and returns the result object directly. Agent loop:
 
 ```javascript
@@ -231,25 +235,48 @@ cargo add mentedb
 ```
 
 ```rust
-use mentedb::{MenteDb, process_turn::ProcessTurnInput};
-use mentedb_context::DeltaTracker;
+use std::path::Path;
 
-let db = MenteDb::open("./agent-memory")?;
-let mut delta = DeltaTracker::default();
+use mentedb::MenteDb;
+use mentedb::context::DeltaTracker;
+use mentedb::process_turn::ProcessTurnInput;
 
-let result = db.process_turn(&ProcessTurnInput {
-    user_message: "I switched from Postgres to SQLite for side projects".into(),
-    assistant_response: Some("Noted.".into()),
-    turn_id: 0,
-    project_context: None,
-    agent_id: None,
-    session_id: None,
-}, &mut delta)?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = MenteDb::open(Path::new("./agent-memory"))?;
+    let mut delta = DeltaTracker::default();
 
-for memory in &result.context {
-    println!("{}", memory.content());
+    // Turn 0: tell it something.
+    db.process_turn(&ProcessTurnInput {
+        user_message: "I switched from Postgres to SQLite for side projects".into(),
+        assistant_response: Some("Noted.".into()),
+        turn_id: 0,
+        project_context: None,
+        agent_id: None,
+        user_id: None,
+        session_id: None,
+    }, &mut delta)?;
+
+    // Turn 1: it remembers.
+    let result = db.process_turn(&ProcessTurnInput {
+        user_message: "what database am I using for side projects?".into(),
+        assistant_response: None,
+        turn_id: 1,
+        project_context: None,
+        agent_id: None,
+        user_id: None,
+        session_id: None,
+    }, &mut delta)?;
+
+    for scored in &result.context {
+        println!("{}", scored.memory.content);
+    }
+    db.close()?;
+    Ok(())
 }
 ```
+
+`result.context` is a list of scored memories: `scored.memory` is the stored
+`MemoryNode` and `scored.score` its relevance.
 
 ---
 
@@ -267,10 +294,10 @@ curl -X POST https://api.mentedb.com/v1/process_turn \
         "turn_id":0}'
 ```
 
-The response is the turn data directly as JSON:
+The response is the turn data directly as JSON, for example:
 
 ```json
-{ "context": [...], "contradictions": 0 }
+{ "ok": true, "context": [{ "id": "...", "content": "..." }], "contradictions": 0 }
 ```
 
 ## Self-hosted + any language
@@ -283,7 +310,7 @@ mentedb-server --data-dir ./data          # REST on :6677
 ```
 
 ```bash
-curl -X POST http://localhost:6677/v1/ingest \
+curl -X POST http://localhost:6677/v1/process_turn \
   -H "Content-Type: application/json" \
   -d '{"user_message":"I switched from Postgres to SQLite","assistant_response":"Noted.","turn_id":0}'
 ```
@@ -299,14 +326,18 @@ field you use most is `context`. The rest is signal you can act on or ignore.
 | Field | What it is |
 |-------|------------|
 | `context` | Memories relevant to this turn, attention-ordered. Prepend to your next prompt. |
-| `facts_extracted` | Facts learned this turn. Zero without an LLM configured. |
+| `facts_extracted` | Simple facts pulled from this turn by rules ("X uses Y", "X prefers Y"). |
 | `contradiction_count` | New information that conflicts with an existing belief. |
 | `pain_warnings` | Things that went wrong in similar past contexts. |
 | `stored_ids` | Memory IDs written this turn. |
 | `predicted_topics` | Where the conversation is likely heading (from trajectory analysis). |
 
-Node returns these in camelCase (`factsExtracted`, `contradictionCount`); Python
-and the REST payload use snake_case.
+These are the embedded SDK names (Python and Rust). Node returns them in
+camelCase (`factsExtracted`, `contradictionCount`). The REST payloads use
+snake_case but differ slightly: both the self-hosted server and the cloud report
+the conflict count as `contradictions`; the self-hosted server returns
+`pain_warnings` as a count, the cloud as a list; and the cloud reports what it
+stored as `stored` / `memories_stored` rather than `facts_extracted`.
 
 ## Next steps
 
