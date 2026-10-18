@@ -320,16 +320,29 @@ pub async fn auth_middleware(
 
     // Allow health, token, metrics, and peer-to-peer gossip endpoints without auth.
     let path = request.uri().path();
-    // Admin endpoints are gated by the admin key inside the handler, not the JWT,
-    // so the bundled console (which sends x-api-key) can reach them.
     if path == "/v1/health"
         || path == "/v1/ready"
         || path == "/v1/auth/token"
         || path == "/metrics"
         || path == "/console"
-        || path.starts_with("/v1/admin")
         || path == crate::cluster::GOSSIP_PATH
     {
+        return next.run(request).await;
+    }
+    // Admin endpoints are gated by the admin key or an admin token inside the
+    // handler, so the bundled console (which sends x-api-key) can reach them.
+    // A valid bearer token is still decoded so admin tokens work too; an
+    // invalid or absent one is left for the handler to refuse.
+    if is_admin_path(path) {
+        if let Some(agent) = request
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .and_then(|t| verifier.authenticate(t).ok())
+        {
+            request.extensions_mut().insert(agent);
+        }
         return next.run(request).await;
     }
 
@@ -356,5 +369,54 @@ pub async fn auth_middleware(
             next.run(request).await
         }
         Err(e) => e.into_response(),
+    }
+}
+
+/// Paths whose handlers check the admin key themselves: `/v1/admin/...`,
+/// `/v1/databases...`, and per database admin, backup and backups routes.
+fn is_admin_path(path: &str) -> bool {
+    let rest = match path.strip_prefix("/v1/db/") {
+        Some(r) => match r.split_once('/') {
+            Some((_, rest)) => rest,
+            None => return false,
+        },
+        None => match path.strip_prefix("/v1/") {
+            Some(r) => r,
+            None => return false,
+        },
+    };
+    rest == "databases"
+        || rest.starts_with("databases/")
+        || rest == "admin"
+        || rest.starts_with("admin/")
+        || rest == "backup"
+        || rest == "backups"
+}
+
+#[cfg(test)]
+mod admin_path_tests {
+    use super::is_admin_path;
+
+    #[test]
+    fn admin_paths_are_recognized_on_every_mount() {
+        for p in [
+            "/v1/admin/mql",
+            "/v1/db/alice/admin/memories",
+            "/v1/databases",
+            "/v1/databases/alice",
+            "/v1/backup",
+            "/v1/db/alice/backups",
+        ] {
+            assert!(is_admin_path(p), "{p}");
+        }
+        for p in [
+            "/v1/memories",
+            "/v1/db/alice/memories",
+            "/v1/db/admin",
+            "/v1/db/admin/memories",
+            "/v1/search",
+        ] {
+            assert!(!is_admin_path(p), "{p}");
+        }
     }
 }
