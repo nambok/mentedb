@@ -3,7 +3,19 @@ name: Publish SDKs
 on:
   release:
     types: [published]
+  # A manual run rebuilds an existing release: it must name the tag, and every
+  # artifact is built from that tag's commit, never from the tip of main.
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and publish (for example v0.38.0)
+        required: true
+        type: string
+      latest:
+        description: Also move the Docker latest tag to this build
+        required: false
+        default: true
+        type: boolean
 
 permissions: {}
 
@@ -11,14 +23,63 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # Pin every job to one commit: the release tag resolved once, here. A tag
+  # moved during the run cannot split the artifacts across two commits, and
+  # the tag's version must match the workspace version at that commit, so
+  # the published packages and image always match the crates.io release.
+  resolve-release:
+    name: Resolve release commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      short_sha: ${{ steps.resolve.outputs.short_sha }}
+      version: ${{ steps.resolve.outputs.version }}
+    env:
+      TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Require a release tag
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "::error::No release tag: a manual run must pass the tag input"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 1
+      - name: Resolve commit and version
+        id: resolve
+        run: |
+          SHA=$(git rev-parse HEAD)
+          VERSION="${TAG#mentedb-}"
+          VERSION="${VERSION#v}"
+          WORKSPACE_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [ "$VERSION" != "$WORKSPACE_VERSION" ]; then
+            echo "::error::Tag $TAG is version $VERSION but Cargo.toml at $SHA is $WORKSPACE_VERSION"
+            exit 1
+          fi
+          {
+            echo "tag=$TAG"
+            echo "sha=$SHA"
+            echo "short_sha=${SHA:0:7}"
+            echo "version=$VERSION"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building $TAG ($VERSION) from $SHA"
+
   publish-python:
     name: Build Python wheels
+    needs: resolve-release
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-release.outputs.sha }}
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -70,6 +131,7 @@ jobs:
 
   build-npm:
     name: Build npm native (${{ matrix.target }})
+    needs: resolve-release
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -91,6 +153,8 @@ jobs:
             artifact: mentedb.win32-x64-msvc.node
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-release.outputs.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -128,13 +192,15 @@ jobs:
 
   publish-npm:
     name: Publish to npm
-    needs: build-npm
+    needs: [resolve-release, build-npm]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-release.outputs.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -185,12 +251,14 @@ jobs:
 
   publish-integrations:
     name: Publish LangChain & CrewAI
-    needs: upload-pypi
+    needs: [resolve-release, upload-pypi]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-release.outputs.sha }}
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -227,6 +295,7 @@ jobs:
   # Silicon (arm64). The Dockerfile is architecture-agnostic and unchanged.
   publish-docker:
     name: Build Docker image (${{ matrix.platform }})
+    needs: resolve-release
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -241,6 +310,8 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-release.outputs.sha }}
       - name: Prepare platform slug
         run: echo "PLATFORM_SLUG=$(echo '${{ matrix.platform }}' | tr '/' '-')" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@v4
@@ -256,6 +327,10 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=ghcr.io/nambok/mentedb,push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.revision=${{ needs.resolve-release.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.resolve-release.outputs.version }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
       - name: Export digest
         run: |
           mkdir -p /tmp/digests
@@ -273,23 +348,11 @@ jobs:
   publish-docker-manifest:
     name: Publish multi-arch Docker manifest
     runs-on: ubuntu-latest
-    needs: [publish-docker]
+    needs: [resolve-release, publish-docker]
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Extract version
-        id: version
-        run: |
-          TAG="${{ github.event.release.tag_name }}"
-          if [ -n "$TAG" ]; then
-            VERSION="${TAG#mentedb-v}"
-          else
-            VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "mentedb") | .version')
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
@@ -302,12 +365,28 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Tags: the version, the short commit sha, and latest (on a release, or
+      # on a manual run that asks for it).
       - name: Create and push manifest
         working-directory: /tmp/digests
+        env:
+          VERSION: ${{ needs.resolve-release.outputs.version }}
+          SHA: ${{ needs.resolve-release.outputs.sha }}
+          SHORT_SHA: ${{ needs.resolve-release.outputs.short_sha }}
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}
+          MOVE_LATEST: ${{ github.event_name == 'release' || inputs.latest }}
         run: |
+          TAGS=(-t "ghcr.io/nambok/mentedb:${VERSION}" -t "ghcr.io/nambok/mentedb:sha-${SHORT_SHA}")
+          if [ "$MOVE_LATEST" = "true" ]; then
+            TAGS+=(-t ghcr.io/nambok/mentedb:latest)
+          fi
           docker buildx imagetools create \
-            -t ghcr.io/nambok/mentedb:latest \
-            -t "ghcr.io/nambok/mentedb:${{ steps.version.outputs.version }}" \
+            "${TAGS[@]}" \
+            --annotation "index:org.opencontainers.image.revision=${SHA}" \
+            --annotation "index:org.opencontainers.image.version=${VERSION}" \
+            --annotation "index:org.opencontainers.image.source=${SOURCE}" \
             $(printf 'ghcr.io/nambok/mentedb@sha256:%s ' *)
       - name: Inspect manifest
-        run: docker buildx imagetools inspect "ghcr.io/nambok/mentedb:${{ steps.version.outputs.version }}"
+        env:
+          VERSION: ${{ needs.resolve-release.outputs.version }}
+        run: docker buildx imagetools inspect "ghcr.io/nambok/mentedb:${VERSION}"
