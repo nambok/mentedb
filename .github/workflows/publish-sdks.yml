@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to build and publish (for example v0.38.0)
-        required: true
+        description: Release tag to build and publish (for example mentedb-v0.39.0). Empty means the release tag for the Cargo.toml version at the selected ref.
+        required: false
         type: string
       latest:
         description: Also move the Docker latest tag to this build
@@ -38,20 +38,36 @@ jobs:
       short_sha: ${{ steps.resolve.outputs.short_sha }}
       version: ${{ steps.resolve.outputs.version }}
     env:
-      TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+      GIVEN_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
     steps:
-      - name: Require a release tag
-        run: |
-          if [ -z "$TAG" ]; then
-            echo "::error::No release tag: a manual run must pass the tag input"
-            exit 1
-          fi
+      # A run without a tag (a dispatch that does not pass one) publishes the
+      # release for the version at the selected ref, so every caller works
+      # without knowing the tag naming scheme. The tag must already exist.
       - uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 1
+      - name: Pick the release tag
+        id: pick
+        run: |
+          TAG="$GIVEN_TAG"
+          if [ -z "$TAG" ]; then
+            VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+            TAG="mentedb-v$VERSION"
+            echo "No tag given; using $TAG from Cargo.toml at $GITHUB_SHA"
+          fi
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Release tag $TAG does not exist"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ steps.pick.outputs.tag }}
           fetch-depth: 1
       - name: Resolve commit and version
         id: resolve
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
         run: |
           SHA=$(git rev-parse HEAD)
           VERSION="${TAG#mentedb-}"

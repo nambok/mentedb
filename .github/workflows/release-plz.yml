@@ -138,7 +138,7 @@ jobs:
           # GITHUB_TOKEN-created releases don't trigger other workflows,
           # so we dispatch publish-sdks manually.
           echo "🚀 Triggering SDK publish..."
-          gh workflow run publish-sdks.yml
+          gh workflow run publish-sdks.yml -f tag="$TAG"
 
   release-plz-pr:
     name: Release-plz PR
