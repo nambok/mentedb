@@ -35,7 +35,7 @@ pub async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let uptime = state.start_time.elapsed().as_secs();
     Json(json!({
         "status": "ok",
-        "version": "0.1.0",
+        "version": env!("CARGO_PKG_VERSION"),
         "uptime_seconds": uptime,
     }))
 }

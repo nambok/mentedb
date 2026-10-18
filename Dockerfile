@@ -55,7 +55,9 @@ EXPOSE 6677 6678
 # /v1/ready answers once the server can take traffic. When TLS is on
 # (MENTEDB_TLS_CERT_FILE / MENTEDB_TLS_KEY_FILE), override this check with
 # https and --insecure, or point it at a name the certificate covers.
+# Works with and without TLS: plain HTTP first, then HTTPS. -k only skips
+# certificate verification for this loopback probe; clients still verify.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD curl -fsS http://localhost:6677/v1/ready || exit 1
+    CMD curl -fsS http://localhost:6677/v1/ready || curl -fsSk https://localhost:6677/v1/ready || exit 1
 
 CMD ["mentedb-server", "--port", "6677", "--data-dir", "/var/mentedb/data"]

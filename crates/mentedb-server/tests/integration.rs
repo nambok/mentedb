@@ -235,7 +235,7 @@ mod rest_endpoints {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = response_json(resp).await;
         assert_eq!(body["status"], "ok");
-        assert_eq!(body["version"], "0.1.0");
+        assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
         assert!(body["uptime_seconds"].is_number());
     }
 

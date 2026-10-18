@@ -1,0 +1,57 @@
+name: Docker image
+
+# Builds the release image and requires the container to report healthy with
+# TLS off and on, so a broken image or health check fails here instead of
+# after a release. Limited to changes that can affect the image.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - crates/mentedb-server/**
+      - .github/workflows/docker-check.yml
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  image:
+    name: Build and health check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: mentedb:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Healthy without TLS
+        run: |
+          docker run -d --name plain -e MENTEDB_EMBEDDING_PROVIDER=hash mentedb:ci \
+            mentedb-server --port 6677 --data-dir /var/mentedb/data --embedding-provider hash
+          ./.github/scripts/wait-healthy.sh plain
+      - name: Healthy with TLS
+        run: |
+          mkdir -p tls
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+            -keyout tls/key.pem -out tls/cert.pem -days 1 -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost"
+          chmod 644 tls/*
+          docker run -d --name tls -v "$PWD/tls:/tls:ro" \
+            -e MENTEDB_TLS_CERT_FILE=/tls/cert.pem -e MENTEDB_TLS_KEY_FILE=/tls/key.pem mentedb:ci \
+            mentedb-server --port 6677 --data-dir /var/mentedb/data --embedding-provider hash
+          ./.github/scripts/wait-healthy.sh tls
+      - name: Runs as the non-root user
+        run: test "$(docker exec plain id -u)" = "10001"
+      - name: Logs on failure
+        if: failure()
+        run: |
+          docker logs plain || true
+          docker logs tls || true

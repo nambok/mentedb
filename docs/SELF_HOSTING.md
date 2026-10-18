@@ -45,8 +45,7 @@ container is recreated.
 The image has a Docker `HEALTHCHECK` that calls `GET /v1/ready` on port 6677
 every 30 seconds (60 second start period, 3 retries), so `docker ps` and
 orchestrators that read Docker health see when the server can take traffic.
-If you turn on TLS (see [HTTPS](#https)), override the check, for example
-`--health-cmd "curl -fsSk https://localhost:6677/v1/ready || exit 1"`.
+It tries plain HTTP and then HTTPS, so it works with [TLS](#https) on or off.
 
 Release images are tagged with the version (for example `0.38.0`), the short
 commit (`sha-1a2b3c4`) and `latest`, and carry the OCI labels
@@ -238,7 +237,6 @@ docker run -p 6677:6677 -p 6678:6678 \
   -v /etc/mentedb/tls:/tls:ro \
   -e MENTEDB_TLS_CERT_FILE=/tls/fullchain.pem \
   -e MENTEDB_TLS_KEY_FILE=/tls/privkey.pem \
-  --health-cmd "curl -fsSk https://localhost:6677/v1/ready || exit 1" \
   ghcr.io/nambok/mentedb:latest
 ```
 

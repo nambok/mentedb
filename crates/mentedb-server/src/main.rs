@@ -618,7 +618,7 @@ async fn main() -> Result<()> {
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive());
 
-    println!("MenteDB v0.1.0");
+    println!("MenteDB v{}", env!("CARGO_PKG_VERSION"));
     println!("Data directory: {}", data_dir.display());
     println!("REST API on: {scheme}://0.0.0.0:{port}");
     println!(

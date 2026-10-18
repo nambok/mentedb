@@ -734,3 +734,11 @@ async fn storing_a_duplicate_returns_the_memory_that_holds_it() {
         "The deploy pipeline runs on GitHub Actions"
     );
 }
+
+#[tokio::test]
+async fn health_reports_the_crate_version() {
+    let (app, _tmp) = build_app(false);
+    let (status, body) = send(&app, "GET", "/v1/health", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+}
