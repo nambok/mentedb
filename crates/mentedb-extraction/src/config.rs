@@ -35,9 +35,9 @@ impl LlmProvider {
     pub fn default_model(&self) -> &str {
         match self {
             LlmProvider::OpenAI => "gpt-4o-mini",
-            LlmProvider::Anthropic => "claude-haiku-4-5",
+            LlmProvider::Anthropic => "claude-haiku-5-5",
             LlmProvider::Ollama => "llama3",
-            LlmProvider::Bedrock => "us.anthropic.claude-haiku-4-5",
+            LlmProvider::Bedrock => "us.anthropic.claude-haiku-5-5",
             LlmProvider::Custom => "default",
         }
     }
@@ -46,9 +46,9 @@ impl LlmProvider {
     pub fn default_reader_model(&self) -> &str {
         match self {
             LlmProvider::OpenAI => "gpt-4o",
-            LlmProvider::Anthropic => "claude-sonnet-4-20250514",
+            LlmProvider::Anthropic => "claude-sonnet-5-5",
             LlmProvider::Ollama => "llama3",
-            LlmProvider::Bedrock => "us.anthropic.claude-sonnet-4-6",
+            LlmProvider::Bedrock => "us.anthropic.claude-sonnet-5-5",
             LlmProvider::Custom => "default",
         }
     }

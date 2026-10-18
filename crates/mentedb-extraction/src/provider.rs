@@ -394,7 +394,8 @@ impl HttpExtractionProvider {
         let body = serde_json::json!({
             "model": self.config.model,
             "max_tokens": 4096,
-            "temperature": 0,
+            // No temperature: Claude 5.5 models reject it, and the Bedrock
+            // path already omits it.
             "system": system_prompt,
             "messages": [
                 { "role": "user", "content": conversation }
@@ -853,7 +854,7 @@ mod bedrock_tests {
             session_token: None,
         };
         let region = "us-east-1";
-        let model = "us.anthropic.claude-haiku-4-5";
+        let model = "us.anthropic.claude-haiku-5-5";
         let system = "You extract memories.";
         let user = "I switched my database to PostgreSQL.";
         let body = bedrock_body(system, user);
@@ -870,7 +871,7 @@ mod bedrock_tests {
         // URL is the region/model bedrock-runtime InvokeModel path (raw model id).
         assert_eq!(
             signed.url,
-            "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-haiku-4-5/invoke"
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-haiku-5-5/invoke"
         );
 
         // Body is valid Anthropic-Bedrock JSON with system + user message.
@@ -922,7 +923,7 @@ mod bedrock_tests {
         };
         let signed = bedrock_sig::build_signed_request(
             "us-west-2",
-            "us.anthropic.claude-sonnet-4-6",
+            "us.anthropic.claude-sonnet-5-5",
             bedrock_body("sys", "usr"),
             &creds,
             "20150830T123600Z",
@@ -960,11 +961,11 @@ mod bedrock_tests {
         assert_eq!(cfg.provider, LlmProvider::Bedrock);
         assert!(cfg.api_key.is_none());
         assert_eq!(cfg.region.as_deref(), Some("eu-central-1"));
-        assert_eq!(cfg.model, "us.anthropic.claude-haiku-4-5");
+        assert_eq!(cfg.model, "us.anthropic.claude-haiku-5-5");
         assert_eq!(LlmProvider::Bedrock.default_url(), "");
         assert_eq!(
             LlmProvider::Bedrock.default_reader_model(),
-            "us.anthropic.claude-sonnet-4-6"
+            "us.anthropic.claude-sonnet-5-5"
         );
     }
 }

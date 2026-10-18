@@ -43,7 +43,7 @@ fact extraction.
 ```bash
 export MENTEDB_LLM_PROVIDER=anthropic      # openai | anthropic | ollama | none
 export MENTEDB_LLM_API_KEY=sk-ant-...
-export MENTEDB_LLM_MODEL=claude-sonnet-4-6 # optional, provider default otherwise
+export MENTEDB_LLM_MODEL=claude-sonnet-5-5 # optional, provider default otherwise
 mentedb-server --data-dir ./data --auto-extract
 ```
 

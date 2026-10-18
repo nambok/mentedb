@@ -183,7 +183,7 @@ fn extraction_config_defaults() {
 fn extraction_config_anthropic() {
     let config = ExtractionConfig::anthropic("anthropic-key");
     assert_eq!(config.provider, LlmProvider::Anthropic);
-    assert_eq!(config.model, "claude-haiku-4-5");
+    assert_eq!(config.model, "claude-haiku-5-5");
 }
 
 #[test]
