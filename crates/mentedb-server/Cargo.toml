@@ -11,7 +11,7 @@ keywords = ["database", "server", "api", "ai", "agent"]
 categories = ["database-implementations", "web-programming::http-server"]
 
 [dependencies]
-mentedb = { workspace = true }
+mentedb = { workspace = true, features = ["enrichment"] }
 mentedb-core = { workspace = true }
 mentedb-cognitive = { workspace = true }
 mentedb-extraction = { workspace = true }

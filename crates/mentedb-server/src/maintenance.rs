@@ -17,7 +17,7 @@ use mentedb_extraction::{ExtractionConfig, ExtractionLlmJudge, HttpExtractionPro
 use tracing::{info, warn};
 
 /// Minimum cluster size for consolidation.
-const MIN_CLUSTER_SIZE: usize = 2;
+pub(crate) const MIN_CLUSTER_SIZE: usize = 2;
 /// Recent trajectory topics to canonicalize per sweep. The learned topic cache
 /// makes already-labeled topics free, so this only spends LLM calls on new ones.
 const CANONICALIZE_LIMIT: usize = 32;
@@ -25,11 +25,11 @@ const CANONICALIZE_LIMIT: usize = 32;
 /// are skipped, so this only spends calls on unjudged high-similarity pairs.
 const CONFLICT_CHECK_LIMIT: usize = 32;
 /// Cosine similarity threshold for grouping memories to consolidate.
-const SIMILARITY_THRESHOLD: f32 = 0.85;
+pub(crate) const SIMILARITY_THRESHOLD: f32 = 0.85;
 /// Speculative cache entries older than this (24h) are evicted.
 const CACHE_MAX_AGE_US: u64 = 24 * 3600 * 1_000_000;
 /// Cap on deletions per sweep, so a single run can never mass-delete.
-const MAX_FORGETS_PER_SWEEP: usize = 500;
+pub(crate) const MAX_FORGETS_PER_SWEEP: usize = 500;
 
 /// What one maintenance sweep did.
 #[derive(Debug, Default)]
