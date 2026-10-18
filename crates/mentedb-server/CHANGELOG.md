@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.0](https://github.com/nambok/mentedb/compare/mentedb-server-v0.38.0...mentedb-server-v0.39.0) - 2026-10-18
+
+### Added
+
+- per tenant databases, scoped tokens, HTTPS, Bedrock on the task role and the full engine API in the server ([#469](https://github.com/nambok/mentedb/pull/469))
+
+### Fixed
+
+- never reopen a database while its old handle is closing, and report skipped duplicates instead of a missing id ([#470](https://github.com/nambok/mentedb/pull/470))
+
 ## [0.38.0](https://github.com/nambok/mentedb/compare/mentedb-server-v0.37.3...mentedb-server-v0.38.0) - 2026-10-18
 
 ### Fixed
