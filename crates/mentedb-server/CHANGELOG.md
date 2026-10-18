@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.1](https://github.com/nambok/mentedb/compare/mentedb-server-v0.39.0...mentedb-server-v0.39.1) - 2026-10-18
+
+### Fixed
+
+- the image health check works with TLS on, CI builds and health checks the image, and health reports the real version ([#472](https://github.com/nambok/mentedb/pull/472))
+
 ## [0.39.0](https://github.com/nambok/mentedb/compare/mentedb-server-v0.38.0...mentedb-server-v0.39.0) - 2026-10-18
 
 ### Added
