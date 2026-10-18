@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0](https://github.com/nambok/mentedb/compare/mentedb-v0.37.3...mentedb-v0.38.0) - 2026-10-18
+
+### Added
+
+- magnitude-aware hybrid fusion behind a flag ([#425](https://github.com/nambok/mentedb/pull/425))
+
+### Fixed
+
+- take the page map and graph locks in one order and build speculative entries outside the cache lock ([#454](https://github.com/nambok/mentedb/pull/454))
+- write index snapshots atomically and rebuild unreadable ones from storage on open ([#449](https://github.com/nambok/mentedb/pull/449))
+- keep the topic embedding on speculative cache entries and log why topics are dropped ([#448](https://github.com/nambok/mentedb/pull/448))
+- route sharded requests to the lease holder, and never recount dashboard counts on the request path ([#447](https://github.com/nambok/mentedb/pull/447))
+- size the LLM output budget for thinking models and fail loudly when it runs out ([#465](https://github.com/nambok/mentedb/pull/465))
+
+### Other
+
+- rank active mode rules from cached probes and load only the ones kept ([#460](https://github.com/nambok/mentedb/pull/460))
+- guard mode probe loads per memory so a busy account still caches them ([#459](https://github.com/nambok/mentedb/pull/459))
+- cache mode activation probes so injection recall stops loading every trigger memory ([#458](https://github.com/nambok/mentedb/pull/458))
+- log phase timings and memory loads for slow injection recalls ([#457](https://github.com/nambok/mentedb/pull/457))
+- default to Claude Haiku 5.5 and Sonnet 5.5, drop temperature on the Anthropic path ([#461](https://github.com/nambok/mentedb/pull/461))
+
 ## [0.37.3](https://github.com/nambok/mentedb/compare/mentedb-v0.37.2...mentedb-v0.37.3) - 2026-08-04
 
 ### Added

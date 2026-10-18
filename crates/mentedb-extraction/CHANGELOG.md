@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.37.3...mentedb-extraction-v0.38.0) - 2026-10-18
+
+### Fixed
+
+- size the LLM output budget for thinking models and fail loudly when it runs out ([#465](https://github.com/nambok/mentedb/pull/465))
+- take the page map and graph locks in one order and build speculative entries outside the cache lock ([#454](https://github.com/nambok/mentedb/pull/454))
+
+### Other
+
+- default to Claude Haiku 5.5 and Sonnet 5.5, drop temperature on the Anthropic path ([#461](https://github.com/nambok/mentedb/pull/461))
+
 ## [0.32.2](https://github.com/nambok/mentedb/compare/mentedb-extraction-v0.32.1...mentedb-extraction-v0.32.2) - 2026-07-27
 
 ### Fixed

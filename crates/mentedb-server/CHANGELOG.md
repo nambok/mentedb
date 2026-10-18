@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0](https://github.com/nambok/mentedb/compare/mentedb-server-v0.37.3...mentedb-server-v0.38.0) - 2026-10-18
+
+### Fixed
+
+- size the LLM output budget for thinking models and fail loudly when it runs out ([#465](https://github.com/nambok/mentedb/pull/465))
+- route sharded requests to the lease holder, and never recount dashboard counts on the request path ([#447](https://github.com/nambok/mentedb/pull/447))
+
+### Other
+
+- default to Claude Haiku 5.5 and Sonnet 5.5, drop temperature on the Anthropic path ([#461](https://github.com/nambok/mentedb/pull/461))
+
 ## [0.36.1](https://github.com/nambok/mentedb/compare/mentedb-server-v0.36.0...mentedb-server-v0.36.1) - 2026-07-30
 
 ### Other
