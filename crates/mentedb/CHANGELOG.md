@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.2](https://github.com/nambok/mentedb/compare/mentedb-v0.39.1...mentedb-v0.39.2) - 2026-10-19
+
+### Fixed
+
+- find pinned rules through the tag index instead of loading every memory ([#475](https://github.com/nambok/mentedb/pull/475))
+
 ## [0.39.0](https://github.com/nambok/mentedb/compare/mentedb-v0.38.0...mentedb-v0.39.0) - 2026-10-18
 
 ### Added
