@@ -457,6 +457,16 @@ compare the decayed value, computed once per query at a single instant, only
 for memories the query already loads). Pinned memories (a decay exempt tag
 or attribute) keep their stored value. The stored base is internal.
 
+The stored base is not an upper bound on the decayed value: the access bonus
+and the `min_salience` floor both lift it above the base. So `ORDER BY
+salience DESC LIMIT k` (`salience_topk.rs`) caches every input of the decayed
+value per memory (base, created and accessed times, access count, exemption),
+computes each candidate's exact decayed value from the cache, and loads
+candidates from the highest down until the next one is below the k-th result.
+A write drops the memory's cache entry (`note_write`); entries are persisted
+in `salience_bounds.bin`, stamped with page and write stamp like the mode
+probes, and restored on open only when unchanged.
+
 **Archival Pipeline** (`archival.rs`):
 Evaluates memories for archival or deletion:
 

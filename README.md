@@ -804,9 +804,23 @@ CONSOLIDATE WHERE type = episodic AND accessed < "2024-01-01"
   `AS OF`, and any `!=` are checked after a memory is loaded. Combine them
   with a `type`, `tag`, `agent`, or `created` filter to keep the set of
   loaded memories small.
-- `ORDER BY` needs every candidate before it can sort, so it loads every
-  memory that passes the indexed filters. Leave it out when any `LIMIT`
-  matches will do; unordered results come back in storage order.
+- `ORDER BY salience DESC` with a `LIMIT` loads only the memories that can
+  reach the top results. The inputs to each memory's decayed salience (base
+  salience, last access, access count, decay exemption) are cached and
+  persisted with the snapshots, so candidates are visited from the highest
+  current salience down and the scan stops once the next one cannot beat the
+  `LIMIT`th result. `RECALL memories WHERE type = episodic ORDER BY salience
+  DESC LIMIT 5` loads 5 memories once the cache is warm, more only when
+  several tie at the cutoff. The first such query after an upgrade loads
+  every candidate once to fill the cache, and a memory written since the
+  last query loads once again. Results, ties included (broken by storage
+  order), are identical to sorting every candidate. Set
+  `CognitiveConfig::mql_salience_top_k` to false to always sort every
+  candidate.
+- Any other `ORDER BY` (any other field, or `ASC`) needs every candidate
+  before it can sort, so it loads every memory that passes the indexed
+  filters. Leave it out when any `LIMIT` matches will do; unordered results
+  come back in storage order.
 - A `WHERE` with `OR`, `NOT`, or parentheses, or one with no indexed filter,
   visits every memory (still stopping at `LIMIT` when there is no
   `ORDER BY`).

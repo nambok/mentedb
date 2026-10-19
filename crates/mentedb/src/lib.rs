@@ -125,6 +125,10 @@ pub use hosting::{HybridOptions, MemoryPage, MemoryPatch};
 /// (off by default; enabled by `CognitiveConfig::mmr_lambda` below 1.0).
 pub(crate) mod mmr;
 
+/// Top k for `ORDER BY salience DESC LIMIT k` MQL scans without loading
+/// every candidate.
+pub(crate) mod salience_topk;
+
 /// Structured export: fill a JSON schema from memories via an embedder-supplied LLM.
 pub mod export;
 
@@ -492,6 +496,12 @@ pub struct CognitiveConfig {
     /// next flush, never per hit, so a crash before that flush loses only
     /// these access statistics.
     pub refresh_access_on_search: bool,
+    /// Whether `ORDER BY salience DESC` MQL scans take the top k walk
+    /// (candidates visited in descending order of their decayed salience,
+    /// computed from cached decay inputs, stopping once none can enter the
+    /// top k) instead of loading every candidate. Results are identical
+    /// either way. Default on.
+    pub mql_salience_top_k: bool,
 }
 
 impl Default for CognitiveConfig {
@@ -543,6 +553,7 @@ impl Default for CognitiveConfig {
             mql_default_limit: 20,
             decay_exempt_attribute: Some("decay_exempt".to_string()),
             refresh_access_on_search: false,
+            mql_salience_top_k: true,
         }
     }
 }
@@ -701,6 +712,10 @@ pub struct MenteDb {
     /// instead of a storage load per memory (thousands on large accounts).
     /// Filled on first use, dropped for a memory whenever it is written.
     mode_probes: RwLock<HashMap<MemoryId, crate::injection::ProbeSlot>>,
+    /// Per memory decay inputs (base salience, timestamps, access count,
+    /// exemption) that the `ORDER BY salience DESC` top k walk orders by.
+    /// Filled when a walk loads a memory, dropped whenever it is written.
+    salience_bounds: RwLock<HashMap<MemoryId, crate::salience_topk::BoundSlot>>,
     /// Hot flushes since the last snapshot write; see flush_snapshot_interval.
     flushes_since_snapshot: std::sync::atomic::AtomicU32,
     /// Lifetime count of store operations (metrics).
@@ -880,6 +895,7 @@ impl MenteDb {
         // was not written since (same page, same write stamp), so the first
         // injection recall after open does not load every mode rule.
         let mode_probes = Self::load_mode_probes(path, &mapped);
+        let salience_bounds = Self::load_salience_bounds(path, &mapped, &cognitive_config);
 
         // Every stored memory must be a graph node, even when the graph
         // snapshot/log is missing or behind storage (e.g. after a crash);
@@ -1002,6 +1018,7 @@ impl MenteDb {
             scope_recount: parking_lot::Mutex::new(()),
             page_map: RwLock::new(page_map),
             mode_probes: RwLock::new(mode_probes),
+            salience_bounds: RwLock::new(salience_bounds),
             flushes_since_snapshot: std::sync::atomic::AtomicU32::new(0),
             stores: std::sync::atomic::AtomicU64::new(0),
             memory_loads: std::sync::atomic::AtomicU64::new(0),
@@ -1159,6 +1176,9 @@ impl MenteDb {
         // Removing the slot also cancels a load in flight for this memory,
         // so a copy read before this write is never cached.
         self.mode_probes.write().remove(&id);
+        // Same contract for the cached decay inputs: a pending load is
+        // cancelled and a stale entry is never kept.
+        self.salience_bounds.write().remove(&id);
     }
 
     /// Stores a memory node into the database.
@@ -3187,16 +3207,32 @@ impl MenteDb {
 
     /// Salience decayed to `at`, or the stored salience for a pinned memory.
     fn decayed_salience_at(&self, memory: &MemoryNode, at: u64) -> f32 {
-        if self.is_decay_exempt(memory) {
-            return memory.salience;
-        }
-        self.decay.compute_decay(
+        self.decayed_salience_of(
+            self.is_decay_exempt(memory),
             memory.salience,
             memory.created_at,
             memory.accessed_at,
             memory.access_count,
             at,
         )
+    }
+
+    /// [`Self::decayed_salience_at`] from the fields it reads, so a cache of
+    /// those fields yields the identical value without loading the memory.
+    pub(crate) fn decayed_salience_of(
+        &self,
+        exempt: bool,
+        salience: f32,
+        created_at: u64,
+        accessed_at: u64,
+        access_count: u32,
+        at: u64,
+    ) -> f32 {
+        if exempt {
+            return salience;
+        }
+        self.decay
+            .compute_decay(salience, created_at, accessed_at, access_count, at)
     }
 
     /// Compute the decayed salience for a single memory at the current time.
@@ -3538,6 +3574,10 @@ impl MenteDb {
         if let Err(e) = self.save_mode_probes() {
             warn!(error = %e, "mode probe snapshot write failed");
         }
+        // Derived cache: a failure only costs loads after the next open.
+        if let Err(e) = self.save_salience_bounds() {
+            warn!(error = %e, "salience bound snapshot write failed");
+        }
 
         // Persist the dashboard scope counts so a cold reopen loads them in O(1)
         // instead of recounting every memory. Only once they have been grounded;
@@ -3660,6 +3700,29 @@ impl MenteDb {
                 order_by,
             } => {
                 let k = limit.unwrap_or(self.cognitive_config.mql_default_limit);
+                // ORDER BY salience DESC: walk candidates from the highest
+                // decayed salience (computed from cached inputs) and stop once
+                // none can enter the top k, instead of loading every
+                // candidate. Same results.
+                if tags.is_empty()
+                    && let Some(ob) = order_by
+                    && self.salience_top_k_applies(ob)
+                {
+                    let candidates = if condition.is_none() {
+                        self.indexed_candidates(filters)
+                    } else {
+                        None
+                    };
+                    if let Some(top) = self.salience_top_k(
+                        candidates.as_ref(),
+                        filters,
+                        condition.as_ref(),
+                        k,
+                        now,
+                    ) {
+                        return Ok(top);
+                    }
+                }
                 let mut scored = if tags.is_empty() {
                     // No tag constraint: a bare RECALL, or a metadata-only filter
                     // like `WHERE type = semantic`. Narrow by the browse index
@@ -3716,6 +3779,12 @@ impl MenteDb {
                     None => in_range,
                 };
                 // Every filter, the range ones included, is re-checked on load.
+                if let Some(ob) = order_by
+                    && self.salience_top_k_applies(ob)
+                    && let Some(top) = self.salience_top_k(Some(&candidates), filters, None, k, now)
+                {
+                    return Ok(top);
+                }
                 let stop_at = if order_by.is_none() { Some(k) } else { None };
                 let mut scored = self.load_matching(Some(&candidates), filters, None, stop_at, now);
                 if let Some(ob) = order_by {
@@ -6339,3 +6408,6 @@ mod scan_tests;
 
 #[cfg(test)]
 mod mql_filter_tests;
+
+#[cfg(test)]
+mod salience_topk_tests;
