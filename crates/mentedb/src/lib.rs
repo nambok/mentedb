@@ -1595,7 +1595,7 @@ impl MenteDb {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let plan = Mql::parse(query)?;
 
-        let scored = self.execute_plan(&plan)?;
+        let scored = self.execute_plan(&plan, Self::now_micros())?;
         let config = AssemblyConfig::default();
         let window = ContextAssembler::assemble(scored, vec![], &config);
         Ok(window)
@@ -1608,8 +1608,23 @@ impl MenteDb {
     pub fn query(&self, mql: &str) -> MenteResult<Vec<ScoredMemory>> {
         self.recalls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.query_at(mql, Self::now_micros())
+    }
+
+    /// [`query`](Self::query) evaluated as of `now` (microseconds since the
+    /// epoch): every `salience` comparison and `ORDER BY salience` in the
+    /// query reads the memory's decayed salience at this one instant.
+    pub(crate) fn query_at(&self, mql: &str, now: u64) -> MenteResult<Vec<ScoredMemory>> {
         let plan = Mql::parse(mql)?;
-        self.execute_plan(&plan)
+        self.execute_plan(&plan, now)
+    }
+
+    /// The current time in microseconds since the epoch.
+    fn now_micros() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64
     }
 
     /// Like [`recall`](Self::recall), but runs an optional second pass through a
@@ -1626,7 +1641,7 @@ impl MenteDb {
     ) -> MenteResult<ContextWindow> {
         use crate::reranker::RerankCandidate;
         let plan = Mql::parse(query)?;
-        let mut scored = self.execute_plan(&plan)?;
+        let mut scored = self.execute_plan(&plan, Self::now_micros())?;
 
         let candidates: Vec<RerankCandidate<'_>> = scored
             .iter()
@@ -3562,7 +3577,12 @@ impl MenteDb {
     }
 
     /// Executes a query plan against the indexes and graph, returning scored memories.
-    fn execute_plan(&self, plan: &QueryPlan) -> MenteResult<Vec<ScoredMemory>> {
+    ///
+    /// `now` is the single instant the whole query is evaluated at: salience
+    /// filters, `ORDER BY salience`, and the recall decay blend all read the
+    /// memory's decayed salience as of `now`, so one query never mixes two
+    /// clocks.
+    fn execute_plan(&self, plan: &QueryPlan, now: u64) -> MenteResult<Vec<ScoredMemory>> {
         match plan {
             QueryPlan::VectorSearch {
                 query,
@@ -3597,20 +3617,20 @@ impl MenteDb {
                     query
                 };
                 let hits = self.index.hybrid_search(qvec, None, None, *k);
-                let mut scored = self.load_scored_memories(&hits)?;
+                let mut scored = self.load_scored_memories(&hits, now)?;
                 // The SimilarTo filter is the query itself; apply any others. A
                 // boolean tree (NEAR combined with OR/NOT) takes over the whole
                 // post-filter when present.
                 match condition {
                     Some(cond) => {
-                        scored.retain(|sm| Self::condition_matches(cond, &sm.memory));
+                        scored.retain(|sm| self.condition_matches(cond, &sm.memory, now));
                     }
                     None => {
                         scored.retain(|sm| {
                             filters
                                 .iter()
                                 .filter(|f| f.op != Operator::SimilarTo)
-                                .all(|f| Self::filter_matches(f, &sm.memory))
+                                .all(|f| self.filter_matches(f, &sm.memory, now))
                         });
                     }
                 }
@@ -3628,7 +3648,7 @@ impl MenteDb {
                     self.apply_entity_boost(&mut scored, &qtext);
                 }
                 if let Some(ob) = order_by {
-                    Self::apply_order_by(&mut scored, ob);
+                    self.apply_order_by(&mut scored, ob, now);
                 }
                 Ok(scored)
             }
@@ -3646,29 +3666,31 @@ impl MenteDb {
                     // where the filters allow, and without an ORDER BY stop
                     // loading once k memories match.
                     let stop_at = if order_by.is_none() { Some(k) } else { None };
-                    self.scan_matching(filters, condition.as_ref(), stop_at)
+                    self.scan_matching(filters, condition.as_ref(), stop_at, now)
                 } else {
                     let tag_refs: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
                     // Zero-vector for tag-only search; salience+bitmap still apply.
                     let hits = self.index.hybrid_search(&[], Some(&tag_refs), None, k);
-                    self.load_scored_memories(&hits)?
+                    self.load_scored_memories(&hits, now)?
                 };
                 // Apply the WHERE clause: a boolean tree when present (OR/NOT/
                 // grouping), otherwise the flat AND of metadata filters.
                 match condition {
                     Some(cond) => {
-                        scored.retain(|sm| Self::condition_matches(cond, &sm.memory));
+                        scored.retain(|sm| self.condition_matches(cond, &sm.memory, now));
                     }
                     None => {
                         scored.retain(|sm| {
-                            filters.iter().all(|f| Self::filter_matches(f, &sm.memory))
+                            filters
+                                .iter()
+                                .all(|f| self.filter_matches(f, &sm.memory, now))
                         });
                     }
                 }
                 // ORDER BY sorts before LIMIT so the top-k reflects the requested
                 // order, not relevance.
                 if let Some(ob) = order_by {
-                    Self::apply_order_by(&mut scored, ob);
+                    self.apply_order_by(&mut scored, ob, now);
                 }
                 scored.truncate(k);
                 Ok(scored)
@@ -3695,9 +3717,9 @@ impl MenteDb {
                 };
                 // Every filter, the range ones included, is re-checked on load.
                 let stop_at = if order_by.is_none() { Some(k) } else { None };
-                let mut scored = self.load_matching(Some(&candidates), filters, None, stop_at);
+                let mut scored = self.load_matching(Some(&candidates), filters, None, stop_at, now);
                 if let Some(ob) = order_by {
-                    Self::apply_order_by(&mut scored, ob);
+                    self.apply_order_by(&mut scored, ob, now);
                 }
                 scored.truncate(k);
                 Ok(scored)
@@ -3747,18 +3769,19 @@ impl MenteDb {
         filters: &[Filter],
         condition: Option<&Condition>,
         stop_at: Option<usize>,
+        now: u64,
     ) -> Vec<ScoredMemory> {
         let candidates = if condition.is_none() {
             self.indexed_candidates(filters)
         } else {
             None
         };
-        self.load_matching(candidates.as_ref(), filters, condition, stop_at)
+        self.load_matching(candidates.as_ref(), filters, condition, stop_at, now)
     }
 
     /// Load the memories among `candidates` (every memory when None) that
-    /// satisfy the WHERE clause, in page order, stopping after `stop_at`
-    /// matches when given.
+    /// satisfy the WHERE clause as of `now`, in page order, stopping after
+    /// `stop_at` matches when given.
     ///
     /// Page ids are copied out of the page map before any load, so writers
     /// (which take the page map for writing) never wait on this scan.
@@ -3768,6 +3791,7 @@ impl MenteDb {
         filters: &[Filter],
         condition: Option<&Condition>,
         stop_at: Option<usize>,
+        now: u64,
     ) -> Vec<ScoredMemory> {
         let mut pages: Vec<PageId> = {
             let pm = self.page_map.read();
@@ -3787,8 +3811,8 @@ impl MenteDb {
                 continue;
             };
             let keep = match condition {
-                Some(cond) => Self::condition_matches(cond, &memory),
-                None => filters.iter().all(|f| Self::filter_matches(f, &memory)),
+                Some(cond) => self.condition_matches(cond, &memory, now),
+                None => filters.iter().all(|f| self.filter_matches(f, &memory, now)),
             };
             if keep {
                 out.push(ScoredMemory { memory, score: 1.0 });
@@ -3896,33 +3920,44 @@ impl MenteDb {
     /// the numeric and temporal fields (salience, confidence, created, accessed)
     /// carry a meaningful order; ordering by any other field is a no-op that keeps
     /// the existing (relevance) order.
-    fn apply_order_by(scored: &mut [ScoredMemory], ob: &OrderBy) {
-        fn key(n: &MemoryNode, field: Field) -> f64 {
-            match field {
-                Field::Salience => n.salience as f64,
+    ///
+    /// `salience` orders by the decayed salience as of `now` (the value
+    /// dashboards show as health), not the stored base. Each memory's key is
+    /// computed once, then the sort is stable on those keys.
+    fn apply_order_by(&self, scored: &mut Vec<ScoredMemory>, ob: &OrderBy, now: u64) {
+        let key = |n: &MemoryNode| -> f64 {
+            match ob.field {
+                Field::Salience => self.decayed_salience_at(n, now) as f64,
                 Field::Confidence => n.confidence as f64,
                 Field::Created => n.created_at as f64,
                 Field::Accessed => n.access_count as f64,
                 _ => 0.0,
             }
-        }
-        scored.sort_by(|a, b| {
-            let ord = key(&a.memory, ob.field)
-                .partial_cmp(&key(&b.memory, ob.field))
-                .unwrap_or(std::cmp::Ordering::Equal);
+        };
+        let mut keyed: Vec<(f64, ScoredMemory)> = std::mem::take(scored)
+            .into_iter()
+            .map(|sm| (key(&sm.memory), sm))
+            .collect();
+        keyed.sort_by(|a, b| {
+            let ord = a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal);
             if ob.descending { ord.reverse() } else { ord }
         });
+        scored.extend(keyed.into_iter().map(|(_, sm)| sm));
     }
 
     /// Whether a memory satisfies a boolean WHERE tree (OR/NOT/grouping). Leaves
     /// defer to `filter_matches`, so a leaf that `filter_matches` treats as
     /// permissive stays permissive; `And`/`Or`/`Not` compose those results.
-    fn condition_matches(c: &Condition, node: &MemoryNode) -> bool {
+    fn condition_matches(&self, c: &Condition, node: &MemoryNode, now: u64) -> bool {
         match c {
-            Condition::Leaf(f) => Self::filter_matches(f, node),
-            Condition::And(children) => children.iter().all(|ch| Self::condition_matches(ch, node)),
-            Condition::Or(children) => children.iter().any(|ch| Self::condition_matches(ch, node)),
-            Condition::Not(inner) => !Self::condition_matches(inner, node),
+            Condition::Leaf(f) => self.filter_matches(f, node, now),
+            Condition::And(children) => children
+                .iter()
+                .all(|ch| self.condition_matches(ch, node, now)),
+            Condition::Or(children) => children
+                .iter()
+                .any(|ch| self.condition_matches(ch, node, now)),
+            Condition::Not(inner) => !self.condition_matches(inner, node, now),
         }
     }
 
@@ -3933,23 +3968,28 @@ impl MenteDb {
     /// actually narrow results instead of being ignored.
     ///
     /// `agent` and `space` compare the memory's `agent_id` and `space_id` with
-    /// `=`, `!=`, or `IN`; `salience` and `confidence` compare the stored score
-    /// with `=`, `!=`, `<`, `<=`, `>`, `>=`, or `IN`, at `f32` precision. The
+    /// `=`, `!=`, or `IN`; `salience` and `confidence` compare a score with
+    /// `=`, `!=`, `<`, `<=`, `>`, `>=`, or `IN`, at `f32` precision. The
+    /// salience compared is the memory's decayed salience as of `now`, the
+    /// same value `compute_decayed_salience` reports (a decay exempt memory
+    /// keeps its stored value); the stored base salience is internal and is
+    /// never compared. Confidence does not decay and is compared as stored. The
     /// planner rejects any other operator or value type on these four fields,
     /// and a plan built around it that still carries one matches nothing.
     /// Unhandled type, tag, content and time combinations stay permissive.
-    fn filter_matches(f: &Filter, node: &MemoryNode) -> bool {
+    fn filter_matches(&self, f: &Filter, node: &MemoryNode, now: u64) -> bool {
         // IN: the field matches any element of the list (reusing per-field
         // equality, so `type IN [...]`, `tag IN [...]`, `content IN [...]` all work).
         if let Value::List(items) = &f.value {
             return items.iter().any(|v| {
-                Self::filter_matches(
+                self.filter_matches(
                     &Filter {
                         field: f.field,
                         op: Operator::Eq,
                         value: v.clone(),
                     },
                     node,
+                    now,
                 )
             });
         }
@@ -3981,7 +4021,7 @@ impl MenteDb {
                 f.op,
             ),
             (Field::Agent | Field::Space, _) => false,
-            (Field::Salience, v) => Self::score_cmp(node.salience, f.op, v),
+            (Field::Salience, v) => Self::score_cmp(self.decayed_salience_at(node, now), f.op, v),
             (Field::Confidence, v) => Self::score_cmp(node.confidence, f.op, v),
             // AS OF <t>: keep only memories whose validity window contains t.
             (Field::ValidAt, v) => Self::value_f64(v)
@@ -4040,21 +4080,17 @@ impl MenteDb {
 
     /// Loads MemoryNodes from storage and pairs them with their search scores.
     ///
-    /// When decay is enabled, salience is recomputed and factored into the
-    /// final score to prioritize temporally relevant memories.
-    fn load_scored_memories(&self, hits: &[(MemoryId, f32)]) -> MenteResult<Vec<ScoredMemory>> {
+    /// When decay is enabled, salience is decayed to `now` and factored into
+    /// the final score to prioritize temporally relevant memories.
+    fn load_scored_memories(
+        &self,
+        hits: &[(MemoryId, f32)],
+        now: u64,
+    ) -> MenteResult<Vec<ScoredMemory>> {
         let pages: HashMap<MemoryId, PageId> = self
             .pages_of(hits.iter().map(|(id, _)| id))
             .into_iter()
             .collect();
-        let now = if self.cognitive_config.decay_on_recall {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_micros() as u64
-        } else {
-            0
-        };
 
         let mut scored = Vec::with_capacity(hits.len());
         for &(id, score) in hits {

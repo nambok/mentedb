@@ -449,6 +449,14 @@ decayed = salience * 2^(-time_since_access / half_life) + boost * ln(1 + access_
 
 Default half life is 7 days. Frequently accessed memories resist decay.
 
+Decay is derived on read: the stored `salience` is a base as of the last
+access and is never rewritten by decay. Everything that reads salience reads
+the decayed value at the current time: recall scoring, archival, the health
+shown by dashboards, and MQL (`WHERE salience ...` and `ORDER BY salience`
+compare the decayed value, computed once per query at a single instant, only
+for memories the query already loads). Pinned memories (a decay exempt tag
+or attribute) keep their stored value. The stored base is internal.
+
 **Archival Pipeline** (`archival.rs`):
 Evaluates memories for archival or deletion:
 

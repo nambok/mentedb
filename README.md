@@ -513,6 +513,7 @@ decayed = salience × 2^(-Δt / half_life) + boost × ln(1 + access_count)
 - **Reinforcement:** Recalling a memory refreshes its decay clock (it counts as an access), so memories you keep using stay healthy
 - **Derive-on-read:** The decayed score is computed from the last-access time on every read, never re-persisted, so a memory decays with real elapsed time regardless of how often the sweep runs
 - **Retrieval blending:** Final score = 70% similarity + 30% decayed salience
+- **Queries see the decayed value:** MQL `salience` filters and `ORDER BY salience` compare the current decayed salience, the same number shown as health, never the stored base
 - **Floor:** Memories never decay below 0.01
 - **Never destructive by decay:** Decay only reorders results. Curated (non-episodic) memories are demoted but never deleted; only stale, low-salience episodic memories are archived
 
@@ -816,12 +817,20 @@ Filter semantics for the owner and score fields:
 |---|---|---|---|
 | `agent` | the memory's owner agent id | `=`, `!=`, `IN` | a UUID, bare or quoted |
 | `space` | the memory's space id | `=`, `!=`, `IN` | a UUID, bare or quoted |
-| `salience` | the stored salience | `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN` | a number |
-| `confidence` | the stored confidence | `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN` | a number |
+| `salience` | the memory's current decayed salience | `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN` | a number |
+| `confidence` | the stored confidence (it does not decay) | `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN` | a number |
 
-Scores compare at `f32` precision, so `salience = 0.3` matches a memory
-stored with salience `0.3`. Any other operator or value type on these fields
-is a query error rather than a filter that matches everything.
+MQL `salience`, in `WHERE` and in `ORDER BY salience`, is the memory's current
+decayed salience: the same number `compute_decayed_salience` returns and
+dashboards show as health. A memory stored at `0.95` and untouched for weeks
+has decayed close to the `0.01` floor, so `WHERE salience > 0.5` leaves it
+out and `WHERE salience < 0.2` finds it. Pinned memories (a decay exempt tag
+or attribute) keep their stored value. The stored base salience is internal
+and is never what a query compares. Each query reads the clock once, so every
+condition and the sort in one query see the same values.
+
+Scores compare at `f32` precision. Any other operator or value type on these
+fields is a query error rather than a filter that matches everything.
 
 ## Docker
 

@@ -4,7 +4,9 @@
 //!
 //! Expected results are computed from the stored memories with predicates
 //! written here, independently of `filter_matches`, so a filter that matches
-//! every memory fails these tests.
+//! every memory fails these tests. Queries run at the fixed instant `NOW`, and
+//! salience predicates read the decayed salience at that instant, the value
+//! MQL `salience` compares.
 
 use std::collections::HashSet;
 
@@ -14,6 +16,13 @@ use mentedb_core::types::SpaceId;
 const N: usize = 600;
 const BASE_TS: u64 = 1_000_000;
 const STEP: u64 = 1_000;
+/// The instant every fixture query is evaluated at: just after the newest
+/// access, so memory `i` was last accessed `(i + 1) * STEP` before it.
+const NOW: u64 = BASE_TS + (N as u64 + 1) * STEP;
+/// Half-life of the fixture's decay: long enough that decayed salience stays
+/// spread out (the oldest access keeps about 84% of its base), short enough
+/// that it differs from the stored base for every memory but the newest.
+const HALF_LIFE: u64 = 4 * N as u64 * STEP;
 
 const TYPES: [MemoryType; 4] = [
     MemoryType::Episodic,
@@ -41,6 +50,10 @@ fn fixture(dir: &Path) -> Fixture {
     let config = CognitiveConfig {
         write_inference: false,
         memory_dedup: false,
+        decay_config: DecayConfig {
+            half_life_us: HALF_LIFE,
+            ..DecayConfig::default()
+        },
         ..CognitiveConfig::default()
     };
     let db = MenteDb::open_with_config(dir, config).unwrap();
@@ -110,7 +123,7 @@ fn expected(db: &MenteDb, pred: impl Fn(&MemoryNode) -> bool) -> HashSet<MemoryI
 }
 
 fn ids(db: &MenteDb, mql: &str) -> Vec<MemoryId> {
-    db.query(mql)
+    db.query_at(mql, NOW)
         .unwrap_or_else(|e| panic!("{mql}: {e}"))
         .into_iter()
         .map(|s| s.memory.id)
@@ -135,6 +148,22 @@ fn assert_query(db: &MenteDb, mql: &str, pred: impl Fn(&MemoryNode) -> bool) {
 
 fn f32_of(x: f64) -> f32 {
     x as f32
+}
+
+/// The decayed salience of `n` at `NOW`: what MQL `salience` compares.
+fn eff(db: &MenteDb, n: &MemoryNode) -> f32 {
+    db.decayed_salience_at(n, NOW)
+}
+
+/// The decayed salience at `NOW` of the fixture memory whose content is
+/// `fixture memory {i}`.
+fn eff_of(db: &MenteDb, i: usize) -> f32 {
+    let content = format!("fixture memory {i}");
+    all_nodes(db)
+        .iter()
+        .find(|n| n.content == content)
+        .map(|n| eff(db, n))
+        .unwrap_or_else(|| panic!("no {content}"))
 }
 
 #[test]
@@ -218,50 +247,59 @@ fn space_filters_compare_the_space_id() {
 }
 
 #[test]
-fn salience_filters_compare_the_stored_salience() {
+fn salience_filters_compare_the_decayed_salience() {
     let dir = tempfile::tempdir().unwrap();
     let fx = fixture(dir.path());
     let db = &fx.db;
+    // The fixture decays: no memory but the newest keeps its stored base.
+    assert!(
+        all_nodes(db)
+            .iter()
+            .filter(|n| eff(db, n) != n.salience)
+            .count()
+            >= N - 1
+    );
     let t = f32_of(0.5);
     assert_query(
         db,
         "RECALL memories WHERE salience > 0.5 LIMIT 100000",
-        |n| n.salience > t,
+        |n| eff(db, n) > t,
     );
     assert_query(
         db,
         "RECALL memories WHERE salience >= 0.5 LIMIT 100000",
-        |n| n.salience >= t,
+        |n| eff(db, n) >= t,
     );
     assert_query(
         db,
         "RECALL memories WHERE salience < 0.5 LIMIT 100000",
-        |n| n.salience < t,
+        |n| eff(db, n) < t,
     );
     assert_query(
         db,
         "RECALL memories WHERE salience <= 0.5 LIMIT 100000",
-        |n| n.salience <= t,
+        |n| eff(db, n) <= t,
     );
-    let eq = f32_of(0.3);
+    // Equality on the decayed value of memory 300 (stored base 0.3).
+    let eq = eff_of(db, 300);
+    assert_ne!(eq, f32_of(0.3));
     assert_query(
         db,
-        "RECALL memories WHERE salience = 0.3 LIMIT 100000",
-        |n| n.salience == eq,
+        &format!("RECALL memories WHERE salience = {eq} LIMIT 100000"),
+        |n| eff(db, n) == eq,
     );
-    assert_eq!(
-        ids(db, "RECALL memories WHERE salience = 0.3 LIMIT 100000").len(),
-        2
-    );
+    // The stored base is not what is compared.
+    assert!(ids(db, "RECALL memories WHERE salience = 0.3 LIMIT 100000").is_empty());
     assert_query(
         db,
-        "RECALL memories WHERE salience != 0.3 LIMIT 100000",
-        |n| n.salience != eq,
+        &format!("RECALL memories WHERE salience != {eq} LIMIT 100000"),
+        |n| eff(db, n) != eq,
     );
+    let other = eff_of(db, 450);
     assert_query(
         db,
-        "RECALL memories WHERE salience IN [0.3, 0.9] LIMIT 100000",
-        |n| n.salience == eq || n.salience == f32_of(0.9),
+        &format!("RECALL memories WHERE salience IN [{eq}, {other}] LIMIT 100000"),
+        |n| eff(db, n) == eq || eff(db, n) == other,
     );
     // Integer literals compare too: nothing is above 1.
     assert!(ids(db, "RECALL memories WHERE salience > 1 LIMIT 100000").is_empty());
@@ -269,10 +307,15 @@ fn salience_filters_compare_the_stored_salience() {
         db,
         "RECALL memories WHERE salience >= 0.2 AND salience < 0.25 AND type = semantic LIMIT 100000",
         |n| {
-            n.salience >= f32_of(0.2)
-                && n.salience < f32_of(0.25)
+            eff(db, n) >= f32_of(0.2)
+                && eff(db, n) < f32_of(0.25)
                 && n.memory_type == MemoryType::Semantic
         },
+    );
+    assert_query(
+        db,
+        "RECALL memories WHERE NOT salience < 0.5 OR type = semantic LIMIT 100000",
+        |n| eff(db, n) >= t || n.memory_type == MemoryType::Semantic,
     );
 }
 
@@ -472,7 +515,7 @@ fn temporal_scan_applies_every_filter_and_the_limit() {
         |n| {
             n.created_at < t
                 && n.agent_id == a0
-                && n.salience > f32_of(0.05)
+                && eff(db, n) > f32_of(0.05)
                 && n.confidence < f32_of(0.9)
         },
     );
@@ -496,7 +539,7 @@ fn temporal_scan_honors_order_by() {
     let in_range = |n: &MemoryNode| n.created_at >= t && n.memory_type != MemoryType::Correction;
     let mut nodes: Vec<MemoryNode> = all_nodes(db).into_iter().filter(in_range).collect();
 
-    nodes.sort_by(|a, b| b.salience.total_cmp(&a.salience));
+    nodes.sort_by(|a, b| eff(db, b).total_cmp(&eff(db, a)));
     let want: Vec<MemoryId> = nodes.iter().take(6).map(|n| n.id).collect();
     let q = format!(
         "RECALL memories WHERE created >= {t} AND type != correction ORDER BY salience DESC LIMIT 6"
@@ -543,5 +586,161 @@ fn accessed_ranges_filter_on_access_time() {
         db,
         &format!("RECALL memories WHERE accessed > {t} AND created > {c} LIMIT 100000"),
         |n| n.accessed_at > t && n.created_at > c,
+    );
+}
+
+/// A store under the default seven day half-life with memories whose stored
+/// base salience and current decayed salience disagree, evaluated at `now`.
+struct DecayFixture {
+    db: MenteDb,
+    now: u64,
+}
+
+const DAY_US: u64 = 24 * 3600 * 1_000_000;
+
+fn decay_fixture(dir: &Path) -> DecayFixture {
+    let config = CognitiveConfig {
+        write_inference: false,
+        memory_dedup: false,
+        ..CognitiveConfig::default()
+    };
+    let db = MenteDb::open_with_config(dir, config).unwrap();
+    let now = MenteDb::now_micros();
+    let old = now - 60 * DAY_US;
+    // (content, stored salience, last access, exempt tag, exempt attribute)
+    let rows: [(&str, f32, u64, bool, bool); 5] = [
+        ("stale", 0.95, old, false, false),
+        ("fresh", 0.4, now, false, false),
+        ("aging", 0.9, now - 7 * DAY_US, false, false),
+        ("pinned", 0.85, old, true, false),
+        ("exempt", 0.7, old, false, true),
+    ];
+    for (i, (content, salience, accessed, tagged, attr)) in rows.into_iter().enumerate() {
+        let mut emb = vec![0.0f32; 8];
+        emb[i] = 1.0;
+        let mut n = MemoryNode::new(AgentId::nil(), MemoryType::Semantic, content.into(), emb);
+        n.salience = salience;
+        n.confidence = 0.9;
+        n.created_at = accessed;
+        n.accessed_at = accessed;
+        if tagged {
+            n.tags.push("scope:always".into());
+        }
+        if attr {
+            n.attributes.insert(
+                "decay_exempt".into(),
+                mentedb_core::memory::AttributeValue::Boolean(true),
+            );
+        }
+        db.store(n).unwrap();
+    }
+    DecayFixture { db, now }
+}
+
+fn contents_at(db: &MenteDb, mql: &str, now: u64) -> Vec<String> {
+    db.query_at(mql, now)
+        .unwrap_or_else(|e| panic!("{mql}: {e}"))
+        .into_iter()
+        .map(|s| s.memory.content)
+        .collect()
+}
+
+fn content_set(db: &MenteDb, mql: &str, now: u64) -> HashSet<String> {
+    contents_at(db, mql, now).into_iter().collect()
+}
+
+fn set_of(items: &[&str]) -> HashSet<String> {
+    items.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn salience_filters_use_the_decayed_value_not_the_stored_base() {
+    let dir = tempfile::tempdir().unwrap();
+    let DecayFixture { db, now } = decay_fixture(dir.path());
+    let db = &db;
+    // "stale" stores 0.95 but has not been touched in 60 days: its current
+    // salience is near the floor, so a high threshold drops it and a low one
+    // keeps it. The pinned memories keep their stored value.
+    assert_eq!(
+        content_set(db, "RECALL memories WHERE salience > 0.5 LIMIT 100", now),
+        set_of(&["pinned", "exempt"])
+    );
+    assert_eq!(
+        content_set(db, "RECALL memories WHERE salience < 0.2 LIMIT 100", now),
+        set_of(&["stale"])
+    );
+    // One half-life: 0.9 decays to 0.45.
+    assert_eq!(
+        content_set(
+            db,
+            "RECALL memories WHERE salience > 0.44 AND salience < 0.46 LIMIT 100",
+            now
+        ),
+        set_of(&["aging"])
+    );
+    // Equality and IN on current values; the stored 0.95 matches nothing.
+    assert!(content_set(db, "RECALL memories WHERE salience = 0.95 LIMIT 100", now).is_empty());
+    assert_eq!(
+        content_set(
+            db,
+            "RECALL memories WHERE salience IN [0.4, 0.85, 0.95] LIMIT 100",
+            now
+        ),
+        set_of(&["fresh", "pinned"])
+    );
+    // The same through a boolean tree.
+    assert_eq!(
+        content_set(
+            db,
+            "RECALL memories WHERE NOT salience >= 0.2 OR salience = 0.7 LIMIT 100",
+            now
+        ),
+        set_of(&["stale", "exempt"])
+    );
+    // The value compared is the one compute_decayed_salience reports.
+    let health: HashMap<String, f32> = all_nodes(db)
+        .iter()
+        .map(|n| (n.content.clone(), db.decayed_salience_at(n, now)))
+        .collect();
+    assert!(health["stale"] < 0.02, "{health:?}");
+    assert_eq!(health["pinned"], 0.85);
+    assert_eq!(health["exempt"], 0.7);
+    // Confidence does not decay: every memory keeps its stored 0.9.
+    assert_eq!(
+        content_set(db, "RECALL memories WHERE confidence > 0.8 LIMIT 100", now).len(),
+        5
+    );
+    // The public entry point reads the clock itself and agrees.
+    let live: HashSet<String> = db
+        .query("RECALL memories WHERE salience > 0.5 LIMIT 100")
+        .unwrap()
+        .into_iter()
+        .map(|s| s.memory.content)
+        .collect();
+    assert_eq!(live, set_of(&["pinned", "exempt"]));
+}
+
+#[test]
+fn order_by_salience_sorts_on_the_decayed_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let DecayFixture { db, now } = decay_fixture(dir.path());
+    let db = &db;
+    // Stored order would be stale, aging, pinned, exempt, fresh.
+    assert_eq!(
+        contents_at(db, "RECALL memories ORDER BY salience DESC LIMIT 100", now),
+        vec!["pinned", "exempt", "aging", "fresh", "stale"]
+    );
+    assert_eq!(
+        contents_at(db, "RECALL memories ORDER BY salience ASC LIMIT 2", now),
+        vec!["stale", "fresh"]
+    );
+    // Through the temporal scan path as well.
+    assert_eq!(
+        contents_at(
+            db,
+            "RECALL memories WHERE created > 0 ORDER BY salience DESC LIMIT 3",
+            now
+        ),
+        vec!["pinned", "exempt", "aging"]
     );
 }

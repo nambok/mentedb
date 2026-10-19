@@ -16,8 +16,8 @@ const TYPES: [MemoryType; 4] = [
 ];
 
 /// A database of `n` memories cycling through four types, tagged `even` on
-/// every other memory and `g<i % 10>`, with unique salience so ORDER BY has
-/// no ties.
+/// every other memory and `g<i % 10>`, with unique salience above the decay
+/// floor so ORDER BY salience (the decayed value) has no ties.
 fn mixed_db(dir: &Path, n: usize, dim: usize) -> MenteDb {
     let config = CognitiveConfig {
         write_inference: false,
@@ -35,7 +35,7 @@ fn mixed_db(dir: &Path, n: usize, dim: usize) -> MenteDb {
             format!("memory number {i}"),
             emb,
         );
-        node.salience = (i as f32 + 1.0) / (n as f32 + 1.0);
+        node.salience = 0.05 + 0.9 * (i as f32 + 1.0) / (n as f32 + 1.0);
         node.tags = vec![format!("g{}", i % 10)];
         if i % 2 == 0 {
             node.tags.push("even".into());
@@ -53,7 +53,7 @@ fn mixed_db(dir: &Path, n: usize, dim: usize) -> MenteDb {
 
 /// The tag-less TagScan exactly as it ran before the indexed scan: load every
 /// memory through the page map, filter, order, truncate.
-fn old_tag_scan(db: &MenteDb, mql: &str) -> Vec<MemoryId> {
+fn old_tag_scan(db: &MenteDb, mql: &str, now: u64) -> Vec<MemoryId> {
     let plan = Mql::parse(mql).unwrap();
     let QueryPlan::TagScan {
         tags,
@@ -78,22 +78,22 @@ fn old_tag_scan(db: &MenteDb, mql: &str) -> Vec<MemoryId> {
         .collect();
     drop(pm);
     match &condition {
-        Some(cond) => scored.retain(|sm| MenteDb::condition_matches(cond, &sm.memory)),
+        Some(cond) => scored.retain(|sm| db.condition_matches(cond, &sm.memory, now)),
         None => scored.retain(|sm| {
             filters
                 .iter()
-                .all(|f| MenteDb::filter_matches(f, &sm.memory))
+                .all(|f| db.filter_matches(f, &sm.memory, now))
         }),
     }
     if let Some(ob) = &order_by {
-        MenteDb::apply_order_by(&mut scored, ob);
+        db.apply_order_by(&mut scored, ob, now);
     }
     scored.truncate(k);
     scored.into_iter().map(|s| s.memory.id).collect()
 }
 
-fn new_scan(db: &MenteDb, mql: &str) -> Vec<MemoryId> {
-    db.query(mql)
+fn new_scan(db: &MenteDb, mql: &str, now: u64) -> Vec<MemoryId> {
+    db.query_at(mql, now)
         .unwrap()
         .into_iter()
         .map(|s| s.memory.id)
@@ -164,9 +164,10 @@ fn indexed_scan_matches_the_full_scan() {
             false,
         ),
     ];
+    let now = MenteDb::now_micros();
     for &(q, ordered) in queries {
-        let old = old_tag_scan(&db, q);
-        let new = new_scan(&db, q);
+        let old = old_tag_scan(&db, q, now);
+        let new = new_scan(&db, q, now);
         if ordered {
             assert_eq!(new, old, "{q}");
             continue;
@@ -181,7 +182,7 @@ fn indexed_scan_matches_the_full_scan() {
             .next()
             .map(|base| format!("{base} LIMIT 100000"))
             .unwrap_or_default();
-        let all: HashSet<MemoryId> = old_tag_scan(&db, &unlimited).into_iter().collect();
+        let all: HashSet<MemoryId> = old_tag_scan(&db, &unlimited, now).into_iter().collect();
         let new_set: HashSet<MemoryId> = new.iter().copied().collect();
         assert_eq!(new_set.len(), new.len(), "{q}: no duplicates");
         assert_eq!(new.len(), all.len().min(k), "{q}: result count");
@@ -197,7 +198,11 @@ fn indexed_scan_matches_the_full_scan() {
 fn unordered_results_come_in_page_order() {
     let dir = tempfile::tempdir().unwrap();
     let db = mixed_db(dir.path(), 100, 8);
-    let got = new_scan(&db, "RECALL memories WHERE type = episodic LIMIT 5");
+    let got = new_scan(
+        &db,
+        "RECALL memories WHERE type = episodic LIMIT 5",
+        MenteDb::now_micros(),
+    );
     let pm = db.page_map.read();
     let pages: Vec<u64> = got.iter().map(|id| pm[id].0).collect();
     let mut sorted = pages.clone();

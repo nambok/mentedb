@@ -697,6 +697,14 @@ Run an MQL query and get an assembled context window. Read.
 
 `context` is the formatted context text. An MQL parse error is `500`.
 
+In MQL, `salience` (in `WHERE` and `ORDER BY salience`) is the memory's
+current decayed salience, the same value shown as health, not the stored base
+salience a memory was written with. `WHERE salience > 0.5` returns memories
+that are strong now; a memory stored high but unused for weeks has decayed
+and does not match. Pinned memories keep their stored value. `confidence` does
+not decay and compares as stored. This applies to `/recall`, `/query` and
+`/admin/mql` alike.
+
 ### `POST /recall_for_action`
 
 Memories that bear on an action about to happen: procedures, corrections and

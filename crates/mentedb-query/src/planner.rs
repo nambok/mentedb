@@ -236,7 +236,8 @@ pub fn validate_condition(c: &Condition) -> MenteResult<()> {
 /// - `agent` and `space` compare an id (a UUID, quoted or bare) with `=`,
 ///   `!=`, or `IN [...]`.
 /// - `salience` and `confidence` compare a number with `=`, `!=`, `<`, `<=`,
-///   `>`, `>=`, or `IN [...]`.
+///   `>`, `>=`, or `IN [...]`. At execution `salience` is the memory's current
+///   decayed salience, not the stored base; `confidence` is the stored value.
 ///
 /// Other fields keep their existing handling.
 pub fn validate_filter(f: &Filter) -> MenteResult<()> {
