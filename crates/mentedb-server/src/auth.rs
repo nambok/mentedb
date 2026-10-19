@@ -124,6 +124,8 @@ impl AuthenticatedAgent {
 
     /// Allow or refuse dropping or backing up database `name`: admin tokens,
     /// or a token with the maintenance scope whose `dbs` names the database.
+    /// A maintenance token must carry `dbs` even where the server accepts
+    /// unscoped tokens, so it can never drop every database.
     pub fn authorize_maintenance(&self, name: &str) -> Result<(), ApiError> {
         if self.admin {
             return Ok(());
@@ -131,6 +133,11 @@ impl AuthenticatedAgent {
         if self.scope < Scope::Maintenance {
             return Err(ApiError::Forbidden(
                 "this operation needs a token with the maintenance scope".into(),
+            ));
+        }
+        if self.dbs.is_none() {
+            return Err(ApiError::Forbidden(
+                "a maintenance token must name its databases in 'dbs'".into(),
             ));
         }
         self.authorize_db(name, true)
@@ -757,6 +764,17 @@ mod scope_tests {
             }))
             .unwrap();
         assert!(write.authorize_maintenance("tenant.alice.notes").is_err());
+        let unscoped = v
+            .authenticate(&token(TokenOptions {
+                scope: Some(Scope::Maintenance),
+                ..Default::default()
+            }))
+            .unwrap();
+        assert!(
+            unscoped
+                .authorize_maintenance("tenant.alice.notes")
+                .is_err()
+        );
     }
 
     #[test]

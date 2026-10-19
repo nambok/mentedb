@@ -190,7 +190,7 @@ Errors are JSON with one field:
 |--------|------|
 | `400` | Missing or invalid field, unknown type name, invalid database or backup name, no embedder for a text query, a malformed `x-mentedb-deadline-ms`, or auth disabled at `/v1/auth/token`. |
 | `401` | Missing or invalid bearer token, expired token, unknown `scope`, a token without `dbs` where the server requires it, `dbs` outside the subject pattern, missing admin key, or admin endpoints disabled. |
-| `403` | Token not scoped to the database, read scope on a write, a drop or backup without the maintenance scope, `agent_id` mismatch, memory owned by another agent, wrong admin key. |
+| `403` | Token not scoped to the database, read scope on a write, a drop or backup without the maintenance scope or by a maintenance token without `dbs`, `agent_id` mismatch, memory owned by another agent, wrong admin key. |
 | `404` | Memory, document or database not found (a database only when auto create is off). |
 | `409` | Database already exists or in use, backup file name collision, a supersede whose replacement duplicates an existing memory, or a pin change refused because the memory duplicates another. |
 | `429` | Rate limited: `{"error": "too many requests"}`. Each caller gets a token bucket: the token's `sub` (else `jti`, else agent) when authenticated, otherwise the client IP. Default 100 requests refilled at 10 per second; see `MENTEDB_RATE_LIMIT_BURST` and `MENTEDB_RATE_LIMIT_PER_SEC`. |

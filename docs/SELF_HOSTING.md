@@ -409,7 +409,7 @@ with these claims:
 |-------|---------|
 | `exp` | Expiry, Unix seconds. Required. |
 | `dbs` | Databases the token may use: names or globs, for example `["alice"]` or `["tenant.alice.*"]`. `"*"` means all. No claim means all, unless the server requires the claim (below). The default database is `default`. |
-| `scope` | `read` (reads and searches only), `write` (the default), or `maintenance` (write, plus dropping and backing up the databases in `dbs`). Each level includes the ones before it. |
+| `scope` | `read` (reads and searches only), `write` (the default), or `maintenance` (write, plus dropping and backing up the databases in `dbs`; a maintenance token must carry `dbs`, even where unscoped tokens are allowed). Each level includes the ones before it. |
 | `read_only` | Older spelling of `scope: "read"`. |
 | `sub` | Subject. Keys the rate limit and, with a subject pattern, binds `dbs`. |
 | `jti` | Token id. Keys the rate limit when there is no `sub`. |
