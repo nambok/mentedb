@@ -128,6 +128,7 @@ pub(crate) mod mmr;
 /// Top k for `ORDER BY salience DESC LIMIT k` MQL scans without loading
 /// every candidate.
 pub(crate) mod salience_topk;
+pub use salience_topk::{SalienceWarmConfig, SalienceWarmReport};
 
 /// Structured export: fill a JSON schema from memories via an embedder-supplied LLM.
 pub mod export;
@@ -716,6 +717,9 @@ pub struct MenteDb {
     /// exemption) that the `ORDER BY salience DESC` top k walk orders by.
     /// Filled when a walk loads a memory, dropped whenever it is written.
     salience_bounds: RwLock<HashMap<MemoryId, crate::salience_topk::BoundSlot>>,
+    /// Serializes writes of `salience_bounds.bin` (snapshots, quick close and
+    /// a finished warm can each write it, and they share one temp file).
+    salience_bounds_save: parking_lot::Mutex<()>,
     /// Hot flushes since the last snapshot write; see flush_snapshot_interval.
     flushes_since_snapshot: std::sync::atomic::AtomicU32,
     /// Lifetime count of store operations (metrics).
@@ -1019,6 +1023,7 @@ impl MenteDb {
             page_map: RwLock::new(page_map),
             mode_probes: RwLock::new(mode_probes),
             salience_bounds: RwLock::new(salience_bounds),
+            salience_bounds_save: parking_lot::Mutex::new(()),
             flushes_since_snapshot: std::sync::atomic::AtomicU32::new(0),
             stores: std::sync::atomic::AtomicU64::new(0),
             memory_loads: std::sync::atomic::AtomicU64::new(0),
@@ -3497,9 +3502,18 @@ impl MenteDb {
     /// process lock without rewriting snapshots. Reopen reconciles stale
     /// snapshots, so this trades a slower next open for a shutdown fast
     /// enough to release every user's lock inside a deploy drain window.
+    ///
+    /// The salience decay input cache is the one snapshot it still writes,
+    /// before the lock is released: one sequential file of a few dozen bytes
+    /// per memory, which keeps `ORDER BY salience DESC LIMIT k` warm across a
+    /// deploy instead of loading every memory again on the first query.
     pub fn close_quick(&self) -> MenteResult<()> {
         info!("Quick closing MenteDB");
         self.storage.checkpoint()?;
+        // Derived cache: a failure only costs loads after the next open.
+        if let Err(e) = self.save_salience_bounds() {
+            warn!(error = %e, "salience bound snapshot write failed");
+        }
         self.storage.close()?;
         Ok(())
     }

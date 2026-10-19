@@ -465,7 +465,20 @@ computes each candidate's exact decayed value from the cache, and loads
 candidates from the highest down until the next one is below the k-th result.
 A write drops the memory's cache entry (`note_write`); entries are persisted
 in `salience_bounds.bin`, stamped with page and write stamp like the mode
-probes, and restored on open only when unchanged.
+probes, written by every snapshot and by `close_quick` (so a deploy's quick
+close hands the next node a warm cache), and restored on open only when
+unchanged.
+
+A query fills the cache only for what it loads, so the first such query on a
+cold cache loads every candidate. `MenteDb::warm_salience_bounds` fills it off
+the request path: it copies the uncached ids out once, then per chunk resolves
+pages under a brief page map read, claims each slot with a pending token under
+a brief cache write, loads the pages with no lock held (stamp read first), and
+publishes each entry only if its token is still in the slot. `note_write`
+removes the slot, so a write during the load always wins. A query meeting a
+pending slot treats the memory as uncached and loads it itself, never waiting.
+A cancellation check runs before each chunk and before the optional final
+persist. Embedders call it after open on a background thread.
 
 **Archival Pipeline** (`archival.rs`):
 Evaluates memories for archival or deletion:

@@ -30,10 +30,19 @@
 //! The cache is persisted with the snapshots, each entry stamped with the page
 //! and write stamp it was loaded at, and restored on open only where nothing
 //! wrote the memory since and the decay exemption settings are unchanged.
+//!
+//! # Warming
+//!
+//! A query fills the cache only for the memories it loads, so the first
+//! `ORDER BY salience DESC LIMIT k` on a cold account loads every memory on
+//! the request path. [`MenteDb::warm_salience_bounds`] fills it off the
+//! request path instead, in chunks, with the same pending token protocol, so
+//! a write landing mid warm still wins and a query never waits for it.
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::time::{Duration, Instant};
 
 use super::*;
 
@@ -59,6 +68,75 @@ pub(crate) enum BoundSlot {
 }
 
 static NEXT_BOUND_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+/// Settings for [`MenteDb::warm_salience_bounds`].
+#[derive(Debug, Clone)]
+pub struct SalienceWarmConfig {
+    /// Memories loaded per chunk. Locks are held only to claim a chunk and to
+    /// publish its entries, never across a page load, and cancellation is
+    /// checked between chunks, so this bounds how long a cancelled warm keeps
+    /// reading. Default: 256. Zero is treated as one.
+    pub chunk_size: usize,
+    /// Sleep between chunks, leaving storage bandwidth to foreground work.
+    /// Zero only yields the thread. Default: zero.
+    pub pause: Duration,
+    /// Write `salience_bounds.bin` once the warm completes, so a crash before
+    /// the next snapshot keeps the work. Skipped when cancelled or when
+    /// nothing new was cached. Default: true.
+    pub persist: bool,
+}
+
+impl Default for SalienceWarmConfig {
+    fn default() -> Self {
+        Self {
+            chunk_size: 256,
+            pause: Duration::ZERO,
+            persist: true,
+        }
+    }
+}
+
+/// What a [`MenteDb::warm_salience_bounds`] call did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SalienceWarmReport {
+    /// Memories in the database when the warm started.
+    pub memories: usize,
+    /// Of those, memories that already had an entry or a load in flight,
+    /// including ones a concurrent query or warm cached before this call
+    /// reached them.
+    pub already_cached: usize,
+    /// Memories this call loaded from storage.
+    pub loaded: usize,
+    /// Entries this call added to the cache.
+    pub cached: usize,
+    /// Loads discarded because the memory was written (or deleted) while
+    /// loading: the write wins and the memory stays uncached.
+    pub invalidated: usize,
+    /// Loads that failed or found a different memory on the page.
+    pub unreadable: usize,
+    /// Whether `should_continue` stopped the warm before it finished.
+    pub cancelled: bool,
+    /// Whether this call wrote `salience_bounds.bin`.
+    pub persisted: bool,
+    /// Wall time of the call.
+    pub elapsed: Duration,
+}
+
+/// A memory claimed for loading by a warm chunk: its page and the pending
+/// token its slot holds.
+pub(crate) struct WarmClaim {
+    id: MemoryId,
+    page: PageId,
+    token: u64,
+}
+
+/// A claimed memory after its load: the entry to publish, None when the load
+/// failed.
+pub(crate) struct WarmLoaded {
+    id: MemoryId,
+    token: u64,
+    entry: Option<BoundEntry>,
+}
 
 /// File (in the database directory) holding the persisted decay inputs.
 pub(crate) const SALIENCE_BOUNDS_FILE: &str = "salience_bounds.bin";
@@ -160,7 +238,7 @@ impl MenteDb {
     /// The decayed salience at `now` of the memory `e` describes, computed as
     /// the full path computes it. NaN reads as infinity, so such a memory is
     /// always loaded (and then sends the query to the full path).
-    fn bound_key(&self, e: &BoundEntry, now: u64) -> f32 {
+    pub(crate) fn bound_key(&self, e: &BoundEntry, now: u64) -> f32 {
         let v = self.decayed_salience_of(
             e.exempt,
             e.salience,
@@ -293,21 +371,10 @@ impl MenteDb {
             }
         };
         // Stamp first, then load: see `BoundEntry::stamp`.
-        let stamp = self
-            .storage
-            .memory_stamp(page)
-            .filter(|(sid, _)| *sid == id)
-            .map(|(_, s)| (page, s));
+        let stamp = self.bound_stamp(id, page);
         let loaded = self.storage.load_memory(page).ok();
         if let Some(token) = token {
-            let entry = loaded.as_ref().filter(|n| n.id == id).map(|n| BoundEntry {
-                salience: n.salience,
-                created_at: n.created_at,
-                accessed_at: n.accessed_at,
-                access_count: n.access_count,
-                exempt: self.is_decay_exempt(n),
-                stamp,
-            });
+            let entry = loaded.as_ref().and_then(|n| self.bound_entry(id, n, stamp));
             let mut cache = self.salience_bounds.write();
             if matches!(cache.get(&id), Some(BoundSlot::Loading(t)) if *t == token) {
                 match entry {
@@ -323,9 +390,180 @@ impl MenteDb {
         loaded
     }
 
+    /// The storage write stamp of `id` on `page`, read BEFORE the memory is
+    /// loaded: see `BoundEntry::stamp`.
+    fn bound_stamp(&self, id: MemoryId, page: PageId) -> Option<(PageId, u64)> {
+        self.storage
+            .memory_stamp(page)
+            .filter(|(sid, _)| *sid == id)
+            .map(|(_, s)| (page, s))
+    }
+
+    /// The decay inputs of `node`, None when the page held another memory.
+    fn bound_entry(
+        &self,
+        id: MemoryId,
+        node: &MemoryNode,
+        stamp: Option<(PageId, u64)>,
+    ) -> Option<BoundEntry> {
+        (node.id == id).then(|| BoundEntry {
+            salience: node.salience,
+            created_at: node.created_at,
+            accessed_at: node.accessed_at,
+            access_count: node.access_count,
+            exempt: self.is_decay_exempt(node),
+            stamp,
+        })
+    }
+
+    /// Fill the salience decay input cache for every memory that has no
+    /// entry, so the next `ORDER BY salience DESC LIMIT k` query loads only
+    /// its top candidates instead of every memory.
+    ///
+    /// Meant to run after open, on a background thread: it blocks for as long
+    /// as loading the uncached memories takes (seconds per ten thousand on
+    /// network storage), and returns at once when the cache is already
+    /// complete (a reopen that restored `salience_bounds.bin`).
+    ///
+    /// Works in chunks of `config.chunk_size`: page ids are copied out under a
+    /// brief page map read, the chunk's slots are claimed with pending tokens
+    /// under a brief cache write, the pages are loaded with no lock held, and
+    /// each entry is published only if its token is still in place. A write
+    /// to a memory removes its slot (`note_write`), so a copy loaded before
+    /// that write is discarded, never cached. Stores, recall, MQL and
+    /// maintenance run alongside it, a query never waits for it (a memory
+    /// being warmed reads as uncached and the query loads it itself), and
+    /// concurrent or repeated calls are safe: a memory already claimed or
+    /// cached is skipped.
+    ///
+    /// `should_continue` is called before each chunk; once it returns false
+    /// the warm returns without another storage read and without persisting
+    /// (the report says `cancelled`). Call it with a check that turns false
+    /// before the database is closed or handed to another owner, and wait
+    /// for the call to return before releasing the files. Apart from that
+    /// final persist (`config.persist`, written atomically like the
+    /// snapshots), the warm writes nothing to disk itself.
+    pub fn warm_salience_bounds(
+        &self,
+        config: &SalienceWarmConfig,
+        should_continue: &dyn Fn() -> bool,
+    ) -> MenteResult<SalienceWarmReport> {
+        let started = Instant::now();
+        let mut report = SalienceWarmReport::default();
+        let ids: Vec<MemoryId> = self.page_map.read().keys().copied().collect();
+        report.memories = ids.len();
+        let missing: Vec<MemoryId> = {
+            let cache = self.salience_bounds.read();
+            ids.into_iter()
+                .filter(|id| !cache.contains_key(id))
+                .collect()
+        };
+        report.already_cached = report.memories - missing.len();
+
+        let mut chunks = missing.chunks(config.chunk_size.max(1)).peekable();
+        while let Some(chunk) = chunks.next() {
+            if !should_continue() {
+                report.cancelled = true;
+                break;
+            }
+            let claimed = self.warm_claim(chunk, &mut report);
+            let loaded = self.warm_load(&claimed);
+            report.loaded += loaded.len();
+            self.warm_publish(loaded, &mut report);
+            if chunks.peek().is_some() {
+                if config.pause.is_zero() {
+                    std::thread::yield_now();
+                } else {
+                    std::thread::sleep(config.pause);
+                }
+            }
+        }
+
+        if config.persist && !report.cancelled && report.cached > 0 {
+            if should_continue() {
+                self.save_salience_bounds()?;
+                report.persisted = true;
+            } else {
+                report.cancelled = true;
+            }
+        }
+        report.elapsed = started.elapsed();
+        Ok(report)
+    }
+
+    /// Claim the memories of `ids` that still have no slot: resolve their
+    /// pages under a brief page map read, then mark each slot pending with a
+    /// fresh token under a brief cache write. Memories that gained a slot
+    /// since the warm started count as already cached.
+    pub(crate) fn warm_claim(
+        &self,
+        ids: &[MemoryId],
+        report: &mut SalienceWarmReport,
+    ) -> Vec<WarmClaim> {
+        let pages = self.pages_of(ids);
+        let mut cache = self.salience_bounds.write();
+        pages
+            .into_iter()
+            .filter_map(|(id, page)| {
+                if cache.contains_key(&id) {
+                    report.already_cached += 1;
+                    return None;
+                }
+                let token = NEXT_BOUND_TOKEN.fetch_add(1, AtomicOrdering::Relaxed);
+                cache.insert(id, BoundSlot::Loading(token));
+                Some(WarmClaim { id, page, token })
+            })
+            .collect()
+    }
+
+    /// Load each claimed memory with no lock held, stamp read first.
+    pub(crate) fn warm_load(&self, claimed: &[WarmClaim]) -> Vec<WarmLoaded> {
+        claimed
+            .iter()
+            .map(|c| {
+                let stamp = self.bound_stamp(c.id, c.page);
+                let entry = self
+                    .storage
+                    .load_memory(c.page)
+                    .ok()
+                    .and_then(|n| self.bound_entry(c.id, &n, stamp));
+                WarmLoaded {
+                    id: c.id,
+                    token: c.token,
+                    entry,
+                }
+            })
+            .collect()
+    }
+
+    /// Publish loaded entries under one brief cache write. An entry whose
+    /// slot no longer holds its token was overtaken by a write and is
+    /// dropped; a failed load clears its own pending slot.
+    pub(crate) fn warm_publish(&self, loaded: Vec<WarmLoaded>, report: &mut SalienceWarmReport) {
+        let mut cache = self.salience_bounds.write();
+        for l in loaded {
+            if !matches!(cache.get(&l.id), Some(BoundSlot::Loading(t)) if *t == l.token) {
+                report.invalidated += 1;
+                continue;
+            }
+            match l.entry {
+                Some(e) => {
+                    cache.insert(l.id, BoundSlot::Ready(e));
+                    report.cached += 1;
+                }
+                None => {
+                    cache.remove(&l.id);
+                    report.unreadable += 1;
+                }
+            }
+        }
+    }
+
     /// Persist the ready decay inputs that carry a write stamp. Atomic (temp
-    /// file, fsync, rename).
+    /// file, fsync, rename), and serialized, since snapshots, quick close and
+    /// a finished warm share the temp file.
     pub(crate) fn save_salience_bounds(&self) -> MenteResult<()> {
+        let _save = self.salience_bounds_save.lock();
         let bytes = {
             let cache = self.salience_bounds.read();
             encode_bounds(

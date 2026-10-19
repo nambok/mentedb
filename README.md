@@ -811,9 +811,11 @@ CONSOLIDATE WHERE type = episodic AND accessed < "2024-01-01"
   current salience down and the scan stops once the next one cannot beat the
   `LIMIT`th result. `RECALL memories WHERE type = episodic ORDER BY salience
   DESC LIMIT 5` loads 5 memories once the cache is warm, more only when
-  several tie at the cutoff. The first such query after an upgrade loads
-  every candidate once to fill the cache, and a memory written since the
-  last query loads once again. Results, ties included (broken by storage
+  several tie at the cutoff. The first such query on a cold cache (after an
+  upgrade, or with the cache file lost) loads every candidate once to fill
+  it, unless `MenteDb::warm_salience_bounds` filled it in the background
+  after open (see [SELF_HOSTING.md](docs/SELF_HOSTING.md)), and a memory
+  written since the last query loads once again. Results, ties included (broken by storage
   order), are identical to sorting every candidate. Set
   `CognitiveConfig::mql_salience_top_k` to false to always sort every
   candidate.

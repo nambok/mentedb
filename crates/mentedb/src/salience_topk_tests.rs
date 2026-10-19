@@ -5,6 +5,7 @@
 
 use super::*;
 use mentedb_core::memory::AttributeValue;
+use std::time::Duration;
 
 const BASE_TS: u64 = 1_000_000_000;
 const HALF_LIFE: u64 = 1_000_000;
@@ -331,4 +332,280 @@ fn ascending_order_takes_the_full_path() {
         let mql = format!("RECALL memories {f} ORDER BY salience ASC LIMIT 7");
         assert_eq!(run(&db, &mql), reference(&db, &mql), "{mql}");
     }
+}
+
+fn no_cancel() -> bool {
+    true
+}
+
+fn warm_config(chunk_size: usize, persist: bool) -> SalienceWarmConfig {
+    SalienceWarmConfig {
+        chunk_size,
+        persist,
+        ..SalienceWarmConfig::default()
+    }
+}
+
+fn bounds_file(dir: &Path) -> Option<Vec<u8>> {
+    std::fs::read(dir.join(crate::salience_topk::SALIENCE_BOUNDS_FILE)).ok()
+}
+
+#[test]
+fn warm_fills_the_cache_so_the_first_query_loads_only_the_top() {
+    const N: usize = 2000;
+    let dir = tempfile::tempdir().unwrap();
+    let db = fresh_db(dir.path(), N);
+
+    let before = db.storage_memory_loads();
+    let report = db
+        .warm_salience_bounds(&warm_config(128, false), &no_cancel)
+        .unwrap();
+    assert_eq!(db.storage_memory_loads() - before, N as u64);
+    assert_eq!(
+        (
+            report.memories,
+            report.already_cached,
+            report.loaded,
+            report.cached
+        ),
+        (N, 0, N, N)
+    );
+    assert_eq!((report.invalidated, report.unreadable), (0, 0));
+    assert!(!report.cancelled && !report.persisted);
+
+    let mql = "RECALL memories ORDER BY salience DESC LIMIT 5";
+    let (got, loads) = loads_for(&db, mql);
+    assert_eq!(got, reference(&db, mql));
+    assert_eq!(loads, 5, "first query after warm loaded {loads} of {N}");
+}
+
+#[test]
+fn warm_is_idempotent_and_returns_at_once_when_complete() {
+    const N: usize = 500;
+    let dir = tempfile::tempdir().unwrap();
+    let db = fresh_db(dir.path(), N);
+    let first = db
+        .warm_salience_bounds(&warm_config(64, true), &no_cancel)
+        .unwrap();
+    assert_eq!(first.cached, N);
+    assert!(first.persisted);
+    let file = bounds_file(dir.path());
+    assert!(file.is_some());
+
+    let before = db.storage_memory_loads();
+    let second = db
+        .warm_salience_bounds(&warm_config(64, true), &no_cancel)
+        .unwrap();
+    assert_eq!(
+        db.storage_memory_loads(),
+        before,
+        "a complete cache loads nothing"
+    );
+    assert_eq!(
+        (
+            second.already_cached,
+            second.loaded,
+            second.cached,
+            second.persisted
+        ),
+        (N, 0, 0, false)
+    );
+    assert_eq!(
+        bounds_file(dir.path()),
+        file,
+        "nothing new, nothing written"
+    );
+
+    // A memory written since is the only one the next warm loads.
+    let id = run(&db, "RECALL memories ORDER BY salience DESC LIMIT 1")[0];
+    let page = db.page_of(id).unwrap();
+    let mut node = db.storage.load_memory(page).unwrap();
+    node.salience = 0.01;
+    db.update_node(page, &node).unwrap();
+    let third = db
+        .warm_salience_bounds(&warm_config(64, false), &no_cancel)
+        .unwrap();
+    assert_eq!((third.loaded, third.cached), (1, 1));
+}
+
+#[test]
+fn a_write_during_warming_wins_over_the_loaded_copy() {
+    const N: usize = 300;
+    let dir = tempfile::tempdir().unwrap();
+    let db = fresh_db(dir.path(), N);
+    let ids: Vec<MemoryId> = db.page_map.read().keys().copied().collect();
+
+    // Claim and load a chunk, then write one of its memories before the
+    // entries are published: the copy loaded before the write must not be
+    // cached.
+    let mut report = SalienceWarmReport::default();
+    let claimed = db.warm_claim(&ids, &mut report);
+    assert_eq!(claimed.len(), N);
+    let loaded = db.warm_load(&claimed);
+    let lowest = run(&db, "RECALL memories ORDER BY salience ASC LIMIT 1")[0];
+    let page = db.page_of(lowest).unwrap();
+    let mut raised = db.storage.load_memory(page).unwrap();
+    raised.salience = 1.0;
+    raised.accessed_at = NOW;
+    db.update_node(page, &raised).unwrap();
+
+    db.warm_publish(loaded, &mut report);
+    assert_eq!((report.cached, report.invalidated), (N - 1, 1));
+    assert!(
+        db.salience_bounds.read().get(&lowest).is_none(),
+        "the pre write copy was cached"
+    );
+
+    let mql = "RECALL memories ORDER BY salience DESC LIMIT 1";
+    assert_eq!(run(&db, mql), vec![lowest]);
+    assert_eq!(run(&db, mql), reference(&db, mql));
+}
+
+#[test]
+fn concurrent_writes_never_leave_a_stale_entry() {
+    const N: usize = 1500;
+    let dir = tempfile::tempdir().unwrap();
+    let db = fresh_db(dir.path(), N);
+    let ids: Vec<MemoryId> = db.page_map.read().keys().copied().collect();
+    // Each round starts cold and races one pass of in place writes against a
+    // warm with large chunks, so many loads land before a write to the same
+    // memory and are published after it.
+    for round in 0..4u32 {
+        db.salience_bounds.write().clear();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                for (i, id) in ids.iter().enumerate().skip(round as usize % 3).step_by(3) {
+                    let page = db.page_of(*id).unwrap();
+                    let mut node = db.storage.load_memory(page).unwrap();
+                    node.salience = ((i as u32 * 7 + round) % 97) as f32 / 100.0;
+                    node.access_count = round + 1;
+                    db.update_node(page, &node).unwrap();
+                }
+            });
+            db.warm_salience_bounds(&warm_config(500, false), &no_cancel)
+                .unwrap();
+        });
+        // Every published entry matches what storage holds now.
+        let cache = db.salience_bounds.read();
+        for (id, slot) in cache.iter() {
+            let crate::salience_topk::BoundSlot::Ready(e) = slot else {
+                panic!("a pending slot outlived its warm");
+            };
+            let node = db.storage.load_memory(db.page_of(*id).unwrap()).unwrap();
+            let want = db.decayed_salience_at(&node, NOW);
+            assert_eq!(
+                db.bound_key(e, NOW),
+                want,
+                "round {round}: stale entry for {id:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_query_during_warming_returns_the_full_path_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = mixed_db(dir.path(), 1200);
+    let queries = [
+        "RECALL memories ORDER BY salience DESC LIMIT 5",
+        "RECALL memories WHERE type = episodic ORDER BY salience DESC LIMIT 17",
+        "RECALL memories WHERE type != correction AND tag = \"even\" ORDER BY salience DESC LIMIT 60",
+    ];
+    let want: Vec<Vec<MemoryId>> = queries.iter().map(|q| reference(&db, q)).collect();
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let mut runs = 0;
+    std::thread::scope(|s| {
+        let warm = s.spawn(|| {
+            let cfg = SalienceWarmConfig {
+                chunk_size: 16,
+                pause: Duration::from_micros(200),
+                persist: false,
+            };
+            let r = db.warm_salience_bounds(&cfg, &no_cancel).unwrap();
+            done.store(true, std::sync::atomic::Ordering::Relaxed);
+            r
+        });
+        while !done.load(std::sync::atomic::Ordering::Relaxed) {
+            for (q, w) in queries.iter().zip(&want) {
+                assert_eq!(&run(&db, q), w, "mid warm: {q}");
+            }
+            runs += 1;
+        }
+        let r = warm.join().unwrap();
+        assert_eq!(r.cached + r.already_cached, 1200);
+        assert!(r.loaded < 1200, "no query cached an entry mid warm");
+    });
+    assert!(runs > 0, "no query overlapped the warm");
+    for (q, w) in queries.iter().zip(&want) {
+        assert_eq!(&run(&db, q), w, "after warm: {q}");
+    }
+}
+
+#[test]
+fn cancelling_stops_after_the_current_chunk_and_writes_nothing() {
+    const N: usize = 1000;
+    const CHUNK: usize = 100;
+    let dir = tempfile::tempdir().unwrap();
+    let db = fresh_db(dir.path(), N);
+    let file = bounds_file(dir.path());
+
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let before = db.storage_memory_loads();
+    // Three chunks run, then the check turns false.
+    let should_continue = || calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 3;
+    let report = db
+        .warm_salience_bounds(&warm_config(CHUNK, true), &should_continue)
+        .unwrap();
+    assert!(report.cancelled);
+    assert!(!report.persisted);
+    assert_eq!((report.loaded, report.cached), (3 * CHUNK, 3 * CHUNK));
+    assert_eq!(db.storage_memory_loads() - before, 3 * CHUNK as u64);
+    assert_eq!(
+        bounds_file(dir.path()),
+        file,
+        "a cancelled warm wrote the cache"
+    );
+    assert!(
+        db.salience_bounds
+            .read()
+            .values()
+            .all(|s| matches!(s, crate::salience_topk::BoundSlot::Ready(_))),
+        "a cancelled warm left a pending slot"
+    );
+
+    // Cancelled before the first chunk: nothing is read.
+    let before = db.storage_memory_loads();
+    let r = db
+        .warm_salience_bounds(&warm_config(CHUNK, true), &|| false)
+        .unwrap();
+    assert!(r.cancelled);
+    assert_eq!((r.loaded, db.storage_memory_loads() - before), (0, 0));
+    assert_eq!(bounds_file(dir.path()), file);
+}
+
+#[test]
+fn quick_close_keeps_the_cache_warm_across_reopen() {
+    const N: usize = 2000;
+    let dir = tempfile::tempdir().unwrap();
+    let mql = "RECALL memories ORDER BY salience DESC LIMIT 5";
+    let want = {
+        let db = fresh_db(dir.path(), N);
+        db.warm_salience_bounds(&warm_config(256, false), &no_cancel)
+            .unwrap();
+        assert!(bounds_file(dir.path()).is_none());
+        let got = run(&db, mql);
+        db.close_quick().unwrap();
+        got
+    };
+    let db = MenteDb::open_with_config(dir.path(), config()).unwrap();
+    let (got, loads) = loads_for(&db, mql);
+    assert_eq!(got, want);
+    assert_eq!(
+        loads, 5,
+        "loaded {loads} of {N} after quick close and reopen"
+    );
+    let r = db
+        .warm_salience_bounds(&warm_config(256, false), &no_cancel)
+        .unwrap();
+    assert_eq!((r.already_cached, r.loaded), (N, 0));
 }

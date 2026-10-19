@@ -245,8 +245,9 @@ maintenance and at shutdown. If you embed the engine as a library:
   checkpoint the storage engine runs once the log grows past 8 MB.
 - Call `close()` (which runs `flush_full()`) on a clean shutdown, so the next
   open loads every snapshot instead of rebuilding from storage.
-  `close_quick()` only checkpoints the log; the next open still finds the
-  data, it just rebuilds the snapshots it skipped.
+  `close_quick()` checkpoints the log and saves only the small salience
+  cache file (below); the next open still finds the data, it just rebuilds
+  the snapshots it skipped.
 
 **Reopen speed.** At every checkpoint the engine persists a map of which page
 holds which memory (`memory_map.bin` in the database directory), stamped with
@@ -270,6 +271,31 @@ only when its memory has not been written since the probe was taken; any other
 probe loads again on first use. A single injection recall loads at most
 `InjectionConfig::mode_probe_load_budget` probes, so a missing probe file
 spreads the reload over several requests instead of one slow one.
+
+**Warming the salience cache.** MQL `ORDER BY salience DESC LIMIT k` loads
+only its top candidates once every memory's decay inputs are cached
+(`salience_bounds.bin`, saved with the snapshots and by `close_quick()`, and
+restored on open for memories not written since). On a cold cache (the first
+open after an upgrade, a lost or stale file) the first such query loads every
+memory to fill it, which on a large account on network storage takes long
+enough to hit a request deadline. Embedders that serve these queries should
+call `MenteDb::warm_salience_bounds` right after open, on a background
+thread:
+
+```rust
+let report = db.warm_salience_bounds(&SalienceWarmConfig::default(), &|| !closing.load(Ordering::Relaxed))?;
+```
+
+It returns at once when the cache is complete, otherwise loads the missing
+entries in chunks (`chunk_size`, optional `pause` between chunks) with no lock
+held across a page load, so stores, recall, queries and maintenance run
+alongside it and a query never waits for it. A write that lands while a
+memory is being warmed wins: the copy loaded before the write is discarded.
+The closure is checked before every chunk; make it return false before you
+close the database or hand it to another owner, and wait for the call to
+return before releasing the directory. A cancelled warm reads no more pages
+and writes nothing; a finished one writes the cache file once (`persist`) so
+a crash before the next snapshot keeps it.
 
 **Stopping the server.** On `SIGTERM` (what Docker, ECS and Kubernetes send
 before killing a task) or Ctrl+C, the server stops accepting connections,
