@@ -28,7 +28,7 @@ bytes = { workspace = true }
 axum = { version = "0.8", features = ["ws"] }
 # Native HTTPS for the REST API (--tls-cert / --tls-key). rustls on the ring
 # provider, the same crypto backend reqwest already uses, so no aws-lc build.
-axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tower = "0.5"
 tower-http = { version = "0.7", features = ["cors", "trace", "compression-gzip"] }
