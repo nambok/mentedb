@@ -659,8 +659,9 @@ impl MenteDb {
             })
             .collect();
 
-        let engine = crate::WriteInferenceEngine::new();
-        let actions = engine.infer_on_write(&target, &existing, &[]);
+        // The configured engine, so the turn path honors the same inference
+        // settings (contradiction policy, belief propagation) as `store`.
+        let actions = self.write_inference.infer_on_write(&target, &existing, &[]);
         let now = now_us();
         let mut applied = 0u32;
 
@@ -728,10 +729,13 @@ impl MenteDb {
                     memory,
                     new_confidence,
                 } => {
-                    if let Ok(mut mem) = self.get_memory(*memory) {
-                        mem.confidence = *new_confidence;
-                        let _ = self.store(mem);
-                        applied += 1;
+                    // Through the durable update path, not a re-store: a
+                    // re-store can be skipped as a paraphrase duplicate and
+                    // re-runs write inference on the loser.
+                    match self.set_memory_confidence(*memory, *new_confidence) {
+                        Ok(true) => applied += 1,
+                        Ok(false) => {}
+                        Err(e) => tracing::warn!("failed to update confidence: {e}"),
                     }
                 }
                 crate::InferredAction::InvalidateMemory {
@@ -756,8 +760,11 @@ impl MenteDb {
                         applied += 1;
                     }
                 }
-                crate::InferredAction::PropagateBeliefChange { .. } => {
-                    applied += 1;
+                crate::InferredAction::PropagateBeliefChange { root, delta } => {
+                    match self.apply_belief_propagation(*root, *delta) {
+                        Ok(_) => applied += 1,
+                        Err(e) => tracing::warn!("failed to propagate belief change: {e}"),
+                    }
                 }
                 crate::InferredAction::DeduplicateExact { duplicate, keeper } => {
                     // Byte-identical re-save: invalidate the duplicate and link it

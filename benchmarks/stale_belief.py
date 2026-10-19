@@ -7,7 +7,7 @@ Scenario:
   Turn 10: What database does the user prefer?
 
 Naive RAG: Returns both, possibly PostgreSQL first (higher similarity to "database")
-MenteDB: Returns SQLite only (belief propagation superseded PostgreSQL)
+MenteDB: Returns SQLite only (supersession hid PostgreSQL)
 
 This test proves the engine handles belief updates correctly WITHOUT an LLM.
 """
@@ -85,7 +85,7 @@ def run_stale_belief_test():
             "Query": "user prefers PostgreSQL SQLite database",
             "SQLite rank": sqlite_rank if sqlite_rank is not None else "NOT FOUND",
             "PostgreSQL rank": pg_rank if pg_rank is not None else "NOT FOUND (superseded)",
-            "Belief propagation": "Working" if pg_superseded else "NOT WORKING",
+            "Supersession": "Working" if pg_superseded else "NOT WORKING",
             "Top results": len(result_contents),
         }
         

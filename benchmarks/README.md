@@ -25,7 +25,7 @@ python benchmarks/run_all.py
 
 ### Stale Belief Test (`stale_belief.py`)
 
-Checks that MenteDB's belief propagation hides a fact once a newer fact
+Checks that MenteDB's supersession hides a fact once a newer fact
 supersedes it. A store without supersession edges has no built in way to do
 this.
 
@@ -170,7 +170,7 @@ compile on that date, so the published wheel was used:
   Query: user prefers PostgreSQL SQLite database
   SQLite rank: 0
   PostgreSQL rank: NOT FOUND (superseded)
-  Belief propagation: Working
+  Supersession: Working
   Top results: 5
   Result 1 (score=0.350): The user has switched to SQLite. They no longer use PostgreSQL and prefer SQLite
   Result 2 (score=0.350): Meeting notes from standup: discussed deployment pipeline.
@@ -236,7 +236,7 @@ exit code is nonzero if any test fails.
 
 ## What These Results Prove
 
-1. **Belief propagation works in the stale belief test.** MenteDB's graph
+1. **Supersession works in the stale belief test.** MenteDB's graph
    edges (`supersedes`, `contradicts`) hide the stale fact from search. A flat
    store has no equivalent mechanism.
 

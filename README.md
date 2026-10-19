@@ -198,7 +198,7 @@ MenteDB solves this with **write time intelligence:**
 3. **Quality Filtering** rejects low confidence extractions before they hit storage
 4. **Deduplication** checks embedding similarity against existing memories
 5. **Contradiction Detection** flags when new information conflicts with existing beliefs
-6. **Belief Propagation** cascades updates when facts change
+6. **Belief Propagation** lowers the confidence of memories that depend on a superseded fact
 
 The result: a clean, curated memory that actually helps the AI perform better.
 
@@ -228,7 +228,7 @@ The result: a clean, curated memory that actually helps the AI perform better.
 - **LLM Powered Cognitive Inference** CognitiveLlmService judges whether new memories invalidate, update, or are compatible with existing ones (supports Anthropic, OpenAI, Ollama, and AWS Bedrock behind the `bedrock` feature)
 - **Bi-Temporal Validity** Memories and edges carry `valid_from`/`valid_until` timestamps. Temporal invalidation instead of deletion. Point-in-time queries via `recall_similar_at(embedding, k, timestamp)` or in MQL with `RECALL ... AS OF <timestamp>`
 - **Attention Optimized Context Assembly** Respects the U curve (critical data at start/end of context)
-- **Belief Propagation** When facts change, downstream beliefs are flagged for re evaluation
+- **Belief Propagation** When a fact is superseded or corrected and its confidence drops, memories that depend on it through `Caused` or `Supports` edges lose a damped share of that drop (bounded depth and fan out, configurable, on by default)
 - **Delta Aware Serving** Only sends what changed since last turn (80 to 91 percent fewer memory retrieval tokens over 20 turns in the bundled benchmarks, see [Token Efficiency](#token-efficiency))
 - **Cognitive Memory Tiers** Working, Episodic, Semantic, Procedural, Archival
 - **Knowledge Graph** CSR/CSC graph with BFS/DFS traversal and contradiction detection
@@ -498,7 +498,7 @@ Every time a memory is stored, the engine finds the 20 most similar existing mem
 | **0.6 – 0.85** | Related | Creates `Related` edge with similarity as weight |
 | **< 0.6** | No action | Memories are independent |
 
-For `Correction` type memories, the engine also halves the confidence of the corrected memory and propagates belief changes through the knowledge graph.
+When a memory is superseded (a value update, an LLM invalidation verdict, or a `Correction`), the engine also halves its confidence and propagates that drop to the memories that depend on it over `Caused` and `Supports` edges, damped per hop (0.9 and 0.5 of the change). `Contradicts` and `Supersedes` edges are not followed by default, so the winning memory is never lowered.
 
 ### Salience Decay (automatic on retrieval)
 

@@ -17,7 +17,9 @@ pub mod manager;
 /// BFS, DFS, shortest path, and subgraph extraction.
 pub mod traversal;
 
-pub use belief::{PropagationConfig, propagate_update, propagate_update_with_config};
+pub use belief::{
+    PropagationConfig, propagate_delta, propagate_update, propagate_update_with_config,
+};
 pub use contradiction::{detect_cycles, find_contradictions, find_superseded};
 pub use csr::{CsrGraph, StoredEdge};
 pub use manager::GraphManager;

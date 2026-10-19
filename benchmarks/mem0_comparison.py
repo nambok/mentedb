@@ -2,7 +2,7 @@
 Mem0 vs MenteDB: Head-to-head comparison.
 
 Runs the stale belief scenario on both Mem0 and MenteDB side by side.
-Proves that graph-based belief propagation outperforms flat vector stores.
+Proves that graph-based supersession outperforms flat vector stores.
 
 Requires: OPENAI_API_KEY or ANTHROPIC_API_KEY (Mem0 needs an LLM for extraction)
 Install: pip install mem0ai
@@ -186,7 +186,7 @@ def run_comparison():
     else:
         if mente_passed and not mem0_passed:
             print("  MenteDB correctly suppressed stale belief. Mem0 did not.")
-            print("  This demonstrates graph-based belief propagation vs flat vector search.")
+            print("  This demonstrates graph-based supersession vs flat vector search.")
         elif mente_passed and mem0_passed:
             print("  Both passed. Mem0 may have updated the memory in-place.")
             print(f"  Speed: MenteDB {mente_ms:.0f}ms vs Mem0 {mem0_ms:.0f}ms")

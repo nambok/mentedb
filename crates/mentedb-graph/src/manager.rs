@@ -10,7 +10,7 @@ use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use crate::belief::propagate_update;
+use crate::belief::{PropagationConfig, propagate_delta, propagate_update};
 use crate::contradiction::find_contradictions;
 use crate::csr::CsrGraph;
 use crate::traversal::extract_subgraph;
@@ -225,6 +225,18 @@ impl GraphManager {
         new_confidence: f32,
     ) -> Vec<(MemoryId, f32)> {
         propagate_update(&self.graph.read(), id, new_confidence)
+    }
+
+    /// The damped confidence changes a change of `delta` at `root` implies for
+    /// the memories that depend on it ([`propagate_delta`]), root excluded.
+    /// Holds the graph read lock only for the in memory walk.
+    pub fn propagate_belief_delta(
+        &self,
+        root: MemoryId,
+        delta: f32,
+        config: &PropagationConfig,
+    ) -> Vec<(MemoryId, f32)> {
+        propagate_delta(&self.graph.read(), root, delta, config)
     }
 
     /// Find all nodes that contradict the given node.

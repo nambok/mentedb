@@ -16,7 +16,7 @@ These features are implemented and shipping today.
 Every memory goes through a quality pipeline before storage. Cosine threshold based contradiction detection, deduplication, and obsolescence checking. Graph edges are created automatically when conflicts or relationships are detected. No LLM required for this path, so its fast, deterministic, and cheap.
 
 ### Belief Propagation
-When a fact changes, confidence cascades through the knowledge graph. Four propagation formulas based on edge type (Caused, Supports, Contradicts, Supersedes). Stale beliefs are suppressed rather than returned. This is why MenteDB returns correct results even when beliefs change over time.
+When a fact is superseded and its confidence drops, the drop cascades to what depends on it: memories linked by Caused or Supports edges lose a damped share of it. Suppressing the stale fact itself is supersession's job (its validity window closes); propagation carries the consequence to the beliefs built on it.
 
 ### Pain Signals
 The system tracks negative experiences. When a similar situation arises, it surfaces warnings: "last time you did X it broke Y." Exponential decay so old pain fades, but recent pain is vivid. This is the embryonic version of gut feelings.

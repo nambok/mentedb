@@ -274,15 +274,50 @@ pulls a neighborhood around a center node. `shortest_path` finds the shortest
 path between two memories using BFS.
 
 **Belief Propagation** (`belief.rs`):
-When a memory's confidence changes, the update propagates through the graph:
+When write inference changes a memory's confidence (today: a memory that is
+superseded by a value update, an LLM invalidation verdict, or a `Correction`
+drops to `confidence_decay_factor` times its old value, floored at
+`confidence_floor`), the change also reaches the memories that depend on it.
+The engine sets the changed memory itself to its new value, then
+`propagate_delta` walks its outgoing edges breadth first and moves each
+dependent by a damped share of the change, relative to that dependent's own
+stored confidence:
 
-- `Caused` edges: propagate with dampening (0.9x per hop)
-- `Supports` edges: propagate a positive boost (0.5x factor)
-- `Contradicts` edges: propagate a negative adjustment (0.7x factor)
-- `Supersedes` edges: floor the superseded memory's confidence (to 0.1)
+- `Caused` edges: the change times the edge weight times `caused_dampening` (0.9)
+- `Supports` edges: the change times the edge weight times `supports_factor` (0.5)
 
-Propagation is bounded by `max_depth` (default 5) to prevent runaway cascades.
-All factors are configurable via `PropagationConfig`.
+So with A Caused B Caused C, a drop of 0.4 at A lowers B by 0.36 and C by
+0.324. Each memory is moved once, by the shortest path that reaches it.
+
+Only the dependency edges are followed by default (`PropagationConfig::edge_types`
+is `[Caused, Supports]`). A confidence drop from a contradiction or
+supersession says the loser is less believable, which is evidence about what
+rests on it, but not about the memories it once contradicted or replaced:
+walking `Contradicts` or `Supersedes` out of the loser would move those on no
+new evidence. The winner is never lowered (the winner's `Supersedes` edge
+points into the loser, so it is not an outgoing edge of the loser).
+`Contradicts` can be opted into the edge set, where it moves the contradicted
+memory the opposite way (`contradicts_factor`, 0.7); `Supersedes` is never
+walked by the delta walk, since a superseded memory is already closed by its
+validity window.
+
+The walk is bounded: `max_depth` hops (default 5), a per memory `min_delta`
+(default 0.01) below which a branch stops, and `max_affected` memories per
+propagation (default 64). It runs under the graph read lock alone and returns
+ids; the engine loads and writes each dependent afterwards through the normal
+durable update path, which also drops that memory's cached mode probe and
+decay inputs.
+
+Knobs: `WriteInferenceConfig::belief_propagation_enabled` (default on) and
+`belief_propagation_min_delta` (default 0.05, the smallest root change that
+propagates) decide when it fires; `CognitiveConfig::belief_propagation` (a
+`PropagationConfig`) decides how it spreads. It runs on both the `store` path
+and the `process_turn` path. Nothing raises confidence yet, so in practice
+propagation only lowers dependents.
+
+The older `propagate_update` (absolute values from an assumed baseline of 1.0,
+all four edge types) is kept as a graph library function; the engine does not
+call it.
 
 **Contradiction Detection** (`contradiction.rs`):
 `find_contradictions` follows direct `Contradicts` edges and also discovers
@@ -398,7 +433,9 @@ existing memories and automatically:
 - Marks obsolete memories (high similarity, newer timestamp, correction type)
 - Creates `Related` edges (similarity between 0.6 and 0.85)
 - Updates confidence (decays superseded memories by 0.5x, floors at 0.1)
-- Triggers belief propagation when confidence changes
+- Emits a belief propagation for that confidence change (when enabled and the
+  change is at least `belief_propagation_min_delta`), which lowers the
+  memories that depend on it over `Caused` and `Supports` edges
 
 All thresholds are configurable via `WriteInferenceConfig`.
 

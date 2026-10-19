@@ -66,7 +66,7 @@ use mentedb_core::memory::MemoryType;
 use mentedb_core::types::{AgentId, MemoryId, Timestamp, UserId};
 use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
 use mentedb_embedding::provider::EmbeddingProvider;
-use mentedb_graph::GraphManager;
+use mentedb_graph::{GraphManager, PropagationConfig};
 use mentedb_index::{FusionConfig, IndexManager};
 use mentedb_query::{Condition, Field, Filter, Mql, Operator, OrderBy, QueryPlan, Value};
 use mentedb_storage::StorageEngine;
@@ -347,8 +347,15 @@ pub struct CognitiveConfig {
     /// Memories carrying any of these tags never fade and are never archived
     /// (pinned memories). Default: `scope:always`.
     pub decay_exempt_tags: Vec<String>,
-    /// Configuration for the write inference engine.
+    /// Configuration for the write inference engine. Its
+    /// `belief_propagation_enabled` and `belief_propagation_min_delta` decide
+    /// when a confidence change is propagated.
     pub inference_config: WriteInferenceConfig,
+    /// How a propagated confidence change spreads: which edge types it walks
+    /// (default `Caused` and `Supports`), the damping per edge type, the
+    /// depth limit, the smallest per memory change, and the most memories one
+    /// change may touch.
+    pub belief_propagation: PropagationConfig,
     /// Configuration for the decay engine.
     pub decay_config: DecayConfig,
     /// Configuration for phantom tracking.
@@ -517,6 +524,7 @@ impl Default for CognitiveConfig {
             archival_evaluation: true,
             decay_exempt_tags: vec!["scope:always".to_string()],
             inference_config: WriteInferenceConfig::default(),
+            belief_propagation: PropagationConfig::default(),
             decay_config: DecayConfig::default(),
             phantom_config: PhantomConfig::default(),
             archival_config: ArchivalConfig::default(),
@@ -2995,6 +3003,58 @@ impl MenteDb {
         }
     }
 
+    /// Set one memory's confidence through the durable update path. Returns
+    /// whether the memory exists (a memory forgotten meanwhile is skipped).
+    pub(crate) fn set_memory_confidence(&self, id: MemoryId, confidence: f32) -> MenteResult<bool> {
+        let Some(pid) = self.page_of(id) else {
+            return Ok(false);
+        };
+        let mut node = self.storage.load_memory(pid)?;
+        node.confidence = confidence.clamp(0.0, 1.0);
+        self.update_node(pid, &node)?;
+        Ok(true)
+    }
+
+    /// Spread a change of `delta` in `root`'s confidence to the memories that
+    /// depend on it, as configured by `CognitiveConfig::belief_propagation`.
+    /// The root itself is not touched: the `UpdateConfidence` that precedes a
+    /// `PropagateBeliefChange` already set it. Returns how many memories
+    /// changed.
+    ///
+    /// The graph walk runs under the graph read lock alone and returns plain
+    /// ids, so neither the graph lock nor the page map lock is held while a
+    /// dependent is loaded or written. Each write goes through `update_node`,
+    /// which also drops the memory's cached mode probe and decay inputs.
+    pub(crate) fn apply_belief_propagation(
+        &self,
+        root: MemoryId,
+        delta: f32,
+    ) -> MenteResult<usize> {
+        let changes = self.graph.propagate_belief_delta(
+            root,
+            delta,
+            &self.cognitive_config.belief_propagation,
+        );
+        let mut changed = 0;
+        for (id, change) in changes {
+            let Some(pid) = self.page_of(id) else {
+                continue;
+            };
+            let mut node = self.storage.load_memory(pid)?;
+            let confidence = (node.confidence + change).clamp(0.0, 1.0);
+            if confidence == node.confidence {
+                continue;
+            }
+            node.confidence = confidence;
+            self.update_node(pid, &node)?;
+            changed += 1;
+        }
+        if changed > 0 {
+            debug!("Belief change at {root} (delta={delta}) moved {changed} dependent memories");
+        }
+        Ok(changed)
+    }
+
     /// Apply a single inferred action from the write inference engine.
     fn apply_inferred_action(&self, action: InferredAction) -> MenteResult<()> {
         match action {
@@ -3128,29 +3188,11 @@ impl MenteDb {
                 new_confidence,
             } => {
                 debug!("Updating confidence for {} to {}", memory, new_confidence);
-                if let Ok(mut node) = self.get_memory(memory) {
-                    node.confidence = new_confidence;
-                    if let Some(pid) = self.page_of(memory) {
-                        self.update_node(pid, &node)?;
-                    }
-                }
+                self.set_memory_confidence(memory, new_confidence)?;
             }
             InferredAction::PropagateBeliefChange { root, delta } => {
                 debug!("Propagating belief change from {} (delta={})", root, delta);
-                if let Ok(node) = self.get_memory(root) {
-                    let new_confidence = (node.confidence + delta).clamp(0.0, 1.0);
-                    let affected = self.graph.propagate_belief_change(root, new_confidence);
-                    for (affected_id, new_conf) in affected {
-                        if let Ok(mut affected_node) = self.get_memory(affected_id) {
-                            affected_node.confidence = new_conf;
-                            if let Some(pid) = self.page_of(affected_id)
-                                && let Err(e) = self.update_node(pid, &affected_node)
-                            {
-                                warn!("Failed to persist belief update for {affected_id}: {e}");
-                            }
-                        }
-                    }
-                }
+                self.apply_belief_propagation(root, delta)?;
             }
             InferredAction::UpdateContent {
                 memory,

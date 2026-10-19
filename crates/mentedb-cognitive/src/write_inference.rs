@@ -48,10 +48,12 @@ pub enum InferredAction {
         memory: MemoryId,
         new_confidence: f32,
     },
-    PropagateBeliefChange {
-        root: MemoryId,
-        delta: f32,
-    },
+    /// Spread a change of `delta` in `root`'s confidence to the memories that
+    /// depend on it (over the graph's dependency edges, damped per hop). The
+    /// root's own confidence is NOT changed by this action: it is always
+    /// emitted right after the `UpdateConfidence` that sets the root, and
+    /// `delta` is that update's new confidence minus the old one.
+    PropagateBeliefChange { root: MemoryId, delta: f32 },
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -154,6 +156,13 @@ pub struct WriteInferenceConfig {
     /// What to do when a new memory contradicts an older one (default:
     /// supersede the older one).
     pub contradiction_policy: ContradictionPolicy,
+    /// Whether a confidence change made by write inference (a superseded or
+    /// corrected memory losing confidence) is also spread to the memories
+    /// that depend on it, as a `PropagateBeliefChange` action (default: true).
+    pub belief_propagation_enabled: bool,
+    /// Smallest absolute confidence change that triggers belief propagation
+    /// (default: 0.05). Smaller changes update only the memory itself.
+    pub belief_propagation_min_delta: f32,
 }
 
 impl Default for WriteInferenceConfig {
@@ -171,6 +180,8 @@ impl Default for WriteInferenceConfig {
             value_update_prefix_share: 0.6,
             value_update_max_tail: 4,
             contradiction_policy: ContradictionPolicy::Supersede,
+            belief_propagation_enabled: true,
+            belief_propagation_min_delta: 0.05,
         }
     }
 }
@@ -432,11 +443,12 @@ impl WriteInferenceEngine {
                     edge_type: EdgeType::Supersedes,
                     weight: 1.0,
                 });
-                actions.push(InferredAction::UpdateConfidence {
-                    memory: original.id,
-                    new_confidence: (original.confidence * self.config.confidence_decay_factor)
-                        .max(self.config.confidence_floor),
-                });
+                self.push_confidence_change(
+                    &mut actions,
+                    original.id,
+                    original.confidence,
+                    self.decayed_confidence(original.confidence),
+                );
             }
         }
 
@@ -578,11 +590,12 @@ impl WriteInferenceEngine {
                     superseded_by: new_memory.id,
                     valid_until: new_memory.created_at,
                 });
-                actions.push(InferredAction::UpdateConfidence {
-                    memory: original.id,
-                    new_confidence: (original.confidence * self.config.confidence_decay_factor)
-                        .max(self.config.confidence_floor),
-                });
+                self.push_confidence_change(
+                    &mut actions,
+                    original.id,
+                    original.confidence,
+                    self.decayed_confidence(original.confidence),
+                );
             }
         }
 
@@ -591,6 +604,40 @@ impl WriteInferenceEngine {
 }
 
 impl WriteInferenceEngine {
+    /// The confidence a superseded or corrected memory drops to.
+    fn decayed_confidence(&self, old: f32) -> f32 {
+        (old * self.config.confidence_decay_factor).max(self.config.confidence_floor)
+    }
+
+    /// Set `memory`'s confidence from `old` to `new`, and, when belief
+    /// propagation is on and the change is at least the configured minimum,
+    /// spread the same change to the memories that depend on it. The
+    /// `UpdateConfidence` alone sets the memory itself; the propagation that
+    /// follows moves only its dependents, so the memory ends at exactly `new`.
+    fn push_confidence_change(
+        &self,
+        actions: &mut Vec<InferredAction>,
+        memory: MemoryId,
+        old: f32,
+        new: f32,
+    ) {
+        actions.push(InferredAction::UpdateConfidence {
+            memory,
+            new_confidence: new,
+        });
+        let delta = new - old;
+        if self.config.belief_propagation_enabled
+            && delta.is_finite()
+            && delta != 0.0
+            && delta.abs() >= self.config.belief_propagation_min_delta
+        {
+            actions.push(InferredAction::PropagateBeliefChange {
+                root: memory,
+                delta,
+            });
+        }
+    }
+
     /// Record a detected contradiction between `existing` and `new` according
     /// to the configured policy: supersede the loser (close it and decay its
     /// confidence) or flag the pair and keep both valid.
@@ -613,11 +660,12 @@ impl WriteInferenceEngine {
                     superseded_by: winner,
                     valid_until,
                 });
-                actions.push(InferredAction::UpdateConfidence {
-                    memory: loser,
-                    new_confidence: (loser_confidence * self.config.confidence_decay_factor)
-                        .max(self.config.confidence_floor),
-                });
+                self.push_confidence_change(
+                    actions,
+                    loser,
+                    loser_confidence,
+                    self.decayed_confidence(loser_confidence),
+                );
             }
             ContradictionPolicy::Flag => {
                 actions.push(InferredAction::FlagContradiction {
@@ -649,6 +697,69 @@ fn memory_to_summary(m: &MemoryNode) -> MemorySummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn confidence_drop_emits_propagation_after_the_update() {
+        let agent = AgentId::new();
+        let mut existing = make_memory(
+            "The user's favorite coffee order is a cortado",
+            vec![1.0, 0.0, 0.0],
+            MemoryType::Semantic,
+        );
+        existing.agent_id = agent;
+        existing.confidence = 0.8;
+        let mut new_mem = make_memory(
+            "The user's favorite coffee order is a flat white",
+            vec![0.98, 0.02, 0.0],
+            MemoryType::Semantic,
+        );
+        new_mem.agent_id = agent;
+        new_mem.created_at = 2000;
+
+        let actions =
+            WriteInferenceEngine::new().infer_on_write(&new_mem, &[existing.clone()], &[]);
+        let update = actions.iter().position(|a| {
+            matches!(a, InferredAction::UpdateConfidence { memory, new_confidence }
+                if *memory == existing.id && (*new_confidence - 0.4).abs() < 1e-6)
+        });
+        let propagate = actions.iter().position(|a| {
+            matches!(a, InferredAction::PropagateBeliefChange { root, delta }
+                if *root == existing.id && (*delta + 0.4).abs() < 1e-6)
+        });
+        assert!(
+            matches!((update, propagate), (Some(u), Some(p)) if p == u + 1),
+            "the drop must be set then propagated, got: {actions:?}"
+        );
+
+        // Disabled, or below the minimum change: the update alone.
+        for cfg in [
+            WriteInferenceConfig {
+                belief_propagation_enabled: false,
+                ..WriteInferenceConfig::default()
+            },
+            WriteInferenceConfig {
+                belief_propagation_min_delta: 0.5,
+                ..WriteInferenceConfig::default()
+            },
+        ] {
+            let actions = WriteInferenceEngine::with_config(cfg).infer_on_write(
+                &new_mem,
+                &[existing.clone()],
+                &[],
+            );
+            assert!(
+                actions
+                    .iter()
+                    .any(|a| matches!(a, InferredAction::UpdateConfidence { .. }))
+            );
+            assert!(
+                !actions
+                    .iter()
+                    .any(|a| matches!(a, InferredAction::PropagateBeliefChange { .. })),
+                "got: {actions:?}"
+            );
+        }
+    }
     use mentedb_core::memory::MemoryType;
     use mentedb_core::types::AgentId;
 
