@@ -720,23 +720,68 @@ fn build_verifier(jwt_secret: &Option<String>) -> Result<Option<auth::TokenVerif
     let audience = env::var("MENTEDB_JWT_AUDIENCE")
         .ok()
         .filter(|s| !s.is_empty());
-    let verifier = match env::var("MENTEDB_JWT_PUBLIC_KEY_FILE")
+    let inline_key = env::var("MENTEDB_JWT_PUBLIC_KEY")
         .ok()
-        .filter(|s| !s.is_empty())
-    {
-        Some(path) => {
-            let pem = std::fs::read(&path)
+        .filter(|s| !s.trim().is_empty());
+    let key_file = env::var("MENTEDB_JWT_PUBLIC_KEY_FILE")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let public_key = inline_key.is_some() || key_file.is_some();
+    let verifier = match (inline_key, key_file) {
+        (Some(_), Some(_)) => {
+            return Err(
+                "set MENTEDB_JWT_PUBLIC_KEY or MENTEDB_JWT_PUBLIC_KEY_FILE, not both".to_string(),
+            );
+        }
+        (Some(text), None) => Some(
+            auth::TokenVerifier::public_key_text(&text)
+                .map_err(|e| format!("MENTEDB_JWT_PUBLIC_KEY: {e}"))?,
+        ),
+        (None, Some(path)) => {
+            let text = std::fs::read_to_string(&path)
                 .map_err(|e| format!("reading MENTEDB_JWT_PUBLIC_KEY_FILE {path}: {e}"))?;
             Some(
-                auth::TokenVerifier::public_key_pem(&pem)
+                auth::TokenVerifier::public_key_text(&text)
                     .map_err(|e| format!("MENTEDB_JWT_PUBLIC_KEY_FILE {path}: {e}"))?,
             )
         }
-        None => jwt_secret
+        (None, None) => jwt_secret
             .as_deref()
             .map(auth::TokenVerifier::shared_secret),
     };
-    Ok(verifier.map(|v| v.with_issuer_audience(issuer, audience)))
+    let policy = token_policy_from(
+        public_key,
+        env::var("MENTEDB_ALLOW_UNSCOPED_TOKENS").ok().as_deref(),
+        env::var("MENTEDB_JWT_DBS_SUB_PATTERN").ok().as_deref(),
+    );
+    Ok(verifier.map(|v| v.with_issuer_audience(issuer, audience).with_policy(policy)))
+}
+
+/// Token rules: with a public key configured (tokens minted elsewhere, often
+/// one per tenant), a token must carry `dbs` unless
+/// `MENTEDB_ALLOW_UNSCOPED_TOKENS` is on; `MENTEDB_JWT_DBS_SUB_PATTERN` binds
+/// `dbs` to the token's `sub`.
+fn token_policy_from(
+    public_key: bool,
+    allow_unscoped: Option<&str>,
+    sub_pattern: Option<&str>,
+) -> auth::TokenPolicy {
+    let allow = allow_unscoped.is_some_and(env_flag);
+    auth::TokenPolicy {
+        require_dbs: public_key && !allow,
+        dbs_sub_pattern: sub_pattern
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(String::from),
+    }
+}
+
+/// `1`, `true`, `yes` or `on`, any case.
+fn env_flag(v: &str) -> bool {
+    matches!(
+        v.trim().to_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 /// Limits for named databases from `MENTEDB_MAX_OPEN_DATABASES` and
@@ -845,6 +890,24 @@ async fn shutdown_signal() {
 mod tests {
     use super::*;
     use mentedb_cognitive::ContradictionPolicy;
+
+    #[test]
+    fn token_policy_requires_dbs_only_with_a_public_key() {
+        assert!(token_policy_from(true, None, None).require_dbs);
+        assert!(!token_policy_from(true, Some("1"), None).require_dbs);
+        assert!(!token_policy_from(false, None, None).require_dbs);
+        assert_eq!(
+            token_policy_from(false, None, Some("tenant.{sub}.*"))
+                .dbs_sub_pattern
+                .as_deref(),
+            Some("tenant.{sub}.*")
+        );
+        assert!(
+            token_policy_from(false, None, Some("  "))
+                .dbs_sub_pattern
+                .is_none()
+        );
+    }
 
     #[test]
     fn contradiction_policy_from_env_value() {
