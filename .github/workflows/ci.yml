@@ -18,19 +18,19 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get install -y protobuf-compiler
-      - run: cargo check --workspace
+      - run: cargo check --locked --workspace
       # The local-embeddings feature (candle, hf-hub) is off by default, so a
       # plain workspace check misses breaks in it, which then only surface in
       # the Docker/wheel build. Check it explicitly.
-      - run: cargo check -p mentedb-embedding --features local
+      - run: cargo check --locked -p mentedb-embedding --features local
       # Same for the optional native Bedrock (Titan) embedding provider.
-      - run: cargo test -p mentedb-embedding --features bedrock
+      - run: cargo test --locked -p mentedb-embedding --features bedrock
       # And the Bedrock LLM provider used for extraction.
-      - run: cargo test -p mentedb-extraction --features bedrock
+      - run: cargo test --locked -p mentedb-extraction --features bedrock
       # The server ships with these features (Dockerfile, release image), so
       # compile it exactly that way; a plain workspace check never does.
-      - run: cargo check -p mentedb-server --features local-embeddings,bedrock
-      - run: cargo test -p mentedb-server --features bedrock
+      - run: cargo check --locked -p mentedb-server --features local-embeddings,bedrock
+      - run: cargo test --locked -p mentedb-server --features bedrock
 
   sdks:
     name: SDKs
@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get install -y protobuf-compiler
-      - run: cargo test --workspace
+      - run: cargo test --locked --workspace
 
   fmt:
     name: Format
@@ -75,4 +75,4 @@ jobs:
         with:
           components: clippy
       - run: sudo apt-get install -y protobuf-compiler
-      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo clippy --locked --workspace -- -D warnings
