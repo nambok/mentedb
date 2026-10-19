@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.0](https://github.com/nambok/mentedb/compare/mentedb-index-v0.39.2...mentedb-index-v0.40.0) - 2026-10-19
+
+### Other
+
+- open from a persisted page map and scan MQL filters through the index ([#478](https://github.com/nambok/mentedb/pull/478))
+- correct README, VISION and CONTRIBUTING claims against main ([#462](https://github.com/nambok/mentedb/pull/462))
+
 ## [0.39.0](https://github.com/nambok/mentedb/compare/mentedb-index-v0.38.0...mentedb-index-v0.39.0) - 2026-10-18
 
 ### Added
