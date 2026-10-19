@@ -426,14 +426,56 @@ mod tests {
         .unwrap()
     }
 
+    /// The allowed set is a stable contract: callers build hierarchical names
+    /// such as `tenant.alice.notes`, and nothing that could leave the data
+    /// directory is ever accepted.
     #[test]
     fn names_are_safe_path_segments() {
-        for ok in ["alice", "team-7", "org_1", "u.123"] {
+        for ok in [
+            "alice",
+            "team-7",
+            "org_1",
+            "u.123",
+            "a.b.c",
+            "tenant.alice.notes",
+            "a..b",
+            &"a".repeat(128),
+        ] {
             assert!(validate_name(ok).is_ok(), "{ok}");
         }
-        for bad in ["", "..", ".hidden", "a/b", "a\\b", "x y", &"a".repeat(129)] {
+        for bad in [
+            "",
+            ".",
+            "..",
+            ".hidden",
+            "a/b",
+            "/abs",
+            "a/../b",
+            "../x",
+            "a\\b",
+            "x y",
+            "a\0b",
+            "caf\u{e9}",
+            &"a".repeat(129),
+        ] {
             assert!(validate_name(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn dotted_names_open_as_one_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dbs = registry(tmp.path(), 4);
+        drop(dbs.get("tenant.alice.notes", false).unwrap());
+        assert!(
+            tmp.path()
+                .join("dbs/tenant.alice.notes/.mentedb-db")
+                .exists()
+        );
+        assert!(
+            !tmp.path().join("dbs/tenant").exists(),
+            "not nested directories"
+        );
     }
 
     #[test]

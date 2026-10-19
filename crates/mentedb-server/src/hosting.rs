@@ -661,29 +661,23 @@ pub async fn consolidate(
 // DELETE /v1/db/{db}
 // ---------------------------------------------------------------------------
 
-/// Whether the request carries the configured admin key.
-fn has_admin_key(headers: &HeaderMap, state: &AppState) -> bool {
-    crate::auth::admin_authorized(headers, &state.admin_key).is_ok()
-}
-
 /// Allow a database maintenance operation (drop, backup) on `name`: the
 /// admin key, an admin token, or a token with the maintenance scope whose
-/// `dbs` names the database. With auth off, everything is allowed.
+/// `dbs` names the database. Without any of these the admin key check's
+/// answer stands (401 with no key, 403 with a wrong one).
 pub fn authorize_maintenance(
     state: &AppState,
     headers: &HeaderMap,
     agent: Option<&AuthenticatedAgent>,
     name: &str,
 ) -> Result<(), ApiError> {
-    if has_admin_key(headers, state) {
+    let key_check = crate::auth::admin_authorized(headers, &state.admin_key);
+    if key_check.is_ok() {
         return Ok(());
     }
     match agent {
         Some(a) => a.authorize_maintenance(name),
-        None if state.verifier.is_none() && state.admin_key.is_none() => Ok(()),
-        None => Err(ApiError::Unauthorized(
-            "send the admin key, or a token with the maintenance scope for this database".into(),
-        )),
+        None => key_check,
     }
 }
 
