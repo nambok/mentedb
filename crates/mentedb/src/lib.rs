@@ -828,15 +828,24 @@ impl MenteDb {
         // so edges created since the last flush survive a crash.
         let graph = GraphManager::open(&graph_dir)?;
 
-        // Rebuild page map by scanning all pages
-        let entries = storage.scan_all_memories();
-        let mut page_map = HashMap::new();
-        for (memory_id, page_id) in &entries {
-            page_map.insert(*memory_id, *page_id);
+        // The page map comes from the persisted memory map rolled forward over
+        // the WAL, which reads only the pages the WAL touched. Without a
+        // usable snapshot storage scans every page once and persists the map.
+        // Entries arrive in page order, so a memory id on two pages resolves
+        // to the later page, as the full scan always did.
+        let mapped = storage.memory_map()?;
+        let mut page_map = HashMap::with_capacity(mapped.len());
+        for m in &mapped {
+            page_map.insert(m.id, m.page);
         }
         if !page_map.is_empty() {
-            info!(memories = page_map.len(), "rebuilt page map from storage");
+            info!(memories = page_map.len(), "loaded page map from storage");
         }
+
+        // Mode probes persisted with the snapshots, kept only where the memory
+        // was not written since (same page, same write stamp), so the first
+        // injection recall after open does not load every mode rule.
+        let mode_probes = Self::load_mode_probes(path, &mapped);
 
         // Every stored memory must be a graph node, even when the graph
         // snapshot/log is missing or behind storage (e.g. after a crash);
@@ -958,7 +967,7 @@ impl MenteDb {
             scope_counts_ready: std::sync::atomic::AtomicBool::new(scope_counts_ready),
             scope_recount: parking_lot::Mutex::new(()),
             page_map: RwLock::new(page_map),
-            mode_probes: RwLock::new(HashMap::new()),
+            mode_probes: RwLock::new(mode_probes),
             flushes_since_snapshot: std::sync::atomic::AtomicU32::new(0),
             stores: std::sync::atomic::AtomicU64::new(0),
             memory_loads: std::sync::atomic::AtomicU64::new(0),
@@ -1888,31 +1897,38 @@ impl MenteDb {
         );
         let contradicts_hides = self.cognitive_config.inference_config.contradiction_policy
             == ContradictionPolicy::Supersede;
+        // Resolve pages and drop superseded hits under the locks, then load
+        // with no lock held, so a writer waiting on either lock (and every
+        // reader queued behind it) is never stuck behind this recall's I/O.
         // Lock order when both are held: `page_map` first, then the graph.
-        let pm = self.page_map.read();
-        let graph = self.graph.graph();
+        let resolved: Vec<(MemoryId, f32, Option<PageId>)> = {
+            let pm = self.page_map.read();
+            let graph = self.graph.graph();
+            results
+                .into_iter()
+                .filter(|(id, _)| {
+                    // Exclude memories that an active Supersedes/Contradicts
+                    // edge has invalidated. Under the Flag contradiction policy
+                    // a Contradicts edge is a hint for the caller, so both
+                    // sides stay recallable and only Supersedes hides a memory.
+                    !graph.incoming(*id).iter().any(|(_, e)| {
+                        (e.edge_type == EdgeType::Supersedes
+                            || (e.edge_type == EdgeType::Contradicts && contradicts_hides))
+                            && e.is_valid_at(at)
+                    })
+                })
+                .map(|(id, raw_score)| (id, raw_score, pm.get(&id).copied()))
+                .collect()
+        };
         // (id, score, content for a reranker, embedding for the MMR pass); the
         // last two are captured only when their stage is active.
         type ScoredCandidate = (MemoryId, f32, Option<String>, Option<Vec<f32>>);
-        let mut scored: Vec<ScoredCandidate> = results
+        let mut scored: Vec<ScoredCandidate> = resolved
             .into_iter()
-            .filter_map(|(id, raw_score)| {
-                // Exclude memories that an active Supersedes/Contradicts edge
-                // has invalidated. Under the Flag contradiction policy a
-                // Contradicts edge is a hint for the caller, so both sides stay
-                // recallable and only Supersedes hides a memory.
-                let incoming = graph.incoming(id);
-                let has_active_supersede = incoming.iter().any(|(_, e)| {
-                    (e.edge_type == EdgeType::Supersedes
-                        || (e.edge_type == EdgeType::Contradicts && contradicts_hides))
-                        && e.is_valid_at(at)
-                });
-                if has_active_supersede {
-                    return None;
-                }
+            .filter_map(|(id, raw_score, page_id)| {
                 // Without a page entry we cannot check validity or decay; keep
                 // the raw score rather than silently dropping the hit.
-                let Some(&page_id) = pm.get(&id) else {
+                let Some(page_id) = page_id else {
                     return Some((id, raw_score, None, None));
                 };
                 let Ok(node) = self.storage.load_memory(page_id) else {
@@ -2105,6 +2121,41 @@ impl MenteDb {
         debug!("Relating {} -> {}", edge.source, edge.target);
         self.graph.add_relationship(&edge)?;
         Ok(())
+    }
+
+    /// Memories loaded from storage since open, whether the page was cached
+    /// or read from disk.
+    pub fn storage_memory_loads(&self) -> u64 {
+        self.storage.memory_loads()
+    }
+
+    /// Pages read from disk since open.
+    pub fn storage_page_reads(&self) -> u64 {
+        self.storage.page_reads()
+    }
+
+    /// Resolve ids to pages under a brief page map read, dropping ids with no
+    /// page. Callers load the pages after the lock is released: a page load
+    /// can take milliseconds on network storage, and a reader holding the
+    /// page map across thousands of them stalls every writer, and with the
+    /// lock's writer preference every later reader too (recall included).
+    fn pages_of<'a>(&self, ids: impl IntoIterator<Item = &'a MemoryId>) -> Vec<(MemoryId, PageId)> {
+        let pm = self.page_map.read();
+        ids.into_iter()
+            .filter_map(|id| pm.get(id).map(|p| (*id, *p)))
+            .collect()
+    }
+
+    /// The page of one memory, with the page map lock already released (an
+    /// `if let` on a guard expression would hold it through the whole block,
+    /// WAL fsync included).
+    fn page_of(&self, id: MemoryId) -> Option<PageId> {
+        self.page_map.read().get(&id).copied()
+    }
+
+    /// Every page in the page map, copied out under a brief read lock.
+    fn all_pages(&self) -> Vec<PageId> {
+        self.page_map.read().values().copied().collect()
     }
 
     /// Retrieves a single memory by its ID.
@@ -2544,16 +2595,22 @@ impl MenteDb {
         memory_type: Option<MemoryType>,
         content_query: Option<&str>,
     ) -> MenteResult<(usize, Vec<MemoryNode>)> {
-        let pm = self.page_map.read();
-        let total = pm.len();
-        let mut ids: Vec<MemoryId> = pm.keys().copied().collect();
-        ids.sort();
+        let (total, window) = {
+            let pm = self.page_map.read();
+            let mut ids: Vec<(MemoryId, PageId)> = pm.iter().map(|(i, p)| (*i, *p)).collect();
+            ids.sort_unstable_by_key(|(i, _)| *i);
+            let window: Vec<PageId> = ids
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .map(|(_, p)| p)
+                .collect();
+            (pm.len(), window)
+        };
         let needle = content_query.map(|q| q.to_lowercase());
         let mut out = Vec::new();
-        for id in ids.into_iter().skip(offset).take(limit) {
-            if let Some(&page_id) = pm.get(&id)
-                && let Ok(node) = self.storage.load_memory(page_id)
-            {
+        for page_id in window {
+            if let Ok(node) = self.storage.load_memory(page_id) {
                 if agent.is_some_and(|a| node.agent_id != a) {
                     continue;
                 }
@@ -2575,7 +2632,7 @@ impl MenteDb {
     pub fn forget(&self, id: MemoryId) -> MenteResult<()> {
         debug!("Forgetting memory {}", id);
 
-        if let Some(&page_id) = self.page_map.read().get(&id) {
+        if let Some(page_id) = self.page_of(id) {
             if let Ok(node) = self.storage.load_memory(page_id) {
                 self.index.remove_memory(id, &node);
                 if self
@@ -2761,16 +2818,16 @@ impl MenteDb {
         }
 
         // Load the actual MemoryNode data for each candidate.
-        let pm = self.page_map.read();
-        let existing: Vec<MemoryNode> = candidates
-            .iter()
-            .filter(|(id, _)| *id != new_memory.id)
-            .filter_map(|(id, _)| {
-                pm.get(id)
-                    .and_then(|&pid| self.storage.load_memory(pid).ok())
-            })
+        let pages = self.pages_of(
+            candidates
+                .iter()
+                .map(|(id, _)| id)
+                .filter(|id| **id != new_memory.id),
+        );
+        let existing: Vec<MemoryNode> = pages
+            .into_iter()
+            .filter_map(|(_, pid)| self.storage.load_memory(pid).ok())
             .collect();
-        drop(pm);
 
         if existing.is_empty() {
             return;
@@ -2929,7 +2986,7 @@ impl MenteDb {
                 debug!("Updating confidence for {} to {}", memory, new_confidence);
                 if let Ok(mut node) = self.get_memory(memory) {
                     node.confidence = new_confidence;
-                    if let Some(&pid) = self.page_map.read().get(&memory) {
+                    if let Some(pid) = self.page_of(memory) {
                         self.update_node(pid, &node)?;
                     }
                 }
@@ -2942,7 +2999,7 @@ impl MenteDb {
                     for (affected_id, new_conf) in affected {
                         if let Ok(mut affected_node) = self.get_memory(affected_id) {
                             affected_node.confidence = new_conf;
-                            if let Some(&pid) = self.page_map.read().get(&affected_id)
+                            if let Some(pid) = self.page_of(affected_id)
                                 && let Err(e) = self.update_node(pid, &affected_node)
                             {
                                 warn!("Failed to persist belief update for {affected_id}: {e}");
@@ -2959,7 +3016,7 @@ impl MenteDb {
                 debug!("Updating content of {}: {}", memory, reason);
                 if let Ok(mut node) = self.get_memory(memory) {
                     node.content = new_content;
-                    if let Some(&pid) = self.page_map.read().get(&memory) {
+                    if let Some(pid) = self.page_of(memory) {
                         self.update_node(pid, &node)?;
                     }
                     self.index.remove_memory(memory, &node);
@@ -3166,14 +3223,15 @@ impl MenteDb {
             .unwrap_or_default()
             .as_micros() as u64;
 
-        // Load all memories eligible for consolidation.
-        let pm = self.page_map.read();
-        let eligible: Vec<MemoryNode> = pm
-            .values()
-            .filter_map(|pid| self.storage.load_memory(*pid).ok())
+        // Load all memories eligible for consolidation. The page ids are copied
+        // out first: this visits every memory, which on a large database on
+        // network storage takes minutes, and must not hold the page map.
+        let eligible: Vec<MemoryNode> = self
+            .all_pages()
+            .into_iter()
+            .filter_map(|pid| self.storage.load_memory(pid).ok())
             .filter(|node| ConsolidationEngine::should_consolidate(node, now))
             .collect();
-        drop(pm);
 
         if eligible.is_empty() {
             return Ok(vec![]);
@@ -3189,15 +3247,11 @@ impl MenteDb {
     /// The source memories are invalidated (not deleted) and a new consolidated
     /// semantic memory is stored with Derived edges back to the sources.
     pub fn consolidate_cluster(&self, memory_ids: &[MemoryId]) -> MenteResult<MemoryId> {
-        let pm = self.page_map.read();
-        let cluster: Vec<MemoryNode> = memory_ids
-            .iter()
-            .filter_map(|id| {
-                pm.get(id)
-                    .and_then(|&pid| self.storage.load_memory(pid).ok())
-            })
+        let cluster: Vec<MemoryNode> = self
+            .pages_of(memory_ids)
+            .into_iter()
+            .filter_map(|(_, pid)| self.storage.load_memory(pid).ok())
             .collect();
-        drop(pm);
 
         if cluster.len() < 2 {
             return Err(MenteError::Query(
@@ -3351,6 +3405,10 @@ impl MenteDb {
     fn write_snapshots(&self) -> MenteResult<()> {
         self.index.save(&self.path.join("indexes"))?;
         self.graph.save(&self.path.join("graph"))?;
+        // Derived cache: a failure only costs probe loads after the next open.
+        if let Err(e) = self.save_mode_probes() {
+            warn!(error = %e, "mode probe snapshot write failed");
+        }
 
         // Persist the dashboard scope counts so a cold reopen loads them in O(1)
         // instead of recounting every memory. Only once they have been grounded;
@@ -3470,13 +3528,11 @@ impl MenteDb {
                 let k = limit.unwrap_or(20);
                 let mut scored = if tags.is_empty() {
                     // No tag constraint: a bare RECALL, or a metadata-only filter
-                    // like `WHERE type = semantic`. Full-scan and let the filters
-                    // below narrow it, instead of returning nothing.
-                    let pm = self.page_map.read();
-                    pm.values()
-                        .filter_map(|&pid| self.storage.load_memory(pid).ok())
-                        .map(|memory| ScoredMemory { memory, score: 1.0 })
-                        .collect::<Vec<_>>()
+                    // like `WHERE type = semantic`. Narrow by the browse index
+                    // where the filters allow, and without an ORDER BY stop
+                    // loading once k memories match.
+                    let stop_at = if order_by.is_none() { Some(k) } else { None };
+                    self.scan_matching(filters, condition.as_ref(), stop_at)
                 } else {
                     let tag_refs: Vec<&str> = tags.iter().map(|s| s.as_str()).collect();
                     // Zero-vector for tag-only search; salience+bitmap still apply.
@@ -3520,15 +3576,13 @@ impl MenteDb {
             }
             QueryPlan::GraphTraversal { start, depth, .. } => {
                 let (ids, _edges) = self.graph.get_context_subgraph(*start, *depth);
-                let pm = self.page_map.read();
-                let scored: Vec<ScoredMemory> = ids
-                    .iter()
-                    .filter_map(|id| {
-                        pm.get(id).and_then(|&pid| {
-                            self.storage.load_memory(pid).ok().map(|node| ScoredMemory {
-                                memory: node,
-                                score: 1.0,
-                            })
+                let scored: Vec<ScoredMemory> = self
+                    .pages_of(&ids)
+                    .into_iter()
+                    .filter_map(|(_, pid)| {
+                        self.storage.load_memory(pid).ok().map(|node| ScoredMemory {
+                            memory: node,
+                            score: 1.0,
                         })
                     })
                     .collect();
@@ -3549,6 +3603,97 @@ impl MenteDb {
             }
             _ => Ok(vec![]),
         }
+    }
+
+    /// Memories matching the WHERE clause of a tag-less scan, in page order.
+    ///
+    /// Equality filters on memory type and tag (`type = x`, `tag = "y"`, and
+    /// `IN` lists of either) are answered from the bitmap index, including the
+    /// reserved type keys, so only candidate pages are loaded; every filter is
+    /// still re-checked on the loaded memory, so the index only narrows. A
+    /// clause with nothing indexable (or an OR/NOT tree) visits every memory.
+    /// With `stop_at` the scan ends as soon as that many memories match.
+    ///
+    /// Page ids are copied out of the page map before any load, so writers
+    /// (which take the page map for writing) never wait on this scan.
+    fn scan_matching(
+        &self,
+        filters: &[Filter],
+        condition: Option<&Condition>,
+        stop_at: Option<usize>,
+    ) -> Vec<ScoredMemory> {
+        let candidates = if condition.is_none() {
+            self.indexed_candidates(filters)
+        } else {
+            None
+        };
+        let mut pages: Vec<PageId> = {
+            let pm = self.page_map.read();
+            match &candidates {
+                Some(ids) => ids.iter().filter_map(|id| pm.get(id).copied()).collect(),
+                None => pm.values().copied().collect(),
+            }
+        };
+        pages.sort_unstable_by_key(|p| p.0);
+
+        let mut out = Vec::new();
+        for pid in pages {
+            if stop_at.is_some_and(|cap| out.len() >= cap) {
+                break;
+            }
+            let Ok(memory) = self.storage.load_memory(pid) else {
+                continue;
+            };
+            let keep = match condition {
+                Some(cond) => Self::condition_matches(cond, &memory),
+                None => filters.iter().all(|f| Self::filter_matches(f, &memory)),
+            };
+            if keep {
+                out.push(ScoredMemory { memory, score: 1.0 });
+            }
+        }
+        out
+    }
+
+    /// The ids the bitmap index admits for the AND of `filters`, or None when
+    /// no filter is answerable from it. Only filters `filter_matches` treats
+    /// as membership tests qualify: type or tag compared with any operator but
+    /// `!=` (which `filter_matches` also reads as equality), or an `IN` list
+    /// whose every element is a type (for type) or text (for tag). Anything
+    /// else is left to the post-load check.
+    fn indexed_candidates(
+        &self,
+        filters: &[Filter],
+    ) -> Option<std::collections::HashSet<MemoryId>> {
+        fn key(field: Field, v: &Value) -> Option<String> {
+            match (field, v) {
+                (Field::Type, Value::MemoryType(t)) => {
+                    Some(mentedb_index::manager::type_index_key(*t))
+                }
+                (Field::Tag, Value::Text(t)) => Some(t.clone()),
+                _ => None,
+            }
+        }
+        let mut acc: Option<std::collections::HashSet<MemoryId>> = None;
+        for f in filters {
+            let keys: Option<Vec<String>> = match &f.value {
+                // IN (and any operator over a list) matches any element.
+                Value::List(items) => items.iter().map(|v| key(f.field, v)).collect(),
+                v if f.op != Operator::Neq => key(f.field, v).map(|k| vec![k]),
+                _ => None,
+            };
+            let Some(keys) = keys else {
+                continue;
+            };
+            let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+            let ids: std::collections::HashSet<MemoryId> =
+                self.index.bitmap.query_tags_or(&refs).into_iter().collect();
+            acc = Some(match acc {
+                Some(prev) => prev.intersection(&ids).copied().collect(),
+                None => ids,
+            });
+        }
+        acc
     }
 
     /// Memory ids that an entity named in the query links to. Tokenizes the query,
@@ -3712,7 +3857,10 @@ impl MenteDb {
     /// When decay is enabled, salience is recomputed and factored into the
     /// final score to prioritize temporally relevant memories.
     fn load_scored_memories(&self, hits: &[(MemoryId, f32)]) -> MenteResult<Vec<ScoredMemory>> {
-        let pm = self.page_map.read();
+        let pages: HashMap<MemoryId, PageId> = self
+            .pages_of(hits.iter().map(|(id, _)| id))
+            .into_iter()
+            .collect();
         let now = if self.cognitive_config.decay_on_recall {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -3724,7 +3872,7 @@ impl MenteDb {
 
         let mut scored = Vec::with_capacity(hits.len());
         for &(id, score) in hits {
-            if let Some(&page_id) = pm.get(&id)
+            if let Some(&page_id) = pages.get(&id)
                 && let Ok(node) = self.storage.load_memory(page_id)
             {
                 let final_score = if self.cognitive_config.decay_on_recall {
@@ -4185,12 +4333,14 @@ impl MenteDb {
     /// Returns decisions for each memory. Does NOT apply them — call
     /// `invalidate_memory` or `forget` to act on the decisions.
     pub fn evaluate_archival_global(&self) -> MenteResult<Vec<(MemoryId, ArchivalDecision)>> {
-        let pm = self.page_map.read();
-        let memories: Vec<MemoryNode> = pm
-            .values()
-            .filter_map(|pid| self.storage.load_memory(*pid).ok())
+        // Copy the page ids out first: this loads every memory, minutes on a
+        // large database on network storage, and holding the page map that
+        // long blocked every store and, queued behind them, every recall.
+        let memories: Vec<MemoryNode> = self
+            .all_pages()
+            .into_iter()
+            .filter_map(|pid| self.storage.load_memory(pid).ok())
             .collect();
-        drop(pm);
         // Delegate so decisions use each memory's salience decayed to now, not
         // its stored base (see evaluate_archival_batch).
         Ok(self.evaluate_archival_batch(&memories))
@@ -5931,3 +6081,6 @@ mod reranker_integration_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod scan_tests;

@@ -45,6 +45,8 @@ pub mod buffer;
 pub mod engine;
 /// Cross-host single-writer lock (fcntl OFD locks on Linux/EFS).
 mod lock;
+/// Persisted memory id to page id map, replayed forward from the WAL on open.
+pub mod memory_map;
 /// File backed 64KB page manager with free list allocation.
 pub mod page;
 /// Append only write ahead log with CRC checks and LZ4 compression.
@@ -53,5 +55,6 @@ pub mod wal;
 // Re-export key types at crate root for convenience.
 pub use buffer::{BufferPool, BufferStats};
 pub use engine::StorageEngine;
+pub use memory_map::MappedMemory;
 pub use page::{PAGE_DATA_SIZE, PAGE_SIZE, Page, PageHeader, PageId, PageType};
 pub use wal::{Lsn, Wal, WalEntry, WalEntryType};

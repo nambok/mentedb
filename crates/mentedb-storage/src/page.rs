@@ -146,6 +146,8 @@ pub struct PageManager {
     file: File,
     page_count: u64,
     free_list_head: u64,
+    /// Pages read from disk since open (metrics and tests).
+    reads: u64,
 }
 
 impl PageManager {
@@ -185,12 +187,14 @@ impl PageManager {
                 file,
                 page_count: hdr.page_count,
                 free_list_head: hdr.free_list_head,
+                reads: 0,
             })
         } else {
             let mut pm = Self {
                 file,
                 page_count: 1,
                 free_list_head: 0,
+                reads: 0,
             };
             // Write header page (page 0) — reserves first PAGE_SIZE bytes.
             let mut header_page = Page::zeroed();
@@ -279,6 +283,7 @@ impl PageManager {
         let mut buf = [0u8; PAGE_SIZE];
         self.file.seek(SeekFrom::Start(offset))?;
         self.file.read_exact(&mut buf)?;
+        self.reads += 1;
 
         let page = Page::from_bytes(&buf);
         if page.header.checksum != 0 {
@@ -350,6 +355,43 @@ impl PageManager {
             debug!(freed, head, "rebuilt free list from page types");
         }
         Ok(())
+    }
+
+    /// Rebuild the free list from a known set of free pages instead of
+    /// scanning every page. Every listed page is read first and must be typed
+    /// Free; if any is not, nothing is written and false is returned so the
+    /// caller falls back to [`Self::rebuild_free_list`]. A Data page must never
+    /// be put on the free list, since the next allocation would overwrite it.
+    pub fn rebuild_free_list_from(
+        &mut self,
+        pages: &std::collections::BTreeSet<u64>,
+    ) -> MenteResult<bool> {
+        for &i in pages {
+            if i == 0 || i >= self.page_count {
+                return Ok(false);
+            }
+            let page = self.read_page(PageId(i))?;
+            if PageType::from(page.header.page_type) != PageType::Free {
+                return Ok(false);
+            }
+        }
+        let mut head = 0u64;
+        for &i in pages.iter().rev() {
+            let mut fresh = Page::zeroed();
+            fresh.header.page_id = i;
+            fresh.header.page_type = PageType::Free as u8;
+            fresh.data[..8].copy_from_slice(&head.to_le_bytes());
+            self.write_page_raw(PageId(i), &fresh)?;
+            head = i;
+        }
+        self.free_list_head = head;
+        self.write_file_header()?;
+        Ok(true)
+    }
+
+    /// Pages read from disk since this manager was opened.
+    pub fn reads(&self) -> u64 {
+        self.reads
     }
 
     /// Total number of pages (including the header page).

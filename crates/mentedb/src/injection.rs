@@ -28,6 +28,7 @@ use std::collections::{HashMap, HashSet};
 use mentedb_core::error::MenteResult;
 use mentedb_core::memory::{AttributeValue, MemoryNode, MemoryType};
 use mentedb_core::types::{AgentId, MemoryId, UserId};
+use mentedb_storage::PageId;
 
 use crate::MenteDb;
 
@@ -134,6 +135,13 @@ pub struct InjectionConfig {
     pub mode_trigger_gate: f32,
     /// Maximum mode rules injected per turn across all active triggers.
     pub mode_rules_max: usize,
+    /// Most mode probes one injection recall may load from storage on cache
+    /// misses. Probes persist across reopen, so a miss is normally a rule
+    /// written since the last snapshot; this caps the cost when the persisted
+    /// probes are missing (first open after an upgrade, a deleted file), where
+    /// a large rule set would otherwise load every rule inside one request.
+    /// Rules past the cap are skipped for that request and load on later ones.
+    pub mode_probe_load_budget: usize,
 }
 
 impl Default for InjectionConfig {
@@ -162,6 +170,7 @@ impl Default for InjectionConfig {
             graph_expansion_decay: 0.5,
             mode_trigger_gate: 0.40,
             mode_rules_max: 4,
+            mode_probe_load_budget: 256,
         }
     }
 }
@@ -847,16 +856,23 @@ pub(crate) struct ModeProbe {
     pub(crate) user_id: UserId,
     valid_from: Option<u64>,
     valid_until: Option<u64>,
+    /// The memory's page and storage write stamp, read BEFORE the memory was
+    /// loaded. The probe may be newer than the stamp, never older, so a
+    /// reopen that finds the same page and stamp knows no write landed on the
+    /// memory since and can trust the probe without loading it. None when
+    /// storage had no stamp (the probe is then never persisted).
+    stamp: Option<(PageId, u64)>,
 }
 
 impl ModeProbe {
-    fn from_node(node: &MemoryNode) -> Self {
+    fn from_node(node: &MemoryNode, stamp: Option<(PageId, u64)>) -> Self {
         Self {
             embedding: node.embedding.clone(),
             agent_id: node.agent_id,
             user_id: node.user_id,
             valid_from: node.valid_from,
             valid_until: node.valid_until,
+            stamp,
         }
     }
 
@@ -880,6 +896,19 @@ impl MenteDb {
         id: MemoryId,
         loads: &mut usize,
     ) -> Option<std::sync::Arc<ModeProbe>> {
+        if let Some(ProbeSlot::Ready(p)) = self.mode_probes.read().get(&id) {
+            return Some(std::sync::Arc::clone(p));
+        }
+        // Past the per request budget a miss is skipped, not loaded: it loads
+        // on a later request, so one request never pays for every rule.
+        if *loads
+            >= self
+                .cognitive_config
+                .injection_config
+                .mode_probe_load_budget
+        {
+            return None;
+        }
         let token = {
             let mut cache = self.mode_probes.write();
             match cache.get(&id) {
@@ -893,10 +922,21 @@ impl MenteDb {
             }
         };
         *loads += 1;
-        let loaded = self
-            .get_memory(id)
-            .ok()
-            .map(|n| std::sync::Arc::new(ModeProbe::from_node(&n)));
+        // Stamp first, then load: see `ModeProbe::stamp`.
+        let loaded = self.page_of(id).and_then(|page| {
+            let stamp = self
+                .storage
+                .memory_stamp(page)
+                .filter(|(sid, _)| *sid == id)
+                .map(|(_, s)| (page, s));
+            self.memory_loads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.storage
+                .load_memory(page)
+                .ok()
+                .filter(|n| n.id == id)
+                .map(|n| std::sync::Arc::new(ModeProbe::from_node(&n, stamp)))
+        });
         if let Some(token) = token {
             let mut cache = self.mode_probes.write();
             if matches!(cache.get(&id), Some(ProbeSlot::Loading(t)) if *t == token) {
@@ -921,6 +961,168 @@ pub(crate) enum ProbeSlot {
 }
 
 static NEXT_PROBE_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// File (in the database directory) holding the persisted mode probes.
+pub(crate) const MODE_PROBES_FILE: &str = "mode_probes.bin";
+const PROBES_MAGIC: &[u8; 8] = b"MDBPROB1";
+
+fn put_u64(buf: &mut Vec<u8>, v: u64) {
+    buf.extend_from_slice(&v.to_le_bytes());
+}
+
+fn put_opt(buf: &mut Vec<u8>, v: Option<u64>) {
+    buf.push(u8::from(v.is_some()));
+    put_u64(buf, v.unwrap_or(0));
+}
+
+struct ProbeReader<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
+
+impl ProbeReader<'_> {
+    fn take(&mut self, n: usize) -> Option<&[u8]> {
+        let end = self.pos.checked_add(n).filter(|&e| e <= self.buf.len())?;
+        let s = &self.buf[self.pos..end];
+        self.pos = end;
+        Some(s)
+    }
+    fn u64(&mut self) -> Option<u64> {
+        Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
+    }
+    fn uuid(&mut self) -> Option<uuid::Uuid> {
+        uuid::Uuid::from_slice(self.take(16)?).ok()
+    }
+    fn opt(&mut self) -> Option<Option<u64>> {
+        let flag = self.take(1)?[0];
+        let v = self.u64()?;
+        Some((flag == 1).then_some(v))
+    }
+}
+
+/// Encode stamped probes: magic, count, records, CRC32 of everything before.
+fn encode_probes(probes: &[(MemoryId, std::sync::Arc<ModeProbe>)]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(PROBES_MAGIC);
+    let stamped: Vec<_> = probes
+        .iter()
+        .filter_map(|(id, p)| p.stamp.map(|s| (id, p, s)))
+        .collect();
+    put_u64(&mut buf, stamped.len() as u64);
+    for (id, p, (page, stamp)) in stamped {
+        buf.extend_from_slice(id.0.as_bytes());
+        put_u64(&mut buf, page.0);
+        put_u64(&mut buf, stamp);
+        buf.extend_from_slice(p.agent_id.0.as_bytes());
+        buf.extend_from_slice(p.user_id.0.as_bytes());
+        put_opt(&mut buf, p.valid_from);
+        put_opt(&mut buf, p.valid_until);
+        put_u64(&mut buf, p.embedding.len() as u64);
+        for x in &p.embedding {
+            buf.extend_from_slice(&x.to_le_bytes());
+        }
+    }
+    let crc = crc32fast::hash(&buf);
+    buf.extend_from_slice(&crc.to_le_bytes());
+    buf
+}
+
+/// Decode a probe file; None when it is malformed in any way.
+fn decode_probes(bytes: &[u8]) -> Option<Vec<(MemoryId, ModeProbe)>> {
+    let (body, crc) = bytes.split_at(bytes.len().checked_sub(4)?);
+    if crc32fast::hash(body) != u32::from_le_bytes(crc.try_into().ok()?) {
+        return None;
+    }
+    let mut r = ProbeReader { buf: body, pos: 0 };
+    if r.take(8)? != PROBES_MAGIC {
+        return None;
+    }
+    let n = r.u64()?;
+    let mut out = Vec::new();
+    for _ in 0..n {
+        let id = MemoryId(r.uuid()?);
+        let page = PageId(r.u64()?);
+        let stamp = r.u64()?;
+        let agent_id = AgentId(r.uuid()?);
+        let user_id = UserId(r.uuid()?);
+        let valid_from = r.opt()?;
+        let valid_until = r.opt()?;
+        let dim = usize::try_from(r.u64()?).ok()?;
+        let raw = r.take(dim.checked_mul(4)?)?;
+        let embedding = raw
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
+            .collect();
+        out.push((
+            id,
+            ModeProbe {
+                embedding,
+                agent_id,
+                user_id,
+                valid_from,
+                valid_until,
+                stamp: Some((page, stamp)),
+            },
+        ));
+    }
+    (r.pos == body.len()).then_some(out)
+}
+
+impl MenteDb {
+    /// Persist the ready mode probes, each with the page and write stamp it
+    /// was loaded at, so a reopen restores them without loading the rules.
+    /// Atomic (temp file, fsync, rename).
+    pub(crate) fn save_mode_probes(&self) -> MenteResult<()> {
+        let ready: Vec<(MemoryId, std::sync::Arc<ModeProbe>)> = self
+            .mode_probes
+            .read()
+            .iter()
+            .filter_map(|(id, slot)| match slot {
+                ProbeSlot::Ready(p) => Some((*id, std::sync::Arc::clone(p))),
+                ProbeSlot::Loading(_) => None,
+            })
+            .collect();
+        let bytes = encode_probes(&ready);
+        let path = self.path.join(MODE_PROBES_FILE);
+        let tmp = self.path.join(format!("{MODE_PROBES_FILE}.tmp"));
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(&bytes)?;
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+
+    /// The persisted probes still current for `mapped` (the memory map just
+    /// loaded on open): a probe is restored only when its memory is on the
+    /// same page with the same write stamp, i.e. nothing wrote the memory
+    /// since the probe was loaded. Anything else is dropped and loads on use.
+    pub(crate) fn load_mode_probes(
+        dir: &std::path::Path,
+        mapped: &[mentedb_storage::MappedMemory],
+    ) -> HashMap<MemoryId, ProbeSlot> {
+        let mut out = HashMap::new();
+        let Ok(bytes) = std::fs::read(dir.join(MODE_PROBES_FILE)) else {
+            return out;
+        };
+        let Some(probes) = decode_probes(&bytes) else {
+            tracing::warn!("mode probe snapshot unreadable, probes will load on use");
+            return out;
+        };
+        let current: HashMap<MemoryId, (PageId, u64)> =
+            mapped.iter().map(|m| (m.id, (m.page, m.stamp))).collect();
+        for (id, probe) in probes {
+            if probe.stamp.is_some() && current.get(&id).copied() == probe.stamp {
+                out.insert(id, ProbeSlot::Ready(std::sync::Arc::new(probe)));
+            }
+        }
+        out
+    }
+}
 
 #[cfg(test)]
 mod tests {

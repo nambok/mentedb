@@ -2285,6 +2285,7 @@ dependencies = [
 name = "mentedb"
 version = "0.39.2"
 dependencies = [
+ "crc32fast",
  "criterion",
  "mentedb-cognitive",
  "mentedb-consolidation",
