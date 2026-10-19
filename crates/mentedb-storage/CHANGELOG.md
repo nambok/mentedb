@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.1](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.41.0...mentedb-storage-v0.41.1) - 2026-10-19
+
+### Fixed
+
+- MQL salience filters and sorts on the current decayed value ([#484](https://github.com/nambok/mentedb/pull/484))
+
 ## [0.41.0](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.40.0...mentedb-storage-v0.41.0) - 2026-10-19
 
 ### Added
