@@ -28,8 +28,14 @@ pub enum DistanceMetric {
 }
 
 /// Compute distance between two vectors, dispatching to SIMD when available.
+///
+/// Vectors of different dimensions (an index mid way through an embedder
+/// change) have no meaningful distance, so they are treated as infinitely far
+/// apart and never become neighbours or results of each other.
 fn compute_distance(a: &[f32], b: &[f32], metric: DistanceMetric) -> f32 {
-    debug_assert_eq!(a.len(), b.len());
+    if a.len() != b.len() {
+        return f32::MAX;
+    }
     match metric {
         DistanceMetric::Cosine => cosine_distance(a, b),
         DistanceMetric::Euclidean => euclidean_distance(a, b),
@@ -462,13 +468,57 @@ impl HnswIndex {
     }
 
     /// Insert a vector with the given MemoryId.
+    ///
+    /// Inserting an id that is already live in the index is an error, because
+    /// silently keeping either vector would hide a caller bug. Use
+    /// [`Self::upsert`] to replace the vector of a live id on purpose.
+    ///
+    /// Inserting an id that was removed earlier is allowed: the id gets a
+    /// fresh node with the new vector and new neighbour links, and the old
+    /// tombstoned node stays in the graph only as a routing hop, never as a
+    /// result. Before this, a removed id stayed mapped to its tombstone, so
+    /// storing it again failed with a duplicate id error and the memory was
+    /// never found by vector search again.
     pub fn insert(&self, id: MemoryId, vector: &[f32]) -> MenteResult<()> {
         let mut inner = self.inner.write();
 
-        if inner.id_to_idx.contains_key(&id) {
+        if let Some(idx) = inner.id_to_idx.get(&id)
+            && !inner.deleted.contains(idx)
+        {
             return Err(MenteError::Index(format!("duplicate id: {id}")));
         }
 
+        Self::insert_node(&mut inner, id, vector);
+        Ok(())
+    }
+
+    /// Insert a vector, replacing the current vector when the id is already
+    /// live.
+    ///
+    /// This is the explicit update form of [`Self::insert`]: a live id is
+    /// tombstoned and the new vector is linked in as a fresh node, all under
+    /// one write lock, so concurrent updates of the same id never observe a
+    /// gap or race into a duplicate id error. When the live vector already
+    /// equals `vector`, nothing changes, so re indexing an unchanged memory
+    /// does not grow the graph.
+    pub fn upsert(&self, id: MemoryId, vector: &[f32]) {
+        let mut inner = self.inner.write();
+
+        if let Some(&idx) = inner.id_to_idx.get(&id)
+            && !inner.deleted.contains(&idx)
+        {
+            if inner.nodes[idx].vector == vector {
+                return;
+            }
+            inner.deleted.insert(idx);
+        }
+
+        Self::insert_node(&mut inner, id, vector);
+    }
+
+    /// Link a new node for `id` into the graph and point the id at it. The
+    /// caller has already checked that `id` is not live.
+    fn insert_node(inner: &mut HnswInner, id: MemoryId, vector: &[f32]) {
         let node_level = random_level(inner.level_mult, inner.m);
         let node_idx = inner.nodes.len();
 
@@ -488,20 +538,64 @@ impl HnswIndex {
         if inner.entry_point.is_none() {
             inner.entry_point = Some(node_idx);
             inner.max_level = node_level;
-            return Ok(());
+            return;
         }
 
-        let ep = inner.entry_point.unwrap();
+        let Some(ep) = inner.entry_point else {
+            return;
+        };
         let metric = inner.metric;
         let ef_construction = inner.ef_construction;
         let m = inner.m;
         let m_max0 = inner.m_max0;
 
-        // Greedily descend from max_level to node_level+1
-        let mut current_ep = ep;
+        // Where to start the descent. Normally the entry point, but a vector
+        // whose dimension differs from the entry point's (re embedding after
+        // an embedder change) cannot be routed through it, so start from the
+        // highest live node of the same dimension instead. With none, the
+        // node starts its own graph and search reaches it by a scan, see
+        // `search`.
+        let ep_matches = inner.nodes[ep].vector.len() == vector.len();
+        let same_dim_start = if ep_matches {
+            None
+        } else {
+            inner
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(i, n)| {
+                    *i != node_idx && n.vector.len() == vector.len() && !inner.deleted.contains(i)
+                })
+                .max_by_key(|(_, n)| n.layers.len())
+                .map(|(i, n)| (i, n.layers.len() - 1))
+        };
+        let start = if ep_matches {
+            Some((ep, inner.max_level))
+        } else {
+            same_dim_start
+        };
+
+        // A tombstoned entry point of the old dimension is handed over to the
+        // new dimension, so searches at the new dimension route through the
+        // graph again instead of scanning.
+        if !ep_matches && inner.deleted.contains(&ep) {
+            let (new_ep, new_level) = match same_dim_start {
+                Some((s, sl)) if sl > node_level => (s, sl),
+                _ => (node_idx, node_level),
+            };
+            inner.entry_point = Some(new_ep);
+            inner.max_level = new_level;
+        }
+
+        let Some((start_idx, start_level)) = start else {
+            return;
+        };
+
+        // Greedily descend from start_level to node_level+1
+        let mut current_ep = start_idx;
         let query = &inner.nodes[node_idx].vector.clone();
 
-        for level in (node_level + 1..=inner.max_level).rev() {
+        for level in (node_level + 1..=start_level).rev() {
             current_ep = greedy_closest(
                 &inner.nodes,
                 &inner.deleted,
@@ -512,8 +606,8 @@ impl HnswIndex {
             );
         }
 
-        // For each level from min(node_level, max_level) down to 0, do ef-search and connect
-        let top = node_level.min(inner.max_level);
+        // For each level from min(node_level, start_level) down to 0, do ef-search and connect
+        let top = node_level.min(start_level);
         for level in (0..=top).rev() {
             let max_conn = if level == 0 { m_max0 } else { m };
 
@@ -568,8 +662,6 @@ impl HnswIndex {
             inner.entry_point = Some(node_idx);
             inner.max_level = node_level;
         }
-
-        Ok(())
     }
 
     /// Search for the k nearest neighbours to the query vector.
@@ -582,12 +674,27 @@ impl HnswIndex {
             None => return Vec::new(),
         };
 
-        // Dimension safety: query must match stored vector dimensions
+        let metric = inner.metric;
+
+        // A query whose dimension differs from the entry point's cannot be
+        // routed through the graph. That only happens while vectors of two
+        // dimensions coexist (an embedder change in progress), so scan the
+        // live vectors of the query's dimension instead of returning nothing.
         if query.len() != inner.nodes[ep].vector.len() {
-            return Vec::new();
+            let mut results: Vec<(MemoryId, f32)> = inner
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(i, n)| n.vector.len() == query.len() && !inner.deleted.contains(i))
+                .map(|(_, n)| (n.id, compute_distance(query, &n.vector, metric)))
+                .collect();
+            results.sort_unstable_by(|a, b| {
+                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            results.truncate(k);
+            return results;
         }
 
-        let metric = inner.metric;
         let ef = self.ef_search.max(k);
 
         // Greedy descent to layer 0
@@ -615,7 +722,9 @@ impl HnswIndex {
 
         candidates
             .into_iter()
-            .filter(|c| !inner.deleted.contains(&c.idx))
+            .filter(|c| {
+                !inner.deleted.contains(&c.idx) && inner.nodes[c.idx].vector.len() == query.len()
+            })
             .take(k)
             .map(|c| (inner.nodes[c.idx].id, c.dist))
             .collect()
@@ -660,7 +769,6 @@ impl HnswIndex {
         results
     }
 
-    /// Mark a node as deleted (tombstone). Does not reclaim memory.
     /// True when the id is indexed and not tombstoned.
     pub fn contains(&self, id: MemoryId) -> bool {
         let inner = self.inner.read();
@@ -681,6 +789,8 @@ impl HnswIndex {
             .collect()
     }
 
+    /// Mark a node as deleted (tombstone). Does not reclaim memory. The id
+    /// can be inserted again afterwards, see [`Self::insert`].
     pub fn remove(&self, id: MemoryId) -> MenteResult<()> {
         let mut inner = self.inner.write();
         let idx = inner
@@ -926,6 +1036,208 @@ mod tests {
         let id = MemoryId::new();
         idx.insert(id, &make_vec(4, 1.0)).unwrap();
         assert!(idx.insert(id, &make_vec(4, 2.0)).is_err());
+    }
+
+    #[test]
+    fn rejected_live_duplicate_keeps_the_original_vector() {
+        let idx = HnswIndex::new(HnswConfig {
+            metric: DistanceMetric::Euclidean,
+            ..Default::default()
+        });
+        let id = MemoryId::new();
+        idx.insert(id, &make_vec(4, 1.0)).unwrap();
+        let err = idx.insert(id, &make_vec(4, 9.0)).unwrap_err();
+        assert!(err.to_string().contains("duplicate id"), "{err}");
+        assert_eq!(idx.len(), 1);
+        let hit = idx.search(&make_vec(4, 1.0), 1);
+        assert_eq!(hit[0].0, id);
+        assert!(hit[0].1 < 0.001, "original vector still indexed");
+    }
+
+    /// Fills an index with random vectors so a re insert has to be linked
+    /// into a real graph, not just become the only node.
+    fn populated(n: usize, dim: usize) -> HnswIndex {
+        let idx = HnswIndex::new(HnswConfig {
+            m: 8,
+            ef_construction: 100,
+            ef_search: 50,
+            metric: DistanceMetric::Euclidean,
+        });
+        for _ in 0..n {
+            idx.insert(MemoryId::new(), &random_vec(dim)).unwrap();
+        }
+        idx
+    }
+
+    #[test]
+    fn insert_after_remove_is_found_by_search() {
+        let dim = 16;
+        let idx = populated(200, dim);
+        let id = MemoryId::new();
+        let old = random_vec(dim);
+        idx.insert(id, &old).unwrap();
+        idx.remove(id).unwrap();
+        assert!(!idx.contains(id));
+
+        // Same id again, with a different vector.
+        let fresh = random_vec(dim);
+        idx.insert(id, &fresh).unwrap();
+        assert!(idx.contains(id));
+        assert_eq!(idx.len(), 201);
+        assert!(idx.ids().contains(&id));
+
+        let hits = idx.search(&fresh, 1);
+        assert_eq!(hits.first().map(|h| h.0), Some(id));
+        assert!(hits[0].1 < 0.001, "found by its new vector");
+
+        // The old vector no longer ranks the id at distance zero, and the id
+        // is never returned twice.
+        let near_old = idx.search(&old, 50);
+        assert!(near_old.iter().filter(|h| h.0 == id).count() <= 1);
+        assert!(near_old.iter().all(|h| h.0 != id || h.1 > 0.001));
+    }
+
+    #[test]
+    fn insert_after_remove_works_for_the_only_node() {
+        let idx = HnswIndex::new(HnswConfig::default());
+        let id = MemoryId::new();
+        idx.insert(id, &make_vec(4, 1.0)).unwrap();
+        idx.remove(id).unwrap();
+        idx.insert(id, &[1.0, 0.0, 0.0, 0.0]).unwrap();
+        assert_eq!(idx.len(), 1);
+        let hits = idx.search(&[1.0, 0.0, 0.0, 0.0], 5);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, id);
+    }
+
+    #[test]
+    fn remove_after_reinsert_removes_the_new_vector() {
+        let idx = populated(50, 8);
+        let id = MemoryId::new();
+        let v = random_vec(8);
+        idx.insert(id, &random_vec(8)).unwrap();
+        idx.remove(id).unwrap();
+        idx.insert(id, &v).unwrap();
+        idx.remove(id).unwrap();
+        assert!(!idx.contains(id));
+        assert_eq!(idx.len(), 50);
+        assert!(idx.search(&v, 60).iter().all(|h| h.0 != id));
+        // And it can come back a third time.
+        idx.insert(id, &v).unwrap();
+        assert_eq!(idx.search(&v, 1)[0].0, id);
+    }
+
+    #[test]
+    fn upsert_replaces_a_live_vector() {
+        let dim = 16;
+        let idx = populated(200, dim);
+        let id = MemoryId::new();
+        let (old, new) = (random_vec(dim), random_vec(dim));
+        idx.insert(id, &old).unwrap();
+        idx.upsert(id, &new);
+        assert_eq!(idx.len(), 201, "replaced, not added");
+        let hits = idx.search(&new, 1);
+        assert_eq!(hits[0].0, id);
+        assert!(hits[0].1 < 0.001);
+        let near_old = idx.search(&old, 50);
+        assert!(near_old.iter().filter(|h| h.0 == id).count() <= 1);
+    }
+
+    #[test]
+    fn upsert_inserts_new_and_removed_ids() {
+        let idx = HnswIndex::new(HnswConfig::default());
+        let new_id = MemoryId::new();
+        idx.upsert(new_id, &[1.0, 0.0]);
+        assert!(idx.contains(new_id));
+        idx.remove(new_id).unwrap();
+        idx.upsert(new_id, &[0.0, 1.0]);
+        assert!(idx.contains(new_id));
+        assert_eq!(idx.search(&[0.0, 1.0], 1)[0].0, new_id);
+    }
+
+    #[test]
+    fn upsert_with_the_same_vector_does_not_grow_the_graph() {
+        let idx = HnswIndex::new(HnswConfig::default());
+        let id = MemoryId::new();
+        idx.insert(id, &make_vec(4, 1.0)).unwrap();
+        for _ in 0..5 {
+            idx.upsert(id, &make_vec(4, 1.0));
+        }
+        assert_eq!(idx.inner.read().nodes.len(), 1);
+        assert!(idx.inner.read().deleted.is_empty());
+    }
+
+    #[test]
+    fn upsert_to_a_new_dimension_keeps_both_dimensions_searchable() {
+        // Models a re embed after an embedder change: vectors move from 8 to
+        // 16 dimensions one at a time, and every memory stays findable at
+        // whichever dimension it currently has.
+        let old_dim = 8;
+        let new_dim = 16;
+        let idx = HnswIndex::new(HnswConfig {
+            m: 8,
+            ef_construction: 100,
+            ef_search: 50,
+            metric: DistanceMetric::Euclidean,
+        });
+        let ids: Vec<MemoryId> = (0..60).map(|_| MemoryId::new()).collect();
+        let old: Vec<Vec<f32>> = ids.iter().map(|_| random_vec(old_dim)).collect();
+        let new: Vec<Vec<f32>> = ids.iter().map(|_| random_vec(new_dim)).collect();
+        for (id, v) in ids.iter().zip(&old) {
+            idx.insert(*id, v).unwrap();
+        }
+
+        for i in 0..ids.len() {
+            idx.upsert(ids[i], &new[i]);
+            assert_eq!(idx.len(), ids.len());
+            // Every migrated memory is found at the new dimension.
+            for j in 0..=i {
+                assert_eq!(
+                    idx.search(&new[j], 1)[0].0,
+                    ids[j],
+                    "migrated {j} at step {i}"
+                );
+            }
+            // Every memory not yet migrated is found at the old dimension.
+            for j in i + 1..ids.len() {
+                assert_eq!(
+                    idx.search(&old[j], 1)[0].0,
+                    ids[j],
+                    "pending {j} at step {i}"
+                );
+            }
+            // Results never mix dimensions.
+            assert!(idx.search(&new[0], 100).len() == i + 1);
+        }
+    }
+
+    #[test]
+    fn distance_between_different_dimensions_is_infinite() {
+        for metric in [
+            DistanceMetric::Cosine,
+            DistanceMetric::Euclidean,
+            DistanceMetric::DotProduct,
+        ] {
+            assert_eq!(compute_distance(&[1.0; 4], &[1.0; 8], metric), f32::MAX);
+        }
+    }
+
+    #[test]
+    fn reinsert_after_remove_survives_serialization() {
+        let dim = 8;
+        let idx = populated(30, dim);
+        let id = MemoryId::new();
+        let v = random_vec(dim);
+        idx.insert(id, &random_vec(dim)).unwrap();
+        idx.remove(id).unwrap();
+        idx.insert(id, &v).unwrap();
+
+        let back = HnswIndex::deserialize(&idx.serialize().unwrap(), 50).unwrap();
+        assert!(back.contains(id));
+        assert_eq!(back.len(), 31);
+        assert_eq!(back.search(&v, 1)[0].0, id);
+        // A live duplicate is still rejected after the round trip.
+        assert!(back.insert(id, &make_vec(dim, 1.0)).is_err());
     }
 
     #[test]
