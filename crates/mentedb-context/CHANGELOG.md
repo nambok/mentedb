@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.43.0](https://github.com/nambok/mentedb/compare/mentedb-context-v0.42.1...mentedb-context-v0.43.0) - 2026-10-19
+
+### Added
+
+- propagate write inference confidence drops along dependency edges on both write paths ([#491](https://github.com/nambok/mentedb/pull/491))
+
 ## [0.42.1](https://github.com/nambok/mentedb/compare/mentedb-context-v0.42.0...mentedb-context-v0.42.1) - 2026-10-19
 
 ### Other
