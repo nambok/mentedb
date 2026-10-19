@@ -238,7 +238,7 @@ The result: a clean, curated memory that actually helps the AI perform better.
 - **Local Candle Embeddings** Zero config semantic search using all-MiniLM-L6-v2 (384 dims), no API key required (Docker image includes it; source builds need `--features local-embeddings`)
 - **Hosted Embedding APIs** OpenAI, Cohere, and Voyage over HTTP (`mentedb-embedding`'s `http` feature; Python SDK `embedding_provider="openai" | "cohere" | "voyage"`)
 - **AWS Bedrock Embeddings** Cohere Embed v3 (batches of 96) and Amazon Titan embeddings via a lightweight SigV4 signer (no async AWS SDK); enable `mentedb-embedding`'s `bedrock` feature. Credentials come from AWS environment keys or the ECS task role / EKS Pod Identity endpoint, refreshed before they expire. Also available from the Python SDK as `embedding_provider="bedrock"`
-- **Self-Hosted Server** One process serves many databases (`/v1/db/{name}/...`, one directory and lock per tenant), tokens scoped to databases and optionally read only (verifiable with a public key, so no shared secret on the server), native HTTPS, Bedrock embeddings and extraction through the task role, and REST endpoints for hybrid search, heads-up context, pins, history, graph neighbors, conflicts, documents, maintenance and backups. See the [server API reference](docs/SERVER_API.md)
+- **Self-Hosted Server** One process serves many databases (`/v1/db/{name}/...`, one directory and lock per tenant, dotted names such as `tenant.alice.notes` as a stable contract), tokens scoped to databases by name or glob with `read`, `write` or `maintenance` scopes (verifiable with a public key, so no shared secret on the server, with `dbs` required and optionally bound to the token's subject), native HTTPS, Bedrock embeddings and extraction through the task role, and REST endpoints for hybrid search (with per request MMR, reranking and relevance first ranking), heads-up context, batch search across databases, paged memory lists, in place updates and supersession, recall for an action, pins, history, graph neighbors, conflicts, documents, consolidation, maintenance and backups. Operations: SIGTERM drain and clean close, per caller rate limits, request deadlines, liveness and readiness probes, and enrichment on its own bounded worker pool. See the [server API reference](docs/SERVER_API.md) and [self-hosting guide](docs/SELF_HOSTING.md)
 - **gRPC + REST + MCP** Three integration paths for any use case
 
 ### Entity-Centric Memory
@@ -331,7 +331,7 @@ endpoints, fields, auth rules and error codes is in the
 
 ### 5. gRPC
 
-Served on port 6678 (`--grpc-port`): unary Store, Recall, Search, Forget, and Relate calls, plus a bidirectional stream for live cognition alerts. Proto file at `crates/mentedb-server/proto/mentedb.proto`.
+Served on port 6678 (`--grpc-port`): unary Store, Recall, Search, Forget, and Relate calls, plus a bidirectional stream for live cognition alerts, on the default database with the same token, database and scope checks as REST. `--grpc-port 0` or `MENTEDB_GRPC=off` turns it off. Proto file at `crates/mentedb-server/proto/mentedb.proto`.
 
 ### 6. SDKs
 
@@ -634,7 +634,7 @@ MenteDB includes a 4-phase enrichment pipeline that converts raw conversations i
 | **Community Detection** | Groups related entities by category and generates LLM summaries |
 | **User Model** | Builds an always-available user profile from accumulated knowledge |
 
-Enrichment results feed back into `process_turn` context retrieval — richer semantic memories, entity graphs, community summaries, and the user profile all improve recall quality. The pipeline is idempotent and tracks provenance via `source:enrichment` tags and `Derived` edges.
+Enrichment results feed back into `process_turn` context retrieval: richer semantic memories, entity graphs, community summaries, and the user profile all improve recall quality. The pipeline is idempotent and tracks provenance via `source:enrichment` tags, `Derived` edges, and two attributes on every derived memory: `origin: "derived"` and `derived_kind` (`fact`, `entity`, `community` or `profile`). `EnrichmentConfig::copy_source_attributes` names caller attributes (a document id, a channel) copied from the source memories onto what is derived from them, and `EnrichmentConfig::candidate_types` widens the candidates beyond episodic memories. The watermark of the last run is saved in the database directory, so a reopened database continues where it left off.
 
 **Requires an LLM provider** (OpenAI, Anthropic, Ollama, or AWS Bedrock). Without one, the rest of the engine works as usual and enrichment does not run. See [LLM Extraction Config](#llm-extraction-configuration) for setup.
 

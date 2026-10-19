@@ -498,16 +498,37 @@ Key subsystems:
   conversation), memory history, neighbors and pins, `/conflicts`, `/profile`,
   `/entities`, `/recent`, `/maintenance/*`, `/enrich`, `/documents`, `/backup`
   and `/backups`, plus the admin routes under `/admin`. Global: `/v1/databases`,
-  `/v1/spaces`, `/v1/auth/token`, `/v1/health` and `/v1/ready`. The full list is
-  in the [server API reference](docs/SERVER_API.md)
-- **gRPC** (`grpc.rs`): Bidirectional streaming cognition + memory services
+  `/v1/spaces`, `/v1/auth/token`, `/v1/health`, `/v1/live` and `/v1/ready`. The
+  full list is in the [server API reference](docs/SERVER_API.md)
+- **Hosting** (`hosting.rs`): the routes a shared multi tenant deployment needs:
+  a paged, token scoped `GET /memories` narrowed by the tag and agent bitmaps,
+  `PATCH /memories/{id}` and `POST /memories/{id}/supersede` (both on engine
+  primitives that keep ids and write through the WAL), `/recall_for_action`,
+  `/consolidation_candidates` and `/consolidate`, `DELETE /v1/db/{db}` for
+  maintenance scope tokens, `POST /v1/batch/search` (one embedding, many
+  databases), the request deadline middleware (`x-mentedb-deadline-ms`,
+  `MENTEDB_REQUEST_TIMEOUT_MS`, `504`), and the enrichment pool: a separate
+  small tokio runtime with bounded concurrency, so LLM pipelines never hold the
+  threads that serve requests
+- **gRPC** (`grpc.rs`): Bidirectional streaming cognition + memory services on
+  the default database, with the same token, `dbs` and scope checks as REST.
+  `--grpc-port 0` or `MENTEDB_GRPC=off` leaves it unbound
 - **WebSocket** (`websocket.rs`): `/v1/ws/stream` cognition stream
 - **Auth** (`auth.rs`): JWT middleware. Tokens are verified with a shared secret
-  (HS256) or a public key (RS256, ES256, EdDSA), and the `dbs` and `read_only`
-  claims scope a token to some databases and to reads
-- **TLS** (`tls.rs`): with `--tls-cert` and `--tls-key`, REST is served over
-  HTTPS and gRPC over TLS with the same certificate
-- **Rate limiting** (`rate_limit.rs`): Token bucket rate limiter
+  (HS256) or a public key (RS256, ES256, EdDSA; from a file or inline as PEM or
+  base64 DER). The `dbs` claim (names or globs) scopes a token to databases and
+  the `scope` claim (`read` < `write` < `maintenance`) to what it may do. A
+  `TokenPolicy` can require `dbs` (on by default with a public key) and bind
+  `dbs` entries to the token's `sub` through a pattern such as
+  `tenant.{sub}.*`
+- **TLS** (`tls.rs`): with `--tls-cert` and `--tls-key` (or the PEM text in
+  `MENTEDB_TLS_CERT_PEM` / `MENTEDB_TLS_KEY_PEM`), REST is served over HTTPS
+  and gRPC over TLS with the same certificate
+- **Rate limiting** (`rate_limit.rs`): Token bucket per caller, keyed by the
+  token's `sub` (else `jti`, else agent) and by client IP when
+  unauthenticated. It sits inside the auth middleware so it can see the
+  caller. Size and refill come from `MENTEDB_RATE_LIMIT_BURST` and
+  `MENTEDB_RATE_LIMIT_PER_SEC`; `0` turns it off
 - **Extraction queue** (`extraction_queue.rs`): Bounded mpsc channel (capacity 64)
   with semaphore-limited concurrency (max 4 parallel LLM calls). Drains
   on shutdown (up to 10 seconds).
@@ -520,11 +541,26 @@ Key subsystems:
   [Sharding](#sharding)
 
 Configurable via CLI flags (`--data-dir`, `--port`, `--grpc-port`, `--jwt-secret`,
-`--require-auth`, `--admin-key`, `--llm-*`, `--auto-extract`,
-`--embedding-provider`, `--maintenance-interval-hours`, `--tls-cert`, `--tls-key`)
-and `MENTEDB_*` environment variables, some of which have no flag (for example
-`MENTEDB_JWT_PUBLIC_KEY_FILE`); see [Self-hosting](docs/SELF_HOSTING.md). Shuts
-down gracefully on Ctrl+C (SIGINT), closing every open database.
+`--require-auth`, `--admin-key`, `--llm-*` including `--llm-reader-model`,
+`--auto-extract`, `--embedding-provider`, `--maintenance-interval-hours`,
+`--tls-cert`, `--tls-key`) and `MENTEDB_*` environment variables, some of which
+have no flag (for example `MENTEDB_JWT_PUBLIC_KEY_FILE`); see
+[Self-hosting](docs/SELF_HOSTING.md). Shuts down gracefully on Ctrl+C or
+SIGTERM: it stops accepting connections, lets requests in flight finish for up
+to `MENTEDB_SHUTDOWN_DRAIN_SECS`, then flushes and closes every open database
+and exits with status 0.
+
+Memory JSON leaves out the embedding vector unless a read asks for it with
+`?fields=embedding`, and carries `user_id`, `valid_from` and `valid_until`.
+
+The engine side of these routes lives in `mentedb::hosting`:
+`update_memory_fields` (merge attributes, replace tags and re index the tag
+bitmap, set or clear `valid_until`), `supersede_memory` (store, close, link
+with a `Supersedes` edge), `list_memories_page` (bitmap narrowed, creation
+ordered), `recall_hybrid_scoped_with` and `HybridOptions` (per call MMR
+weight, reranker, relevance first selection), and `note_access`, which batches
+search hit access statistics in memory and writes them at the next flush
+rather than once per hit.
 
 ### mentedb (facade)
 

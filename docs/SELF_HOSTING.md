@@ -271,6 +271,15 @@ probe loads again on first use. A single injection recall loads at most
 `InjectionConfig::mode_probe_load_budget` probes, so a missing probe file
 spreads the reload over several requests instead of one slow one.
 
+**Stopping the server.** On `SIGTERM` (what Docker, ECS and Kubernetes send
+before killing a task) or Ctrl+C, the server stops accepting connections,
+lets requests already in flight finish for up to `MENTEDB_SHUTDOWN_DRAIN_SECS`
+(default `10`), then flushes and closes every open database, releasing their
+directory locks, and exits with status 0. Set the orchestrator's stop timeout
+a few seconds above the drain window so the close finishes before a `SIGKILL`.
+Acknowledged writes are durable either way (they are in the log); a clean stop
+also saves the snapshots, so the next start is fast.
+
 Run with auth on:
 
 ```bash
@@ -318,6 +327,40 @@ The files must be readable by uid `10001`. Without TLS, keep the server on a
 private network or behind a proxy that terminates TLS, since tokens and memory
 content would otherwise cross the network in the clear.
 
+When a secret store injects values rather than files, pass the PEM text itself
+in `MENTEDB_TLS_CERT_PEM` and `MENTEDB_TLS_KEY_PEM` instead. Both must be set;
+setting them together with the file options is a startup error, as is a key
+that does not match the certificate.
+
+### gRPC
+
+gRPC listens on `--grpc-port` (default `6678`) and serves the default database
+with the same token checks as REST (`dbs` must admit `default`; writes need the
+write scope). If you only use REST, turn it off with `--grpc-port 0` or
+`MENTEDB_GRPC=off`, so nothing listens on that port.
+
+### Limits, deadlines and rate limiting
+
+- **Rate limit.** Each caller gets a token bucket of
+  `MENTEDB_RATE_LIMIT_BURST` requests (default `100`) refilled at
+  `MENTEDB_RATE_LIMIT_PER_SEC` per second (default `10`). Authenticated
+  requests are counted per token `sub` (else `jti`, else agent), so tenants
+  behind one proxy address do not share a budget; unauthenticated requests are
+  counted per client IP. `0` for either value turns rate limiting off. Over the
+  limit is a `429`.
+- **Deadlines.** `MENTEDB_REQUEST_TIMEOUT_MS` bounds every request (unset or
+  `0`: no bound). A caller can ask for less with the `x-mentedb-deadline-ms`
+  header. Past the deadline the request is answered with `504`, and long
+  handlers stop between steps.
+- **Embedding timeout.** With `--embedding-provider bedrock`, each embed call
+  gives up after `MENTEDB_EMBEDDING_TIMEOUT_MS` (default `3000`), so a stalled
+  call fails a write or search quickly instead of holding it open.
+- **LLM timeout.** Each extraction or judge call gives up after
+  `MENTEDB_LLM_TIMEOUT_SECS` (default `120`).
+- **Page and batch sizes.** `GET /memories` pages are capped at
+  `MENTEDB_LIST_MAX_LIMIT` (default `1000`); one batch search names at most
+  `MENTEDB_BATCH_MAX_DATABASES` databases (default `32`).
+
 ## Named databases
 
 One server can hold a separate database per tenant (a person, a team, an
@@ -336,7 +379,11 @@ curl -X POST http://localhost:6677/v1/db/alice/memories \
 ```
 
 Names may use letters, digits, `-`, `_` and `.`, up to 128 characters, and may
-not start with `.`.
+not start with `.`. This is a stable contract: dotted names such as
+`tenant.alice.notes` are valid and will stay valid, so you can build
+hierarchical names and match them with token globs (`tenant.alice.*`). Each
+name is one directory under `dbs/`. Path separators, `..`, a leading `.`,
+spaces and non ASCII characters are always refused.
 
 | Variable | Default | Effect |
 |----------|---------|--------|
@@ -345,7 +392,9 @@ not start with `.`.
 
 With the admin key, `GET /v1/databases` lists databases, `POST /v1/databases`
 with `{"name": "alice"}` creates one, and `DELETE /v1/databases/alice` closes
-and permanently deletes one. The gRPC API, the WebSocket stream and `/metrics`
+and permanently deletes one. A tenant's own `maintenance` scope token can drop
+(`DELETE /v1/db/<name>`) and back up (`POST /v1/db/<name>/backup`) the
+databases it names, without the admin key. The gRPC API, the WebSocket stream and `/metrics`
 serve the default database only. See the
 [API reference](./SERVER_API.md#databases-and-url-layout) for details.
 
@@ -359,13 +408,30 @@ with these claims:
 | Claim | Meaning |
 |-------|---------|
 | `exp` | Expiry, Unix seconds. Required. |
-| `dbs` | Databases the token may use, for example `["alice"]`. `"*"` or no claim means all. The default database is `default`. |
-| `read_only` | `true` allows reads and searches only; writes get `403`. |
+| `dbs` | Databases the token may use: names or globs, for example `["alice"]` or `["tenant.alice.*"]`. `"*"` means all. No claim means all, unless the server requires the claim (below). The default database is `default`. |
+| `scope` | `read` (reads and searches only), `write` (the default), or `maintenance` (write, plus dropping and backing up the databases in `dbs`). Each level includes the ones before it. |
+| `read_only` | Older spelling of `scope: "read"`. |
+| `sub` | Subject. Keys the rate limit and, with a subject pattern, binds `dbs`. |
+| `jti` | Token id. Keys the rate limit when there is no `sub`. |
 | `agent_id` | Optional. Binds the token to one agent: request bodies must use that agent, and the token sees only that agent's memories plus shared ones. |
 | `admin` | Admin token: not limited by `dbs`, may use database management and backups. |
 
 A request outside the token's databases is `403`, so one deployment can give
-each tenant a token that reaches only its own database.
+each tenant a token that reaches only its own databases.
+
+Two settings tighten this for tokens minted outside the server:
+
+- **`dbs` is required with a public key.** When the server verifies with
+  `MENTEDB_JWT_PUBLIC_KEY` or `MENTEDB_JWT_PUBLIC_KEY_FILE`, a non admin token
+  without `dbs` is refused, so leaving the claim out can never grant every
+  database. `MENTEDB_ALLOW_UNSCOPED_TOKENS=1` turns this off. With a shared
+  secret the claim stays optional.
+- **Subject binding.** `MENTEDB_JWT_DBS_SUB_PATTERN=tenant.{sub}.*` makes
+  every `dbs` entry match that pattern with `{sub}` replaced by the token's
+  `sub`; otherwise the token is refused. A token for `sub: "alice"` may name
+  `tenant.alice.notes` or `tenant.alice.*`, never `tenant.bob.notes` or `*`.
+  The `sub` must be letters, digits, `-` and `_` (a dot or `*` in a subject
+  could widen the pattern), and a token without one is refused.
 
 ### Shared secret (the server issues tokens)
 
@@ -375,11 +441,12 @@ admin key:
 ```bash
 curl -X POST http://localhost:6677/v1/auth/token \
   -H "x-api-key: $MENTEDB_ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"dbs": ["alice"], "read_only": false, "expiry_hours": 24}'
-# {"token":"eyJ...","agent_id":"","dbs":["alice"],"read_only":false}
+  -d '{"dbs": ["alice"], "scope": "write", "sub": "alice", "expiry_hours": 24}'
+# {"token":"eyJ...","agent_id":"","dbs":["alice"],"read_only":false,"scope":"write","sub":"alice"}
 ```
 
-The body also takes `agent_id`. This endpoint never issues admin tokens.
+The body also takes `agent_id` and `read_only`. Every token gets a fresh
+`jti`. This endpoint never issues admin tokens.
 
 ### Public key (tokens signed elsewhere)
 
@@ -400,17 +467,22 @@ mentedb-server --data-dir ./data --require-auth
 
 The algorithm follows the key: RSA keys verify RS256, EC P-256 keys ES256,
 Ed25519 keys EdDSA. A file that is unreadable or not one of those stops the
-server at startup. `MENTEDB_JWT_ISSUER` and `MENTEDB_JWT_AUDIENCE` apply to
+server at startup. To pass the key inline (for example from a secret store),
+set `MENTEDB_JWT_PUBLIC_KEY` to the PEM text, or to the base64 of the DER
+encoded public key (`openssl pkey -in signing.pem -pubout -outform DER | base64`),
+instead of `MENTEDB_JWT_PUBLIC_KEY_FILE`; setting both is a startup error. `MENTEDB_JWT_ISSUER` and `MENTEDB_JWT_AUDIENCE` apply to
 shared secret tokens too; when unset, `iss` and `aud` are not checked.
 
 Minting a scoped token, here in Python with PyJWT (`pip install pyjwt cryptography`):
 
 ```python
-import time, jwt
+import time, uuid, jwt
 
 claims = {
-    "dbs": ["alice"],
-    "read_only": False,
+    "dbs": ["tenant.alice.*"],
+    "scope": "write",
+    "sub": "alice",
+    "jti": str(uuid.uuid4()),
     "exp": int(time.time()) + 3600,
     "iss": "my-token-service",   # must match MENTEDB_JWT_ISSUER when set
     "aud": "mentedb",            # must match MENTEDB_JWT_AUDIENCE when set
@@ -426,8 +498,10 @@ are refused. Mint all tokens with the private key.
 
 `MENTEDB_ADMIN_KEY` gates token issuance, database management, backups and the
 console endpoints. Send it as `x-api-key` or `Authorization: Bearer`. Database
-management and backups also accept a token with `"admin": true`. Without an
-admin key those endpoints are disabled, whether or not auth is on.
+management and backups also accept a token with `"admin": true`, and dropping
+or backing up one database also accepts a `maintenance` scope token naming it.
+Without an admin key the admin only endpoints are disabled, whether or not auth
+is on.
 
 ## Bedrock on AWS with a task role
 
@@ -513,11 +587,17 @@ for `bedrock-runtime`.
 `POST /v1/backup` (or `/v1/db/<name>/backup`) flushes the database and writes
 one file, `<database>-<UTC time>.mentebackup`, into
 `<backup dir>/<database>/`. `GET /v1/backups` lists them, newest first. Both
-need the admin key or an admin token.
+need the admin key or an admin token; `POST .../backup` also accepts a
+`maintenance` scope token whose `dbs` names the database.
 
 ```bash
 curl -X POST http://localhost:6677/v1/db/alice/backup -H "x-api-key: $MENTEDB_ADMIN_KEY"
 ```
+
+To choose the file name, send `{"name": "nightly/2026-10-19"}`. The name is a
+relative path (letters, digits, `-`, `_`, `.`, separated by `/`; no absolute
+path, no `..`, no empty segment), always placed under
+`<backup dir>/<database>/`, with `.mentebackup` appended when missing.
 
 The backup directory is `MENTEDB_BACKUP_DIR`, default `<data-dir>/backups`. It
 must not contain a database's directory (pointing it at the data directory
@@ -555,17 +635,61 @@ unsafe. Restore offline:
 
 ## Health and readiness
 
-- `GET /v1/health` is liveness: it answers as long as the HTTP server runs and
-  does not touch the database. Restart the process when it stops answering.
+- `GET /v1/live` is liveness only: it answers as long as the HTTP server runs
+  and touches no database, disk or embedder, so a Bedrock outage or a slow
+  volume never gets a healthy process restarted. Point liveness probes here.
+  `GET /v1/health` also works and adds the version and uptime.
 - `GET /v1/ready` is readiness: `200` with `{"status": "ready", ...}` when the
-  default database answers and the embedder (if any) can embed, `503` with
+  default database answers, the data directory takes a write, a probe database
+  (`MENTEDB_READY_PROBE_DB`, default `readiness-probe`; empty turns it off)
+  opens and takes its lock, and the embedder (if any) can embed; `503` with
   `{"status": "not_ready", "failed": [...]}` otherwise. Each check times out
-  after 5 seconds and the embed result is reused for 30 seconds. Route traffic
-  only to instances that answer `200`.
+  after 5 seconds and the embed result is reused for 30 seconds.
+  `?embedder=skip` leaves the embedder out. Route traffic only to instances
+  that answer `200`.
 
-Neither needs a token. The Docker image's `HEALTHCHECK` uses `/v1/ready`. A
-load balancer health check should use `/v1/ready` too, so an instance whose
-Bedrock access broke is taken out of rotation instead of failing writes.
+None of these needs a token. The Docker image's `HEALTHCHECK` uses
+`/v1/ready`. A load balancer health check should use `/v1/ready` too, so an
+instance whose Bedrock access broke, or whose data volume went read only, is
+taken out of rotation instead of failing writes. The probe database is a
+normal named database and shows up in `GET /v1/databases`.
+
+## Decay exemption and enrichment options
+
+- **Decay exemption.** Memories carrying a tag in `MENTEDB_DECAY_EXEMPT_TAGS`
+  (comma separated, default `scope:always`) never fade and are never archived.
+  The list replaces the default, so include `scope:always` to keep standing
+  rules exempt. A memory is also exempt when its attribute named by
+  `MENTEDB_DECAY_EXEMPT_ATTRIBUTE` (default `decay_exempt`; empty turns the
+  check off) is boolean `true`. The meaning of `scope:always` as a standing
+  rule (always injected by `/context`, deduplicated on store) does not depend
+  on this list.
+- **Provenance on derived memories.** Every memory enrichment derives carries
+  `origin: "derived"` and `derived_kind` (`fact`, `entity`, `community` or
+  `profile`). `MENTEDB_ENRICH_COPY_ATTRIBUTES` (comma separated) names
+  attributes copied from the source memories onto what is derived from them,
+  for example a document id, so derived knowledge can be traced or filtered
+  the same way.
+- **Candidates.** Enrichment reads episodic memories by default.
+  `MENTEDB_ENRICH_CANDIDATE_TYPES` (comma separated memory types, for example
+  `episodic,semantic`) widens that. Derived memories are never candidates.
+- **Watermark.** The time of the last enrichment run is saved in the database
+  directory (`enrichment_watermark`), so a restart, or a database closed for
+  being idle and reopened, continues from there instead of enriching
+  everything again.
+- **Worker pool.** Enrichment runs on its own threads,
+  `MENTEDB_ENRICH_WORKERS` of them (default `1`), which is also how many runs
+  proceed at once; further `POST /enrich` requests wait for a slot. Request
+  handling never shares those threads.
+- **Reader model.** `--llm-reader-model` / `MENTEDB_LLM_READER_MODEL` sets the
+  model for judge calls (entity linking, community summaries, the user model,
+  conflict detection, topic canonicalization). `--llm-model` stays the
+  extraction and enrichment model. Unset, both use `--llm-model`.
+- **Access statistics.** With `MENTEDB_REFRESH_ACCESS_ON_SEARCH=1`, memories
+  returned by `/search/hybrid` and `/v1/batch/search` count as accessed
+  (`accessed_at`, `access_count`), which slows their decay. The updates are
+  held in memory and written at the next flush, never one write per hit, so a
+  crash before that flush loses only these statistics. Off by default.
 
 ## Running several servers (sharding)
 
@@ -590,16 +714,27 @@ Command line flags, where they exist, win over the variable, except for
 |----------|------|---------|---------|
 | | `--data-dir` | `./mentedb-data` | Data directory (`/var/mentedb/data` in the image) |
 | | `--port` | `6677` | REST port |
-| | `--grpc-port` | `6678` | gRPC port |
+| | `--grpc-port` | `6678` | gRPC port; `0` turns gRPC off |
+| `MENTEDB_GRPC` | | on | `off` (or `0`, `false`, `no`, `disabled`) turns the gRPC listener off |
 | `MENTEDB_JWT_SECRET` | `--jwt-secret` | unset | HS256 secret; turns auth on and enables `/v1/auth/token` |
+| `MENTEDB_JWT_PUBLIC_KEY` | | unset | Public key inline, as PEM or base64 DER; same role as the file variable (set one, not both) |
 | `MENTEDB_JWT_PUBLIC_KEY_FILE` | | unset | PEM public key (RSA, EC P-256 or Ed25519); turns auth on and replaces the secret for verification |
+| `MENTEDB_ALLOW_UNSCOPED_TOKENS` | | off | With a public key, accept non admin tokens without `dbs` (meaning every database) |
+| `MENTEDB_JWT_DBS_SUB_PATTERN` | | unset | Glob every `dbs` entry must match with `{sub}` replaced by the token's `sub`, for example `tenant.{sub}.*` |
 | `MENTEDB_JWT_ISSUER` | | unset | Required `iss` claim |
 | `MENTEDB_JWT_AUDIENCE` | | unset | Required `aud` claim |
 | | `--require-auth` | off | Refuse to start without a secret or public key |
 | `MENTEDB_ADMIN_KEY` | `--admin-key` | unset | Admin key for tokens, databases, backups and console endpoints |
 | `MENTEDB_TLS_CERT_FILE` | `--tls-cert` | unset | PEM certificate chain; with the key, serves HTTPS and gRPC over TLS |
 | `MENTEDB_TLS_KEY_FILE` | `--tls-key` | unset | PEM private key for the certificate |
-| `MENTEDB_SHUTDOWN_DRAIN_SECS` | | `10` | Seconds open HTTPS connections get to finish on shutdown |
+| `MENTEDB_TLS_CERT_PEM`, `MENTEDB_TLS_KEY_PEM` | | unset | The certificate chain and key as PEM text, instead of files |
+| `MENTEDB_SHUTDOWN_DRAIN_SECS` | | `10` | Seconds requests in flight get to finish after `SIGTERM` or Ctrl+C, before databases are closed |
+| `MENTEDB_RATE_LIMIT_BURST` | | `100` | Requests per caller bucket; `0` turns rate limiting off |
+| `MENTEDB_RATE_LIMIT_PER_SEC` | | `10` | Bucket refill per second; `0` turns rate limiting off |
+| `MENTEDB_REQUEST_TIMEOUT_MS` | | unset | Upper bound on every request (`504` past it); `x-mentedb-deadline-ms` can only shorten it |
+| `MENTEDB_LIST_MAX_LIMIT` | | `1000` | Largest page `GET /memories` returns |
+| `MENTEDB_BATCH_MAX_DATABASES` | | `32` | Most databases one `POST /v1/batch/search` may name |
+| `MENTEDB_READY_PROBE_DB` | | `readiness-probe` | Named database `/v1/ready` opens to prove databases can be locked; empty turns the check off |
 | `RUST_LOG` | | `info` | Log filter |
 
 **Databases, maintenance and backups**
@@ -611,6 +746,12 @@ Command line flags, where they exist, win over the variable, except for
 | `MENTEDB_MAINTENANCE_INTERVAL_HOURS` | `--maintenance-interval-hours` | `24` | Sweep interval; `0` disables |
 | `MENTEDB_BACKUP_DIR` | | `<data-dir>/backups` | Where backups are written |
 | `MENTEDB_CONTRADICTION_POLICY` | | `supersede` | `supersede` closes the older of two contradicting memories, `flag` keeps both and links them with a `contradicts` edge |
+| `MENTEDB_DECAY_EXEMPT_TAGS` | | `scope:always` | Comma separated tags whose memories never fade or archive (replaces the default) |
+| `MENTEDB_DECAY_EXEMPT_ATTRIBUTE` | | `decay_exempt` | Attribute that exempts a memory when boolean `true`; empty turns it off |
+| `MENTEDB_REFRESH_ACCESS_ON_SEARCH` | | off | Search hits refresh `accessed_at` and `access_count`, written at the next flush |
+| `MENTEDB_ENRICH_COPY_ATTRIBUTES` | | unset | Comma separated attributes derived memories copy from their sources |
+| `MENTEDB_ENRICH_CANDIDATE_TYPES` | | `episodic` | Comma separated memory types enrichment reads |
+| `MENTEDB_ENRICH_WORKERS` | | `1` | Threads in the enrichment pool, and runs at once |
 
 **LLM and extraction**
 
@@ -619,6 +760,8 @@ Command line flags, where they exist, win over the variable, except for
 | `MENTEDB_LLM_PROVIDER` | `--llm-provider` | `none` | `openai`, `anthropic`, `ollama`, `bedrock`, or `none` |
 | `MENTEDB_LLM_API_KEY` | `--llm-api-key` | unset | API key (not used by `ollama` or `bedrock`) |
 | `MENTEDB_LLM_MODEL` | `--llm-model` | provider default | `gpt-4o-mini`, `claude-haiku-5-5`, `llama3`, or `us.anthropic.claude-haiku-5-5` for Bedrock |
+| `MENTEDB_LLM_READER_MODEL` | `--llm-reader-model` | the LLM model | Model for judge calls (entity linking, communities, user model, conflict detection, topic canonicalization) |
+| `MENTEDB_LLM_TIMEOUT_SECS` | | `120` | Whole request timeout for one LLM call |
 | `MENTEDB_LLM_BASE_URL` | `--llm-base-url` | provider endpoint | Full endpoint URL, for Ollama on another host or a proxy |
 | `MENTEDB_LLM_REGION` | `--llm-region` | `AWS_REGION`, else `us-east-1` | Bedrock region for extraction |
 | `MENTEDB_LLM_MAX_OUTPUT_TOKENS` | | `16000` | Output ceiling per LLM call, thinking included |
@@ -634,6 +777,7 @@ Command line flags, where they exist, win over the variable, except for
 | `MENTEDB_EMBEDDING_PROVIDER` | `--embedding-provider` | `candle` when built with `local-embeddings`, else `hash` | `candle`, `bedrock`, `hash`, or `none` |
 | `MENTEDB_EMBEDDING_MODEL` | | `cohere.embed-english-v3` | Bedrock embedding model |
 | `MENTEDB_EMBEDDING_REGION` | | `AWS_REGION`, else `us-east-1` | Bedrock region for embeddings |
+| `MENTEDB_EMBEDDING_TIMEOUT_MS` | | `3000` | Whole call timeout for one Bedrock embedding request |
 | `AWS_REGION` | | unset | Region fallback for both Bedrock clients |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | | unset | Static AWS credentials, checked first |
 | `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, `AWS_CONTAINER_CREDENTIALS_FULL_URI` | | set by ECS or EKS | Task role or Pod Identity credentials endpoint |
