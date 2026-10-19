@@ -2614,8 +2614,12 @@ impl MenteDb {
     pub fn prune_standing_rules(&self) -> MenteResult<PruneReport> {
         use std::collections::{HashMap, HashSet};
 
+        // Candidates come from the tag index, not a load of every memory: on a
+        // large database that full load took minutes, and callers hold the
+        // account write lock while this runs. The tag is re-checked on the
+        // loaded node in case the index lags a write.
         let always: Vec<MemoryNode> = self
-            .memory_ids()
+            .memory_ids_with_tag("scope:always")
             .into_iter()
             .filter_map(|id| self.get_memory(id).ok())
             .filter(|n| n.tags.iter().any(|t| t == "scope:always"))
