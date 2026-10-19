@@ -790,20 +790,38 @@ CONSOLIDATE WHERE type = episodic AND accessed < "2024-01-01"
 
 ### Fast MQL queries
 
-- Filter on `type` or `tag` and add a `LIMIT`. Equality on these (`=`, and
-  `IN [...]` lists) is answered from the bitmap index, so only matching
-  memories are loaded, and without `ORDER BY` loading stops once `LIMIT`
-  results are found. `RECALL memories WHERE type = episodic LIMIT 10` loads
-  10 memories whatever the database size.
-- Conditions on `content`, `salience`, `confidence`, `AS OF`, and any `!=`
-  are checked after a memory is loaded. Combine them with a `type` or `tag`
-  filter to keep the set of loaded memories small.
+- Filter on `type`, `tag`, or `agent` and add a `LIMIT`. Equality on these
+  (`=`, and `IN [...]` lists) is answered from the bitmap index, so only
+  matching memories are loaded, and without `ORDER BY` loading stops once
+  `LIMIT` results are found. `RECALL memories WHERE type = episodic LIMIT 10`
+  loads 10 memories whatever the database size.
+- A numeric range on `created` (`>`, `>=`, `<`, `<=`) is answered from the
+  temporal index. Every other condition in the `WHERE` still applies, and so
+  do `LIMIT` and `ORDER BY`: `RECALL memories WHERE created > 1700000000000000
+  AND type = episodic LIMIT 10` returns at most 10 episodic memories.
+- Conditions on `content`, `space`, `salience`, `confidence`, `accessed`,
+  `AS OF`, and any `!=` are checked after a memory is loaded. Combine them
+  with a `type`, `tag`, `agent`, or `created` filter to keep the set of
+  loaded memories small.
 - `ORDER BY` needs every candidate before it can sort, so it loads every
   memory that passes the indexed filters. Leave it out when any `LIMIT`
   matches will do; unordered results come back in storage order.
-- A `WHERE` with `OR`, `NOT`, or parentheses, or one with no `type` or `tag`
-  filter, visits every memory (still stopping at `LIMIT` when there is no
+- A `WHERE` with `OR`, `NOT`, or parentheses, or one with no indexed filter,
+  visits every memory (still stopping at `LIMIT` when there is no
   `ORDER BY`).
+
+Filter semantics for the owner and score fields:
+
+| Field | Compares | Operators | Value |
+|---|---|---|---|
+| `agent` | the memory's owner agent id | `=`, `!=`, `IN` | a UUID, bare or quoted |
+| `space` | the memory's space id | `=`, `!=`, `IN` | a UUID, bare or quoted |
+| `salience` | the stored salience | `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN` | a number |
+| `confidence` | the stored confidence | `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN` | a number |
+
+Scores compare at `f32` precision, so `salience = 0.3` matches a memory
+stored with salience `0.3`. Any other operator or value type on these fields
+is a query error rather than a filter that matches everything.
 
 ## Docker
 

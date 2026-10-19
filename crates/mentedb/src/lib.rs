@@ -464,6 +464,10 @@ pub struct CognitiveConfig {
     /// dashboard scope counts (raw turns, action captures, entity index nodes).
     /// The host supplies its own spellings; the engine does not hardcode them.
     pub hidden_count_tags: Vec<String>,
+    /// Result count for an MQL scan plan that carries no LIMIT. The parser
+    /// always fills one in, so this applies to plans built or deserialized
+    /// directly.
+    pub mql_default_limit: usize,
 }
 
 impl Default for CognitiveConfig {
@@ -512,6 +516,7 @@ impl Default for CognitiveConfig {
             action_keyword_weight: 0.5,
             action_keyword_min_len: 3,
             hidden_count_tags: Vec::new(),
+            mql_default_limit: 20,
         }
     }
 }
@@ -3525,7 +3530,7 @@ impl MenteDb {
                 condition,
                 order_by,
             } => {
-                let k = limit.unwrap_or(20);
+                let k = limit.unwrap_or(self.cognitive_config.mql_default_limit);
                 let mut scored = if tags.is_empty() {
                     // No tag constraint: a bare RECALL, or a metadata-only filter
                     // like `WHERE type = semantic`. Narrow by the browse index
@@ -3562,16 +3567,30 @@ impl MenteDb {
             QueryPlan::TemporalScan {
                 start,
                 end,
+                filters,
+                limit,
                 order_by,
-                ..
             } => {
-                let hits = self
+                let k = limit.unwrap_or(self.cognitive_config.mql_default_limit);
+                // The creation range from the temporal index, intersected with
+                // whatever the bitmap index admits for the other filters.
+                let in_range: std::collections::HashSet<MemoryId> = self
                     .index
-                    .hybrid_search(&[], None, Some((*start, *end)), 100);
-                let mut scored = self.load_scored_memories(&hits)?;
+                    .temporal
+                    .range(*start, *end)
+                    .into_iter()
+                    .collect();
+                let candidates = match self.indexed_candidates(filters) {
+                    Some(ids) => ids.intersection(&in_range).copied().collect(),
+                    None => in_range,
+                };
+                // Every filter, the range ones included, is re-checked on load.
+                let stop_at = if order_by.is_none() { Some(k) } else { None };
+                let mut scored = self.load_matching(Some(&candidates), filters, None, stop_at);
                 if let Some(ob) = order_by {
                     Self::apply_order_by(&mut scored, ob);
                 }
+                scored.truncate(k);
                 Ok(scored)
             }
             QueryPlan::GraphTraversal { start, depth, .. } => {
@@ -3607,15 +3626,13 @@ impl MenteDb {
 
     /// Memories matching the WHERE clause of a tag-less scan, in page order.
     ///
-    /// Equality filters on memory type and tag (`type = x`, `tag = "y"`, and
-    /// `IN` lists of either) are answered from the bitmap index, including the
-    /// reserved type keys, so only candidate pages are loaded; every filter is
-    /// still re-checked on the loaded memory, so the index only narrows. A
-    /// clause with nothing indexable (or an OR/NOT tree) visits every memory.
-    /// With `stop_at` the scan ends as soon as that many memories match.
-    ///
-    /// Page ids are copied out of the page map before any load, so writers
-    /// (which take the page map for writing) never wait on this scan.
+    /// Equality filters on memory type, tag, and owner agent (`type = x`,
+    /// `tag = "y"`, `agent = <uuid>`, and `IN` lists of any of them) are
+    /// answered from the bitmap index, including the reserved type and agent
+    /// keys, so only candidate pages are loaded; every filter is still
+    /// re-checked on the loaded memory, so the index only narrows. A clause
+    /// with nothing indexable (or an OR/NOT tree) visits every memory. With
+    /// `stop_at` the scan ends as soon as that many memories match.
     fn scan_matching(
         &self,
         filters: &[Filter],
@@ -3627,9 +3644,25 @@ impl MenteDb {
         } else {
             None
         };
+        self.load_matching(candidates.as_ref(), filters, condition, stop_at)
+    }
+
+    /// Load the memories among `candidates` (every memory when None) that
+    /// satisfy the WHERE clause, in page order, stopping after `stop_at`
+    /// matches when given.
+    ///
+    /// Page ids are copied out of the page map before any load, so writers
+    /// (which take the page map for writing) never wait on this scan.
+    fn load_matching(
+        &self,
+        candidates: Option<&std::collections::HashSet<MemoryId>>,
+        filters: &[Filter],
+        condition: Option<&Condition>,
+        stop_at: Option<usize>,
+    ) -> Vec<ScoredMemory> {
         let mut pages: Vec<PageId> = {
             let pm = self.page_map.read();
-            match &candidates {
+            match candidates {
                 Some(ids) => ids.iter().filter_map(|id| pm.get(id).copied()).collect(),
                 None => pm.values().copied().collect(),
             }
@@ -3657,10 +3690,12 @@ impl MenteDb {
 
     /// The ids the bitmap index admits for the AND of `filters`, or None when
     /// no filter is answerable from it. Only filters `filter_matches` treats
-    /// as membership tests qualify: type or tag compared with any operator but
-    /// `!=` (which `filter_matches` also reads as equality), or an `IN` list
-    /// whose every element is a type (for type) or text (for tag). Anything
-    /// else is left to the post-load check.
+    /// as membership tests qualify: type, tag, or agent compared with any
+    /// operator but `!=`, or an `IN` list whose every element is a type (for
+    /// type), text (for tag), or UUID (for agent). Any other operator on these
+    /// fields either reads as equality in `filter_matches` (type, tag) or
+    /// matches nothing there (agent), so narrowing by the key never drops a
+    /// match. Anything else is left to the post-load check.
     fn indexed_candidates(
         &self,
         filters: &[Filter],
@@ -3671,6 +3706,9 @@ impl MenteDb {
                     Some(mentedb_index::manager::type_index_key(*t))
                 }
                 (Field::Tag, Value::Text(t)) => Some(t.clone()),
+                (Field::Agent, Value::Uuid(u)) => {
+                    Some(mentedb_index::manager::agent_index_key(AgentId::from(*u)))
+                }
                 _ => None,
             }
         }
@@ -3780,11 +3818,17 @@ impl MenteDb {
     }
 
     /// Whether a memory satisfies a single MQL filter. Applies the metadata
-    /// filters the planner attaches to a plan (type, tag, content, time), so
-    /// `WHERE type = semantic` and similar clauses actually narrow results
-    /// instead of being ignored. Unhandled field/value combinations are
-    /// permissive (they do not exclude), so a supported query is never dropped
-    /// by a clause this does not understand.
+    /// filters the planner attaches to a plan (type, tag, content, owner agent,
+    /// space, salience, confidence, time), so `WHERE type = semantic`,
+    /// `WHERE agent = <uuid>`, `WHERE salience > 0.5` and similar clauses
+    /// actually narrow results instead of being ignored.
+    ///
+    /// `agent` and `space` compare the memory's `agent_id` and `space_id` with
+    /// `=`, `!=`, or `IN`; `salience` and `confidence` compare the stored score
+    /// with `=`, `!=`, `<`, `<=`, `>`, `>=`, or `IN`, at `f32` precision. The
+    /// planner rejects any other operator or value type on these four fields,
+    /// and a plan built around it that still carries one matches nothing.
+    /// Unhandled type, tag, content and time combinations stay permissive.
     fn filter_matches(f: &Filter, node: &MemoryNode) -> bool {
         // IN: the field matches any element of the list (reusing per-field
         // equality, so `type IN [...]`, `tag IN [...]`, `content IN [...]` all work).
@@ -3820,11 +3864,44 @@ impl MenteDb {
             (Field::Accessed, v) => {
                 Self::num_cmp(node.accessed_at as f64, f.op, Self::value_f64(v))
             }
+            (Field::Agent, Value::Uuid(u)) => {
+                Self::id_cmp(node.agent_id == AgentId::from(*u), f.op)
+            }
+            (Field::Space, Value::Uuid(u)) => Self::id_cmp(
+                node.space_id == mentedb_core::types::SpaceId::from(*u),
+                f.op,
+            ),
+            (Field::Agent | Field::Space, _) => false,
+            (Field::Salience, v) => Self::score_cmp(node.salience, f.op, v),
+            (Field::Confidence, v) => Self::score_cmp(node.confidence, f.op, v),
             // AS OF <t>: keep only memories whose validity window contains t.
             (Field::ValidAt, v) => Self::value_f64(v)
                 .map(|t| node.is_valid_at(t as u64))
                 .unwrap_or(true),
             _ => true,
+        }
+    }
+
+    /// An id comparison: `=` (and an `IN` element) keeps a match, `!=` keeps
+    /// a mismatch, and no other operator applies to an id.
+    fn id_cmp(same: bool, op: Operator) -> bool {
+        match op {
+            Operator::Eq | Operator::In => same,
+            Operator::Neq => !same,
+            _ => false,
+        }
+    }
+
+    /// A comparison on an `f32` score (salience, confidence). The literal is
+    /// rounded to `f32` first, so `salience = 0.3` matches a stored `0.3f32`.
+    /// A non-numeric literal or a non-comparison operator matches nothing.
+    fn score_cmp(score: f32, op: Operator, v: &Value) -> bool {
+        if matches!(op, Operator::SimilarTo | Operator::Contains) {
+            return false;
+        }
+        match Self::value_f64(v) {
+            Some(b) => Self::num_cmp(score as f64, op, Some(b as f32 as f64)),
+            None => false,
         }
     }
 
@@ -6084,3 +6161,6 @@ mod reranker_integration_tests {
 
 #[cfg(test)]
 mod scan_tests;
+
+#[cfg(test)]
+mod mql_filter_tests;

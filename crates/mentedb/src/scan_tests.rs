@@ -325,5 +325,7 @@ fn full_passes_do_not_hold_the_page_map_across_loads() {
             "RECALL memories WHERE content CONTAINS \"memory\" ORDER BY salience DESC LIMIT 5",
         )
         .unwrap();
+        db.query("RECALL memories WHERE created > 0 ORDER BY salience DESC LIMIT 5")
+            .unwrap();
     });
 }

@@ -33,10 +33,18 @@ pub enum QueryPlan {
         #[serde(default)]
         order_by: Option<OrderBy>,
     },
+    /// A scan narrowed by the temporal (creation time) index. `start..=end` is
+    /// the creation range the index admits; `filters` holds every WHERE filter,
+    /// the range ones included, and the executor re-checks them all on each
+    /// loaded memory, so strict bounds (`>`, `<`) stay exact.
     TemporalScan {
         start: Timestamp,
         end: Timestamp,
         filters: Vec<Filter>,
+        /// LIMIT; the executor falls back to its configured default when unset.
+        #[serde(default)]
+        limit: Option<usize>,
+        /// ORDER BY clause; the executor sorts the result set by it before LIMIT.
         #[serde(default)]
         order_by: Option<OrderBy>,
     },
@@ -66,6 +74,16 @@ const DEFAULT_LIMIT: usize = 20;
 
 /// Produce an execution plan from a parsed statement.
 pub fn plan(statement: &Statement) -> MenteResult<QueryPlan> {
+    match statement {
+        Statement::Recall(recall) => {
+            validate_filters(&recall.filters)?;
+            if let Some(cond) = &recall.condition {
+                validate_condition(cond)?;
+            }
+        }
+        Statement::Consolidate(cons) => validate_filters(&cons.filters)?,
+        _ => {}
+    }
     match statement {
         Statement::Recall(recall) => plan_recall(recall),
         Statement::Relate(relate) => plan_relate(relate),
@@ -147,55 +165,32 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
         });
     }
 
-    // If time-range filters exist (created or accessed with range ops), use TemporalScan
-    let time_filters: Vec<&Filter> = recall
-        .filters
-        .iter()
-        .filter(|f| {
-            (f.field == Field::Created || f.field == Field::Accessed)
-                && matches!(
-                    f.op,
-                    Operator::Gt | Operator::Lt | Operator::Gte | Operator::Lte
-                )
-        })
-        .collect();
-
-    if !time_filters.is_empty() {
-        let remaining: Vec<Filter> = recall
-            .filters
-            .iter()
-            .filter(|f| {
-                !((f.field == Field::Created || f.field == Field::Accessed)
-                    && matches!(
-                        f.op,
-                        Operator::Gt | Operator::Lt | Operator::Gte | Operator::Lte
-                    ))
-            })
-            .cloned()
-            .collect();
-
-        let mut start: Timestamp = 0;
-        let mut end: Timestamp = u64::MAX;
-        for f in &time_filters {
-            if let Value::Text(ref s) = f.value {
-                // Simple heuristic: treat text timestamps as orderable strings for now.
-                // A real implementation would parse dates. We use 0/MAX as placeholders.
-                let _ = s; // acknowledged
-            }
-            if let Value::Integer(ts) = f.value {
-                let ts = ts as u64;
-                match f.op {
-                    Operator::Gt | Operator::Gte => start = ts,
-                    Operator::Lt | Operator::Lte => end = ts,
-                    _ => {}
-                }
-            }
+    // A numeric range on `created` narrows through the temporal index, which
+    // is keyed by creation time. Ranges on `accessed` (or non-numeric bounds)
+    // cannot use it and fall through to the filtered scan below.
+    let mut start: Option<Timestamp> = None;
+    let mut end: Option<Timestamp> = None;
+    for f in &recall.filters {
+        if f.field != Field::Created {
+            continue;
         }
-
+        let Some(ts) = timestamp_value(&f.value) else {
+            continue;
+        };
+        match f.op {
+            Operator::Gt | Operator::Gte => start = Some(start.map_or(ts, |s| s.max(ts))),
+            Operator::Lt | Operator::Lte => end = Some(end.map_or(ts, |e| e.min(ts))),
+            _ => {}
+        }
+    }
+    if start.is_some() || end.is_some() {
         return Ok(QueryPlan::TemporalScan {
-            start,
-            end,
-            filters: remaining,
+            start: start.unwrap_or(0),
+            end: end.unwrap_or(Timestamp::MAX),
+            // Every filter, the range ones too: the index bound is inclusive,
+            // so the executor's re-check is what makes `>` and `<` strict.
+            filters: recall.filters.clone(),
+            limit: Some(limit),
             order_by: recall.order_by.clone(),
         });
     }
@@ -208,6 +203,95 @@ fn plan_recall(recall: &RecallStatement) -> MenteResult<QueryPlan> {
         condition: None,
         order_by: recall.order_by.clone(),
     })
+}
+
+/// A numeric literal as a timestamp, clamping negatives to zero.
+fn timestamp_value(v: &Value) -> Option<Timestamp> {
+    match v {
+        Value::Integer(i) => Some((*i).max(0) as Timestamp),
+        Value::Number(n) if n.is_finite() => Some(n.max(0.0) as Timestamp),
+        _ => None,
+    }
+}
+
+/// Reject WHERE leaves the executor cannot evaluate, so a malformed clause is a
+/// query error instead of silently matching every memory.
+pub fn validate_filters(filters: &[Filter]) -> MenteResult<()> {
+    filters.iter().try_for_each(validate_filter)
+}
+
+/// [`validate_filters`] over every leaf of a boolean WHERE tree.
+pub fn validate_condition(c: &Condition) -> MenteResult<()> {
+    match c {
+        Condition::Leaf(f) => validate_filter(f),
+        Condition::And(children) | Condition::Or(children) => {
+            children.iter().try_for_each(validate_condition)
+        }
+        Condition::Not(inner) => validate_condition(inner),
+    }
+}
+
+/// Check one filter on the owner and score fields:
+///
+/// - `agent` and `space` compare an id (a UUID, quoted or bare) with `=`,
+///   `!=`, or `IN [...]`.
+/// - `salience` and `confidence` compare a number with `=`, `!=`, `<`, `<=`,
+///   `>`, `>=`, or `IN [...]`.
+///
+/// Other fields keep their existing handling.
+pub fn validate_filter(f: &Filter) -> MenteResult<()> {
+    let (name, id_field) = match f.field {
+        Field::Agent => ("agent", true),
+        Field::Space => ("space", true),
+        Field::Salience => ("salience", false),
+        Field::Confidence => ("confidence", false),
+        _ => return Ok(()),
+    };
+    let op_ok = if id_field {
+        matches!(f.op, Operator::Eq | Operator::Neq | Operator::In)
+    } else {
+        matches!(
+            f.op,
+            Operator::Eq
+                | Operator::Neq
+                | Operator::Lt
+                | Operator::Lte
+                | Operator::Gt
+                | Operator::Gte
+                | Operator::In
+        )
+    };
+    if !op_ok {
+        let allowed = if id_field {
+            "=, != or IN"
+        } else {
+            "=, !=, <, <=, >, >= or IN"
+        };
+        return Err(MenteError::Query(format!(
+            "{name} supports only {allowed}, found {:?}",
+            f.op
+        )));
+    }
+    let value_ok = |v: &Value| {
+        if id_field {
+            matches!(v, Value::Uuid(_))
+        } else {
+            matches!(v, Value::Number(_) | Value::Integer(_))
+        }
+    };
+    let ok = match &f.value {
+        Value::List(items) => f.op == Operator::In && items.iter().all(value_ok),
+        v => f.op != Operator::In && value_ok(v),
+    };
+    if ok {
+        Ok(())
+    } else {
+        let expected = if id_field { "a UUID" } else { "a number" };
+        Err(MenteError::Query(format!(
+            "{name} must be compared with {expected}, found {:?}",
+            f.value
+        )))
+    }
 }
 
 fn plan_relate(relate: &RelateStatement) -> MenteResult<QueryPlan> {
@@ -271,6 +355,76 @@ mod tests {
                 assert_eq!(limit, Some(5));
             }
             _ => panic!("expected TagScan, got {:?}", qp),
+        }
+    }
+
+    #[test]
+    fn test_created_range_produces_temporal_scan_with_every_filter() {
+        let qp = plan_mql(
+            "RECALL memories WHERE created > 100 AND created >= 50 AND created < 900 AND type = episodic ORDER BY salience DESC LIMIT 10",
+        );
+        match qp {
+            QueryPlan::TemporalScan {
+                start,
+                end,
+                filters,
+                limit,
+                order_by,
+            } => {
+                assert_eq!((start, end), (100, 900), "tightest bounds");
+                assert_eq!(filters.len(), 4, "range filters kept for the re-check");
+                assert!(filters.iter().any(|f| f.field == Field::Type));
+                assert_eq!(limit, Some(10));
+                assert!(order_by.is_some_and(|ob| ob.descending));
+            }
+            other => panic!("expected TemporalScan, got {:?}", other),
+        }
+        match plan_mql("RECALL memories WHERE created > 5") {
+            QueryPlan::TemporalScan { limit, .. } => assert_eq!(limit, Some(DEFAULT_LIMIT)),
+            other => panic!("expected TemporalScan, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_accessed_range_is_not_a_creation_index_scan() {
+        match plan_mql("RECALL memories WHERE accessed > 100 LIMIT 5") {
+            QueryPlan::TagScan { filters, .. } => assert_eq!(filters.len(), 1),
+            other => panic!("expected TagScan, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_owner_and_score_filters_are_validated() {
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        for ok in [
+            format!("RECALL memories WHERE agent = {id}"),
+            format!("RECALL memories WHERE agent = \"{id}\""),
+            format!("RECALL memories WHERE space != {id}"),
+            format!("RECALL memories WHERE agent IN [{id}, {id}]"),
+            "RECALL memories WHERE salience > 0.5".to_string(),
+            "RECALL memories WHERE confidence <= 1".to_string(),
+            "RECALL memories WHERE salience IN [0.1, 0.2]".to_string(),
+        ] {
+            let tokens = tokenize(&ok).unwrap();
+            let stmt = Parser::parse(&tokens).unwrap();
+            assert!(plan(&stmt).is_ok(), "{ok}");
+        }
+        for bad in [
+            "RECALL memories WHERE agent = \"alice\"".to_string(),
+            format!("RECALL memories WHERE agent < {id}"),
+            "RECALL memories WHERE space = 1".to_string(),
+            "RECALL memories WHERE salience = \"high\"".to_string(),
+            "RECALL memories WHERE confidence CONTAINS 1".to_string(),
+            "RECALL memories WHERE confidence IN [1, \"x\"]".to_string(),
+            "RECALL memories WHERE NOT (type = episodic OR agent = \"bob\")".to_string(),
+            "CONSOLIDATE WHERE salience < \"low\"".to_string(),
+        ] {
+            let tokens = tokenize(&bad).unwrap();
+            let stmt = Parser::parse(&tokens).unwrap();
+            assert!(
+                matches!(plan(&stmt), Err(MenteError::Query(_))),
+                "{bad}: expected a query error"
+            );
         }
     }
 
