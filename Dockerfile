@@ -4,7 +4,10 @@
 # Pin the builder to the same Debian release as the runtime stage: the
 # unsuffixed rust image moved to a newer Debian whose glibc is ahead of the
 # runtime's, and a binary linked there fails to start on bookworm.
-FROM rust:1.94-slim-bookworm AS builder
+# Pinned by digest for reproducible builds. Tag: rust:1.94-slim-bookworm
+# (multi arch index digest, looked up 2026-10-19). Bump the tag and digest
+# together.
+FROM rust:1.94-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 AS builder
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
 
@@ -15,10 +18,13 @@ COPY . .
 # zero-config semantic search (model downloads on first start). bedrock adds
 # Bedrock extraction and embeddings, authenticated by the task role, so the
 # image runs on AWS with no API keys and no model download.
-RUN cargo build --release --bin mentedb-server --features mentedb-server/local-embeddings,mentedb-server/bedrock
+# --locked: build exactly the dependency versions in Cargo.lock.
+RUN cargo build --locked --release --bin mentedb-server --features mentedb-server/local-embeddings,mentedb-server/bedrock
 
 # Production stage
-FROM debian:bookworm-slim
+# Pinned by digest. Tag: debian:bookworm-slim (multi arch index digest,
+# looked up 2026-10-19).
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
 
 # curl backs the HEALTHCHECK below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
