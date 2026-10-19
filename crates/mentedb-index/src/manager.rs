@@ -170,10 +170,16 @@ impl IndexManager {
     }
 
     /// Index a memory node across all indexes.
+    ///
+    /// Indexing an id that is already indexed replaces its entries with the
+    /// node's current state, so a re store after an edit, a re embed, or a
+    /// store after a forget all leave the memory findable by its new vector.
     pub fn index_memory(&self, node: &MemoryNode) {
-        // Vector index
+        // Vector index. Upsert, not insert: callers re index live ids on
+        // purpose (edits, re embedding), and a plain insert would reject them
+        // with a duplicate id error and keep the stale vector.
         if !node.embedding.is_empty() {
-            let _ = self.hnsw.insert(node.id, &node.embedding);
+            self.hnsw.upsert(node.id, &node.embedding);
         }
 
         // BM25 full-text index, over the context-prefixed text so contextual
