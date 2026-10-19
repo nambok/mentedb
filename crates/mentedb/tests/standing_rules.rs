@@ -88,3 +88,33 @@ fn prune_unpins_auto_keeps_manual_and_profile_and_dedups() {
     assert!(!report.unpinned.contains(&manual_id));
     assert!(!report.unpinned.contains(&profile_id));
 }
+
+/// Pruning finds pinned rules through the tag index: with thousands of
+/// ordinary memories it loads only the pinned ones, not the whole database,
+/// because callers hold the account write lock while it runs.
+#[test]
+fn prune_loads_only_pinned_memories() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = MenteDb::open(dir.path()).expect("open");
+    for i in 0..2_000 {
+        let node = MemoryNode::new(
+            AgentId::nil(),
+            MemoryType::Episodic,
+            format!("ordinary memory {i}"),
+            vec![],
+        );
+        db.store(node).expect("store");
+    }
+    for i in 0..3 {
+        db.store(pinned(&format!("pinned rule {i}"), &["source:manual"]))
+            .expect("store pinned");
+    }
+    let before = db.metrics().memory_loads;
+    let report = db.prune_standing_rules().expect("prune");
+    let loaded = db.metrics().memory_loads - before;
+    assert_eq!(report.total_always, 3);
+    assert!(
+        loaded < 50,
+        "prune loaded {loaded} memories for 3 pinned rules out of 2003"
+    );
+}

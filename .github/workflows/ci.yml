@@ -25,6 +25,27 @@ jobs:
       - run: cargo check -p mentedb-embedding --features local
       # Same for the optional native Bedrock (Titan) embedding provider.
       - run: cargo test -p mentedb-embedding --features bedrock
+      # And the Bedrock LLM provider used for extraction.
+      - run: cargo test -p mentedb-extraction --features bedrock
+      # The server ships with these features (Dockerfile, release image), so
+      # compile it exactly that way; a plain workspace check never does.
+      - run: cargo check -p mentedb-server --features local-embeddings,bedrock
+      - run: cargo test -p mentedb-server --features bedrock
+
+  sdks:
+    name: SDKs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get install -y protobuf-compiler
+      # The SDKs are outside the workspace, so the jobs above never compile
+      # them and an engine API change only failed at publish time.
+      - run: cargo check --manifest-path sdks/python/Cargo.toml
+      - run: cargo check --manifest-path sdks/typescript/Cargo.toml
 
   test:
     name: Test

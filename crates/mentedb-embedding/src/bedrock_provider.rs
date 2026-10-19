@@ -1,15 +1,14 @@
-//! AWS Bedrock embedding provider (Amazon Titan) over the InvokeModel REST API.
+//! AWS Bedrock embedding provider (Amazon Titan and Cohere Embed) over the
+//! InvokeModel REST API.
 //!
 //! Deliberately dependency light: a synchronous `ureq` call plus a small
 //! hand-rolled SigV4 signer, so the engine gains native Bedrock support without
 //! pulling in the full async AWS SDK. This matches the lean, no-heavy-deps
 //! philosophy of the rest of the engine (see the `http` provider).
 //!
-//! Credentials come from the standard AWS environment variables
-//! (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` for
-//! temporary/SSO credentials). Full credential-chain resolution (profiles,
-//! instance metadata) is intentionally out of scope for this provider; export
-//! credentials or use the platform's SDK-backed path for those.
+//! Credentials come from [`AwsCredentialSource`]: static keys from the
+//! environment, or the ECS task role / EKS Pod Identity endpoint, refreshed
+//! before they expire.
 //!
 //! ```no_run
 //! use mentedb_embedding::bedrock_provider::{BedrockEmbeddingConfig, BedrockEmbeddingProvider};
@@ -26,6 +25,7 @@ use sha2::{Digest, Sha256};
 
 use mentedb_core::error::{MenteError, MenteResult};
 
+use crate::aws_credentials::AwsCredentialSource;
 use crate::provider::EmbeddingProvider;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -73,62 +73,108 @@ fn uri_encode_segment(s: &str) -> String {
     out
 }
 
-/// AWS credentials for signing, loaded from the standard environment variables.
-#[derive(Clone)]
-pub struct AwsCredentials {
-    pub access_key_id: String,
-    pub secret_access_key: String,
-    pub session_token: Option<String>,
+/// Most texts Cohere Embed accepts in one InvokeModel call.
+const COHERE_MAX_BATCH: usize = 96;
+
+/// Request and response shape of a Bedrock embedding model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BedrockEmbeddingFamily {
+    /// Amazon Titan: one text per call.
+    Titan,
+    /// Cohere Embed: up to 96 texts per call.
+    Cohere,
 }
 
-impl AwsCredentials {
-    /// Load from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
-    /// `AWS_SESSION_TOKEN` (the last is required for SSO/temporary credentials).
-    pub fn from_env() -> MenteResult<Self> {
-        let access_key_id = std::env::var("AWS_ACCESS_KEY_ID")
-            .map_err(|_| MenteError::Storage("AWS_ACCESS_KEY_ID not set".to_string()))?;
-        let secret_access_key = std::env::var("AWS_SECRET_ACCESS_KEY")
-            .map_err(|_| MenteError::Storage("AWS_SECRET_ACCESS_KEY not set".to_string()))?;
-        Ok(Self {
-            access_key_id,
-            secret_access_key,
-            session_token: std::env::var("AWS_SESSION_TOKEN").ok(),
-        })
+impl BedrockEmbeddingFamily {
+    /// Family for a model id, by its provider prefix.
+    pub fn for_model(model_id: &str) -> MenteResult<Self> {
+        let bare = model_id.rsplit('/').next().unwrap_or(model_id);
+        let bare = bare
+            .strip_prefix("us.")
+            .or_else(|| bare.strip_prefix("eu."))
+            .or_else(|| bare.strip_prefix("apac."))
+            .or_else(|| bare.strip_prefix("global."))
+            .unwrap_or(bare);
+        if bare.starts_with("amazon.titan-embed") {
+            Ok(Self::Titan)
+        } else if bare.starts_with("cohere.embed") {
+            Ok(Self::Cohere)
+        } else {
+            Err(MenteError::Storage(format!(
+                "unsupported Bedrock embedding model '{model_id}' (expected amazon.titan-embed-* \
+                 or cohere.embed-*)"
+            )))
+        }
     }
 }
 
-/// Configuration for the Bedrock Titan embedding provider.
+/// Configuration for the Bedrock embedding provider.
 #[derive(Clone)]
 pub struct BedrockEmbeddingConfig {
     pub region: String,
     pub model_id: String,
+    pub family: BedrockEmbeddingFamily,
     pub dimensions: usize,
-    pub credentials: AwsCredentials,
+    pub credentials: AwsCredentialSource,
 }
 
 impl BedrockEmbeddingConfig {
-    /// Amazon Titan Text Embeddings V2 (1024 dimensions), credentials from env.
-    pub fn titan_v2(region: impl Into<String>) -> MenteResult<Self> {
+    /// Any supported model. `dimensions` must match what the model returns.
+    pub fn new(
+        region: impl Into<String>,
+        model_id: impl Into<String>,
+        dimensions: usize,
+        credentials: AwsCredentialSource,
+    ) -> MenteResult<Self> {
+        let model_id = model_id.into();
         Ok(Self {
             region: region.into(),
-            model_id: "amazon.titan-embed-text-v2:0".to_string(),
-            dimensions: 1024,
-            credentials: AwsCredentials::from_env()?,
+            family: BedrockEmbeddingFamily::for_model(&model_id)?,
+            model_id,
+            dimensions,
+            credentials,
         })
     }
 
-    /// Amazon Titan Text Embeddings V1 (1536 dimensions), credentials from env.
+    /// A known model with its native dimensions, credentials from the
+    /// environment or the container role.
+    pub fn for_model(region: impl Into<String>, model_id: &str) -> MenteResult<Self> {
+        let dimensions = match model_id {
+            "amazon.titan-embed-text-v2:0" => 1024,
+            "amazon.titan-embed-text-v1" => 1536,
+            "cohere.embed-english-v3" | "cohere.embed-multilingual-v3" => 1024,
+            other => {
+                return Err(MenteError::Storage(format!(
+                    "unknown dimensions for Bedrock embedding model '{other}'; use \
+                     BedrockEmbeddingConfig::new with explicit dimensions"
+                )));
+            }
+        };
+        Self::new(
+            region,
+            model_id,
+            dimensions,
+            AwsCredentialSource::from_env()?,
+        )
+    }
+
+    /// Amazon Titan Text Embeddings V2 (1024 dimensions).
+    pub fn titan_v2(region: impl Into<String>) -> MenteResult<Self> {
+        Self::for_model(region, "amazon.titan-embed-text-v2:0")
+    }
+
+    /// Amazon Titan Text Embeddings V1 (1536 dimensions).
     pub fn titan_v1(region: impl Into<String>) -> MenteResult<Self> {
-        Ok(Self {
-            region: region.into(),
-            model_id: "amazon.titan-embed-text-v1".to_string(),
-            dimensions: 1536,
-            credentials: AwsCredentials::from_env()?,
-        })
+        Self::for_model(region, "amazon.titan-embed-text-v1")
+    }
+
+    /// Cohere Embed English v3 (1024 dimensions).
+    pub fn cohere_english_v3(region: impl Into<String>) -> MenteResult<Self> {
+        Self::for_model(region, "cohere.embed-english-v3")
     }
 }
 
-/// Synchronous Bedrock (Titan) embedding provider.
+/// Synchronous Bedrock embedding provider.
 pub struct BedrockEmbeddingProvider {
     config: BedrockEmbeddingConfig,
     agent: ureq::Agent,
@@ -142,8 +188,46 @@ impl BedrockEmbeddingProvider {
         })
     }
 
-    fn invoke(&self, text: &str) -> MenteResult<Vec<f32>> {
+    /// Embed up to one call's worth of texts.
+    fn invoke(&self, texts: &[&str]) -> MenteResult<Vec<Vec<f32>>> {
+        let body = match self.config.family {
+            BedrockEmbeddingFamily::Titan => serde_json::json!({ "inputText": texts[0] }),
+            // Stored memories and queries are embedded the same way, so the
+            // document input type is used for both, as on the cloud platform.
+            BedrockEmbeddingFamily::Cohere => serde_json::json!({
+                "texts": texts,
+                "input_type": "search_document",
+            }),
+        };
+        let value = self.post(&body)?;
+        let vectors = match self.config.family {
+            BedrockEmbeddingFamily::Titan => {
+                let r: TitanResponse = serde_json::from_value(value).map_err(|e| {
+                    MenteError::Storage(format!("bedrock response parse failed: {e}"))
+                })?;
+                vec![r.embedding]
+            }
+            BedrockEmbeddingFamily::Cohere => {
+                let r: CohereResponse = serde_json::from_value(value).map_err(|e| {
+                    MenteError::Storage(format!("bedrock response parse failed: {e}"))
+                })?;
+                r.embeddings
+            }
+        };
+        if vectors.len() != texts.len() {
+            return Err(MenteError::Storage(format!(
+                "bedrock returned {} embeddings for {} texts",
+                vectors.len(),
+                texts.len()
+            )));
+        }
+        Ok(vectors)
+    }
+
+    /// Sign and send one InvokeModel request.
+    fn post(&self, body: &serde_json::Value) -> MenteResult<serde_json::Value> {
         let cfg = &self.config;
+        let creds = cfg.credentials.credentials()?;
         let host = format!("bedrock-runtime.{}.amazonaws.com", cfg.region);
         // The request is sent with the raw model id in the path, while the SigV4
         // canonical URI uses the percent-encoded form. AWS re-encodes the path it
@@ -152,8 +236,8 @@ impl BedrockEmbeddingProvider {
         let canonical_uri = format!("/model/{}/invoke", uri_encode_segment(&cfg.model_id));
         let url = format!("https://{host}/model/{}/invoke", cfg.model_id);
 
-        let body = serde_json::to_vec(&serde_json::json!({ "inputText": text }))
-            .map_err(|e| MenteError::Serialization(e.to_string()))?;
+        let body =
+            serde_json::to_vec(body).map_err(|e| MenteError::Serialization(e.to_string()))?;
         let payload_hash = sha256_hex(&body);
 
         let now = chrono::Utc::now();
@@ -166,7 +250,7 @@ impl BedrockEmbeddingProvider {
             ("x-amz-content-sha256".to_string(), payload_hash.clone()),
             ("x-amz-date".to_string(), amzdate.clone()),
         ];
-        if let Some(token) = &cfg.credentials.session_token {
+        if let Some(token) = &creds.session_token {
             headers.push(("x-amz-security-token".to_string(), token.clone()));
         }
         headers.sort_by(|a, b| a.0.cmp(&b.0));
@@ -185,16 +269,11 @@ impl BedrockEmbeddingProvider {
             "AWS4-HMAC-SHA256\n{amzdate}\n{scope}\n{}",
             sha256_hex(canonical_request.as_bytes())
         );
-        let key = signing_key(
-            &cfg.credentials.secret_access_key,
-            &datestamp,
-            &cfg.region,
-            SERVICE,
-        );
+        let key = signing_key(&creds.secret_access_key, &datestamp, &cfg.region, SERVICE);
         let signature = hex(&hmac_sha256(&key, string_to_sign.as_bytes()));
         let authorization = format!(
             "AWS4-HMAC-SHA256 Credential={}/{scope}, SignedHeaders={signed_headers}, Signature={signature}",
-            cfg.credentials.access_key_id
+            creds.access_key_id
         );
 
         let mut req = self
@@ -205,18 +284,16 @@ impl BedrockEmbeddingProvider {
             .header("x-amz-date", &amzdate)
             .header("x-amz-content-sha256", &payload_hash)
             .header("authorization", &authorization);
-        if let Some(token) = &cfg.credentials.session_token {
+        if let Some(token) = &creds.session_token {
             req = req.header("x-amz-security-token", token);
         }
 
         let mut resp = req
             .send(body.as_slice())
             .map_err(|e| MenteError::Storage(format!("bedrock invoke failed: {e}")))?;
-        let parsed: TitanResponse = resp
-            .body_mut()
+        resp.body_mut()
             .read_json()
-            .map_err(|e| MenteError::Storage(format!("bedrock response parse failed: {e}")))?;
-        Ok(parsed.embedding)
+            .map_err(|e| MenteError::Storage(format!("bedrock response parse failed: {e}")))
     }
 }
 
@@ -225,14 +302,28 @@ struct TitanResponse {
     embedding: Vec<f32>,
 }
 
+#[derive(serde::Deserialize)]
+struct CohereResponse {
+    embeddings: Vec<Vec<f32>>,
+}
+
 impl EmbeddingProvider for BedrockEmbeddingProvider {
     fn embed(&self, text: &str) -> MenteResult<Vec<f32>> {
-        self.invoke(text)
+        self.invoke(&[text])?
+            .pop()
+            .ok_or_else(|| MenteError::Storage("bedrock returned no embedding".to_string()))
     }
 
     fn embed_batch(&self, texts: &[&str]) -> MenteResult<Vec<Vec<f32>>> {
-        // Titan InvokeModel embeds one input per call; batch by looping.
-        texts.iter().map(|t| self.invoke(t)).collect()
+        let per_call = match self.config.family {
+            BedrockEmbeddingFamily::Titan => 1,
+            BedrockEmbeddingFamily::Cohere => COHERE_MAX_BATCH,
+        };
+        let mut out = Vec::with_capacity(texts.len());
+        for chunk in texts.chunks(per_call) {
+            out.extend(self.invoke(chunk)?);
+        }
+        Ok(out)
     }
 
     fn dimensions(&self) -> usize {
@@ -280,6 +371,24 @@ mod tests {
     }
 
     #[test]
+    fn model_family_follows_the_provider_prefix() {
+        use BedrockEmbeddingFamily::*;
+        assert_eq!(
+            BedrockEmbeddingFamily::for_model("amazon.titan-embed-text-v2:0").unwrap(),
+            Titan
+        );
+        assert_eq!(
+            BedrockEmbeddingFamily::for_model("cohere.embed-english-v3").unwrap(),
+            Cohere
+        );
+        assert_eq!(
+            BedrockEmbeddingFamily::for_model("us.cohere.embed-english-v3").unwrap(),
+            Cohere
+        );
+        assert!(BedrockEmbeddingFamily::for_model("anthropic.claude-haiku-5-5").is_err());
+    }
+
+    #[test]
     fn sha256_hex_of_empty_is_known_constant() {
         assert_eq!(
             sha256_hex(b""),
@@ -300,5 +409,19 @@ mod tests {
         let v = provider.embed("the sky is blue").expect("live embed");
         assert_eq!(v.len(), 1024);
         assert!(v.iter().any(|&x| x != 0.0), "embedding should be non-zero");
+    }
+
+    /// Live Cohere batch call. Ignored by default, like `live_titan_embed`.
+    #[test]
+    #[ignore]
+    fn live_cohere_embed_batch() {
+        let region = std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+        let cfg = BedrockEmbeddingConfig::cohere_english_v3(region).expect("credentials");
+        let provider = BedrockEmbeddingProvider::new(cfg).expect("provider");
+        let texts: Vec<String> = (0..100).map(|i| format!("memory number {i}")).collect();
+        let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        let v = provider.embed_batch(&refs).expect("live batch");
+        assert_eq!(v.len(), 100, "100 texts span two calls of at most 96");
+        assert!(v.iter().all(|e| e.len() == 1024));
     }
 }

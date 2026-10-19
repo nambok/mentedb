@@ -53,7 +53,7 @@ use mentedb_cognitive::speculative::{CacheEntry, CacheStats, SpeculativeCache};
 use mentedb_cognitive::stream::{CognitionStream, StreamAlert, StreamConfig};
 use mentedb_cognitive::trajectory::{TrajectoryNode, TrajectoryTracker};
 use mentedb_cognitive::write_inference::{
-    InferredAction, WriteInferenceConfig, WriteInferenceEngine,
+    ContradictionPolicy, InferredAction, WriteInferenceConfig, WriteInferenceEngine,
 };
 use mentedb_consolidation::archival::{ArchivalConfig, ArchivalDecision, ArchivalPipeline};
 use mentedb_consolidation::compression::{CompressedMemory, MemoryCompressor};
@@ -298,6 +298,15 @@ pub struct EntitySeparation {
     pub name_b: String,
 }
 
+/// What [`MenteDb::store_with_outcome`] did with a memory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreOutcome {
+    /// Written under its own id.
+    Stored,
+    /// Not written: it duplicates the existing memory `of`.
+    Duplicate { of: MemoryId },
+}
+
 /// Configuration for the cognitive engine subsystems.
 #[derive(Debug, Clone)]
 pub struct CognitiveConfig {
@@ -315,6 +324,9 @@ pub struct CognitiveConfig {
     pub speculative_cache: bool,
     /// Whether archival evaluation is available.
     pub archival_evaluation: bool,
+    /// Memories carrying any of these tags never fade and are never archived
+    /// (pinned memories). Default: `scope:always`.
+    pub decay_exempt_tags: Vec<String>,
     /// Configuration for the write inference engine.
     pub inference_config: WriteInferenceConfig,
     /// Configuration for the decay engine.
@@ -464,6 +476,7 @@ impl Default for CognitiveConfig {
             phantom_tracking: true,
             speculative_cache: true,
             archival_evaluation: true,
+            decay_exempt_tags: vec!["scope:always".to_string()],
             inference_config: WriteInferenceConfig::default(),
             decay_config: DecayConfig::default(),
             phantom_config: PhantomConfig::default(),
@@ -1116,7 +1129,23 @@ impl MenteDb {
     /// - Invalidate superseded memories
     /// - Propagate confidence changes through the graph
     pub fn store(&self, node: MemoryNode) -> MenteResult<()> {
+        self.store_with_outcome(node).map(|_| ())
+    }
+
+    /// [`Self::store`], reporting whether the memory was written or skipped as
+    /// a duplicate of an existing one. Callers that hand the id back to a user
+    /// must use this: a skipped memory's own id does not exist afterwards.
+    pub fn store_with_outcome(&self, mut node: MemoryNode) -> MenteResult<StoreOutcome> {
         let started = std::time::Instant::now();
+        // A memory stored without a vector is invisible to semantic search,
+        // contradiction checks and dedup. Embed it here when an embedder is
+        // configured, so callers that send only text are still searchable.
+        if node.embedding.is_empty()
+            && !node.content.is_empty()
+            && let Some(e) = &self.embedder
+        {
+            node.embedding = e.embed(&node.content)?;
+        }
         let id = node.id;
         debug!("Storing memory {}", id);
 
@@ -1136,10 +1165,10 @@ impl MenteDb {
         if self.cognitive_config.always_dedup
             && !node.embedding.is_empty()
             && node.tags.iter().any(|t| t == "scope:always")
-            && self.is_duplicate_standing_rule(&node)
+            && let Some(of) = self.find_duplicate_standing_rule(&node)
         {
             debug!("scope:always dedup: {id} matches an existing standing rule, skipping insert");
-            return Ok(());
+            return Ok(StoreOutcome::Duplicate { of });
         }
 
         // Regular-memory paraphrase dedup: repeated extraction produces reworded
@@ -1151,10 +1180,10 @@ impl MenteDb {
         if self.cognitive_config.memory_dedup
             && !node.embedding.is_empty()
             && !node.tags.iter().any(|t| t == "scope:always")
-            && self.is_paraphrase_duplicate(&node)
+            && let Some(of) = self.find_paraphrase_duplicate_of(&node)
         {
             debug!("memory dedup: {id} is a paraphrase of an existing memory, skipping insert");
-            return Ok(());
+            return Ok(StoreOutcome::Duplicate { of });
         }
 
         let is_new = !self.page_map.read().contains_key(&id);
@@ -1184,7 +1213,7 @@ impl MenteDb {
         }
 
         Self::record_latency(&self.store_latency_us, started.elapsed());
-        Ok(())
+        Ok(StoreOutcome::Stored)
     }
 
     /// Whether `node` (a `scope:always` memory) duplicates an existing standing
@@ -1192,7 +1221,8 @@ impl MenteDb {
     /// Compared only against the standing-rule set (fetched directly from the tag
     /// index), which the cap keeps small, so this stays cheap and exact rather
     /// than relying on approximate recall ranking.
-    fn is_duplicate_standing_rule(&self, node: &MemoryNode) -> bool {
+    /// The existing standing rule `node` duplicates, if any.
+    fn find_duplicate_standing_rule(&self, node: &MemoryNode) -> Option<MemoryId> {
         let threshold = self.cognitive_config.always_dedup_threshold;
         for id in self.index.bitmap.query_tag("scope:always") {
             if id == node.id {
@@ -1208,25 +1238,16 @@ impl MenteDb {
                 continue;
             }
             if existing.content.trim() == node.content.trim() {
-                return true;
+                return Some(id);
             }
             if !existing.embedding.is_empty()
                 && Self::cosine(&node.embedding, &existing.embedding) >= threshold
+                && Self::number_sequence(&node.content) == Self::number_sequence(&existing.content)
             {
-                return true;
+                return Some(id);
             }
         }
-        false
-    }
-
-    /// Whether `node` is a near-identical paraphrase of an existing memory with
-    /// the SAME owner on both axes. Candidates come from a small owner-scoped
-    /// vector search; a candidate counts only when embedding cosine reaches
-    /// `memory_dedup_threshold` AND token-set jaccard reaches
-    /// `memory_dedup_token_overlap`, the two-gate design that keeps genuine
-    /// value updates storable.
-    fn is_paraphrase_duplicate(&self, node: &MemoryNode) -> bool {
-        self.find_paraphrase_duplicate_of(node).is_some()
+        None
     }
 
     /// The stored memory `node` duplicates, if any: same owner, same scope
@@ -1324,6 +1345,14 @@ impl MenteDb {
             if old_tokens.is_empty() {
                 continue;
             }
+            // Same words with different numbers ("May 3 at 4pm" and "May 4
+            // at 3pm", "record 3-4" and "record 4-3") are different facts: the
+            // token set ignores order, so require the numbers to match in
+            // order before calling two memories the same.
+
+            if Self::number_sequence(&node.content) != Self::number_sequence(&existing.content) {
+                continue;
+            }
             let inter = new_tokens.intersection(&old_tokens).count() as f32;
             let union = new_tokens.union(&old_tokens).count() as f32;
             if union > 0.0 && inter / union >= min_overlap {
@@ -1400,6 +1429,14 @@ impl MenteDb {
 
     /// Lowercased alphanumeric token set of a content string, for the
     /// paraphrase-dedup overlap gate.
+    /// The numbers in `s`, in order of appearance.
+    fn number_sequence(s: &str) -> Vec<&str> {
+        s.split(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .map(|t| t.trim_matches('.'))
+            .filter(|t| t.chars().any(|c| c.is_ascii_digit()))
+            .collect()
+    }
+
     fn token_set(s: &str) -> std::collections::HashSet<String> {
         s.split(|c: char| !c.is_alphanumeric())
             .filter(|t| !t.is_empty())
@@ -1431,7 +1468,31 @@ impl MenteDb {
     /// Uses a single WAL lock for all writes, avoiding per-write overhead of
     /// flock acquisition, header reload, and LSN scan. Significantly faster
     /// for bulk inserts.
-    pub fn store_batch(&self, nodes: Vec<MemoryNode>) -> MenteResult<Vec<MemoryId>> {
+    pub fn store_batch(&self, mut nodes: Vec<MemoryNode>) -> MenteResult<Vec<MemoryId>> {
+        // Embed nodes sent without a vector in one provider call, as `store`
+        // does one at a time.
+        if let Some(e) = &self.embedder {
+            let missing: Vec<usize> = nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| n.embedding.is_empty() && !n.content.is_empty())
+                .map(|(i, _)| i)
+                .collect();
+            if !missing.is_empty() {
+                let texts: Vec<&str> = missing.iter().map(|&i| nodes[i].content.as_str()).collect();
+                let vectors = e.embed_batch(&texts)?;
+                if vectors.len() != missing.len() {
+                    return Err(MenteError::Storage(format!(
+                        "embedder returned {} vectors for {} texts",
+                        vectors.len(),
+                        missing.len()
+                    )));
+                }
+                for (i, v) in missing.into_iter().zip(vectors) {
+                    nodes[i].embedding = v;
+                }
+            }
+        }
         // Validate all embeddings upfront
         for node in &nodes {
             if self.embedding_dim > 0
@@ -1825,6 +1886,8 @@ impl MenteDb {
         let results = self.index.hybrid_search_with_query_mode(
             embedding, query_text, tags, tags_or, time_range, fetch_k,
         );
+        let contradicts_hides = self.cognitive_config.inference_config.contradiction_policy
+            == ContradictionPolicy::Supersede;
         // Lock order when both are held: `page_map` first, then the graph.
         let pm = self.page_map.read();
         let graph = self.graph.graph();
@@ -1835,10 +1898,13 @@ impl MenteDb {
             .into_iter()
             .filter_map(|(id, raw_score)| {
                 // Exclude memories that an active Supersedes/Contradicts edge
-                // has invalidated.
+                // has invalidated. Under the Flag contradiction policy a
+                // Contradicts edge is a hint for the caller, so both sides stay
+                // recallable and only Supersedes hides a memory.
                 let incoming = graph.incoming(id);
                 let has_active_supersede = incoming.iter().any(|(_, e)| {
-                    (e.edge_type == EdgeType::Supersedes || e.edge_type == EdgeType::Contradicts)
+                    (e.edge_type == EdgeType::Supersedes
+                        || (e.edge_type == EdgeType::Contradicts && contradicts_hides))
                         && e.is_valid_at(at)
                 });
                 if has_active_supersede {
@@ -1865,13 +1931,7 @@ impl MenteDb {
                 // similarity with 30% freshly decayed salience, matching the
                 // MQL path, so old, unaccessed memories rank lower.
                 let score = if self.cognitive_config.decay_on_recall {
-                    let decayed = self.decay.compute_decay(
-                        node.salience,
-                        node.created_at,
-                        node.accessed_at,
-                        node.access_count,
-                        at,
-                    );
+                    let decayed = self.decayed_salience_at(&node, at);
                     raw_score * 0.7 + decayed * 0.3
                 } else {
                     raw_score
@@ -2205,13 +2265,7 @@ impl MenteDb {
             if node.tags.iter().any(|t| hidden.iter().any(|h| h == t)) {
                 continue;
             }
-            let health = self.decay.compute_decay(
-                node.salience,
-                node.created_at,
-                node.accessed_at,
-                node.access_count,
-                now,
-            ) as f64;
+            let health = self.decayed_salience_at(&node, now) as f64;
             total_health += health;
             count += 1;
             health_hist[((health * 5.0) as usize).min(4)] += 1;
@@ -2560,8 +2614,12 @@ impl MenteDb {
     pub fn prune_standing_rules(&self) -> MenteResult<PruneReport> {
         use std::collections::{HashMap, HashSet};
 
+        // Candidates come from the tag index, not a load of every memory: on a
+        // large database that full load took minutes, and callers hold the
+        // account write lock while this runs. The tag is re-checked on the
+        // loaded node in case the index lags a write.
         let always: Vec<MemoryNode> = self
-            .memory_ids()
+            .memory_ids_with_tag("scope:always")
             .into_iter()
             .filter_map(|id| self.get_memory(id).ok())
             .filter(|n| n.tags.iter().any(|t| t == "scope:always"))
@@ -2925,7 +2983,36 @@ impl MenteDb {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_micros() as u64;
-        self.decay.apply_decay_batch(memories, now);
+        for m in memories.iter_mut() {
+            if !self.is_decay_exempt(m) {
+                self.decay.apply_decay_batch(std::slice::from_mut(m), now);
+            }
+        }
+    }
+
+    /// Whether a memory is pinned against decay and archival
+    /// (`CognitiveConfig::decay_exempt_tags`).
+    pub fn is_decay_exempt(&self, memory: &MemoryNode) -> bool {
+        memory.tags.iter().any(|t| {
+            self.cognitive_config
+                .decay_exempt_tags
+                .iter()
+                .any(|e| e == t)
+        })
+    }
+
+    /// Salience decayed to `at`, or the stored salience for a pinned memory.
+    fn decayed_salience_at(&self, memory: &MemoryNode, at: u64) -> f32 {
+        if self.is_decay_exempt(memory) {
+            return memory.salience;
+        }
+        self.decay.compute_decay(
+            memory.salience,
+            memory.created_at,
+            memory.accessed_at,
+            memory.access_count,
+            at,
+        )
     }
 
     /// Compute the decayed salience for a single memory at the current time.
@@ -2934,13 +3021,7 @@ impl MenteDb {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_micros() as u64;
-        self.decay.compute_decay(
-            memory.salience,
-            memory.created_at,
-            memory.accessed_at,
-            memory.access_count,
-            now,
-        )
+        self.decayed_salience_at(memory, now)
     }
 
     /// Retained for API compatibility. Does nothing and persists nothing.
@@ -3647,13 +3728,7 @@ impl MenteDb {
                 && let Ok(node) = self.storage.load_memory(page_id)
             {
                 let final_score = if self.cognitive_config.decay_on_recall {
-                    let decayed_salience = self.decay.compute_decay(
-                        node.salience,
-                        node.created_at,
-                        node.accessed_at,
-                        node.access_count,
-                        now,
-                    );
+                    let decayed_salience = self.decayed_salience_at(&node, now);
                     // Blend search similarity with decayed salience.
                     // 70% similarity, 30% salience — keeps search relevance
                     // primary but rewards recently active memories.
@@ -4049,7 +4124,7 @@ impl MenteDb {
     ///
     /// Uses age, salience, and access patterns to make lifecycle decisions.
     pub fn evaluate_archival(&self, memory: &MemoryNode) -> ArchivalDecision {
-        if !self.cognitive_config.archival_evaluation {
+        if !self.cognitive_config.archival_evaluation || self.is_decay_exempt(memory) {
             return ArchivalDecision::Keep;
         }
         let now = std::time::SystemTime::now()
@@ -4059,13 +4134,7 @@ impl MenteDb {
         // Judge on the salience decayed to `now`, not the stored base. Stored
         // salience only changes on reinforcement, so a never-reinforced memory
         // keeps its base value and archival must derive the current strength.
-        let effective = self.decay.compute_decay(
-            memory.salience,
-            memory.created_at,
-            memory.accessed_at,
-            memory.access_count,
-            now,
-        );
+        let effective = self.decayed_salience_at(memory, now);
         self.archival.evaluate_effective(
             effective,
             memory.memory_type,
@@ -4093,13 +4162,10 @@ impl MenteDb {
         memories
             .iter()
             .map(|m| {
-                let effective = self.decay.compute_decay(
-                    m.salience,
-                    m.created_at,
-                    m.accessed_at,
-                    m.access_count,
-                    now,
-                );
+                if self.is_decay_exempt(m) {
+                    return (m.id, ArchivalDecision::Keep);
+                }
+                let effective = self.decayed_salience_at(m, now);
                 (
                     m.id,
                     self.archival.evaluate_effective(

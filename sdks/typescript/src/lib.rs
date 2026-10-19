@@ -558,7 +558,9 @@ fn build_ts_extraction_config(provider_override: Option<&str>) -> Result<Extract
         enable_contradiction_check: true,
         enable_deduplication: true,
         extraction_passes: 1,
-    })
+        ..ExtractionConfig::default()
+    }
+    .with_output_env())
 }
 
 // ---------------------------------------------------------------------------

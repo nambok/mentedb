@@ -103,8 +103,9 @@ async fn process_extraction(req: ExtractionRequest) -> Result<(), String> {
             valid_until: None,
             context: None,
         };
-        match req.db.store(node) {
-            Ok(()) => stored += 1,
+        match req.db.store_with_outcome(node) {
+            Ok(mentedb::StoreOutcome::Stored) => stored += 1,
+            Ok(mentedb::StoreOutcome::Duplicate { .. }) => {}
             Err(e) => {
                 tracing::warn!(error = %e, "failed to store extracted memory, skipping");
             }

@@ -10,7 +10,6 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::middleware;
 use http_body_util::BodyExt;
-use mentedb::MenteDb;
 use mentedb_server::auth;
 use mentedb_server::rate_limit::RateLimiter;
 use mentedb_server::routes;
@@ -30,9 +29,21 @@ const JWT_SECRET: &str = "test-secret-key-for-integration-tests";
 /// Build a test app with JWT auth enabled.
 fn build_test_app_with_auth() -> (axum::Router, TempDir) {
     let tmp = TempDir::new().unwrap();
-    let db = MenteDb::open(tmp.path()).unwrap();
+    let databases = Arc::new(
+        mentedb_server::databases::Databases::open(
+            tmp.path(),
+            None,
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap(),
+    );
     let state = Arc::new(AppState {
-        db: Arc::new(db),
+        db: databases.default_db(),
+        databases: databases.clone(),
+        verifier: Some(Arc::new(
+            mentedb_server::auth::TokenVerifier::shared_secret(&JWT_SECRET.to_string()),
+        )),
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: Some(JWT_SECRET.to_string()),
         admin_key: Some(ADMIN_KEY.to_string()),
@@ -53,9 +64,19 @@ fn build_test_app_with_auth() -> (axum::Router, TempDir) {
 /// Build a test app without JWT auth (development mode).
 fn build_test_app_no_auth() -> (axum::Router, TempDir) {
     let tmp = TempDir::new().unwrap();
-    let db = MenteDb::open(tmp.path()).unwrap();
+    let databases = Arc::new(
+        mentedb_server::databases::Databases::open(
+            tmp.path(),
+            None,
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap(),
+    );
     let state = Arc::new(AppState {
-        db: Arc::new(db),
+        db: databases.default_db(),
+        databases: databases.clone(),
+        verifier: None,
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: None,
         admin_key: None,
@@ -76,9 +97,19 @@ fn build_test_app_no_auth() -> (axum::Router, TempDir) {
 /// Build a test app with a very small rate-limit bucket for rate-limit testing.
 fn build_test_app_rate_limited(max_tokens: u32) -> (axum::Router, TempDir) {
     let tmp = TempDir::new().unwrap();
-    let db = MenteDb::open(tmp.path()).unwrap();
+    let databases = Arc::new(
+        mentedb_server::databases::Databases::open(
+            tmp.path(),
+            None,
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap(),
+    );
     let state = Arc::new(AppState {
-        db: Arc::new(db),
+        db: databases.default_db(),
+        databases: databases.clone(),
+        verifier: None,
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: None,
         admin_key: None,
@@ -104,9 +135,21 @@ fn bearer_header_for(aid: &str) -> String {
 }
 fn build_test_app_with_auth_no_admin_key() -> (axum::Router, TempDir) {
     let tmp = TempDir::new().unwrap();
-    let db = MenteDb::open(tmp.path()).unwrap();
+    let databases = Arc::new(
+        mentedb_server::databases::Databases::open(
+            tmp.path(),
+            None,
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap(),
+    );
     let state = Arc::new(AppState {
-        db: Arc::new(db),
+        db: databases.default_db(),
+        databases: databases.clone(),
+        verifier: Some(Arc::new(
+            mentedb_server::auth::TokenVerifier::shared_secret(&JWT_SECRET.to_string()),
+        )),
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: Some(JWT_SECRET.to_string()),
         admin_key: None,
@@ -192,7 +235,7 @@ mod rest_endpoints {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = response_json(resp).await;
         assert_eq!(body["status"], "ok");
-        assert_eq!(body["version"], "0.1.0");
+        assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
         assert!(body["uptime_seconds"].is_number());
     }
 

@@ -316,7 +316,8 @@ curl -X POST http://localhost:6677/v1/process_turn \
 ```
 
 See [Self-hosting](./SELF_HOSTING.md) for LLM config, embeddings, auth, and the
-overnight maintenance the server runs to keep memory healthy.
+overnight maintenance the server runs to keep memory healthy, and the
+[server API reference](./SERVER_API.md) for every endpoint.
 
 ## What `process_turn` returns
 
@@ -334,10 +335,12 @@ field you use most is `context`. The rest is signal you can act on or ignore.
 
 These are the embedded SDK names (Python and Rust). Node returns them in
 camelCase (`factsExtracted`, `contradictionCount`). The REST payloads use
-snake_case but differ slightly: both the self-hosted server and the cloud report
-the conflict count as `contradictions`; the self-hosted server returns
-`pain_warnings` as a count, the cloud as a list; and the cloud reports what it
-stored as `stored` / `memories_stored` rather than `facts_extracted`.
+snake_case but differ slightly: the self-hosted server reports `contradictions`
+and `pain_warnings` as counts (see
+[`POST /process_turn`](./SERVER_API.md#post-process_turn)); the cloud reports
+the conflict count as `contradictions` too, returns `pain_warnings` as a list,
+and reports what it stored as `stored` / `memories_stored` rather than
+`facts_extracted`.
 
 ## Next steps
 

@@ -74,7 +74,7 @@ The server binary is `mentedb-server` and runs on axum with JWT auth, rate limit
 - `crates/mentedb-cognitive/src/`: 7 cognitive feature modules
 - `crates/mentedb-server/src/main.rs`: Axum server entry point
 - `.github/workflows/ci.yml`: CI pipeline (check, test, fmt, clippy)
-- `.github/workflows/release.yml`: Release pipeline (crates.io, PyPI, npm)
+- `.github/workflows/release-plz.yml` and `publish-sdks.yml`: Release pipeline (crates.io, then PyPI, npm, Docker)
 
 ## Do not
 

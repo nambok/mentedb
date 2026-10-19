@@ -138,6 +138,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "arc-swap"
+version = "1.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "380962b3d93b99642e50b9febf72c071e97e8b32d86eae9cf4ef582bb960ae6e"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -231,6 +240,28 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "axum-server"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1ab4a3ec9ea8a657c72d99a03a824af695bd0fb5ec639ccbd9cd3543b41a5f9"
+dependencies = [
+ "arc-swap",
+ "bytes",
+ "fs-err",
+ "http",
+ "http-body",
+ "hyper",
+ "hyper-util",
+ "pin-project-lite",
+ "rustls",
+ "rustls-pemfile",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls",
+ "tower-service",
 ]
 
 [[package]]
@@ -1038,7 +1069,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1188,7 +1219,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1304,6 +1335,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs-err"
+version = "3.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5c95b673b8f6f7235229ae11c5642d81b04c2e64c1e2fb417bc0cf73ca45f29"
+dependencies = [
+ "autocfg",
+ "tokio",
 ]
 
 [[package]]
@@ -1853,7 +1894,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -2242,7 +2283,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "criterion",
  "mentedb-cognitive",
@@ -2267,7 +2308,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-cli"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "mentedb",
  "reqwest",
@@ -2276,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-cognitive"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "ahash 0.8.12",
  "criterion",
@@ -2294,7 +2335,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-consolidation"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "ahash 0.8.12",
  "mentedb-core",
@@ -2306,7 +2347,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-context"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "ahash 0.8.12",
  "mentedb-core",
@@ -2318,7 +2359,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-core"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "ahash 0.8.12",
  "bytemuck",
@@ -2333,7 +2374,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-embedding"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -2356,7 +2397,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-extraction"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "chrono",
  "hmac",
@@ -2375,7 +2416,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-graph"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "ahash 0.8.12",
  "bincode",
@@ -2392,7 +2433,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-index"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "ahash 0.8.12",
  "bincode",
@@ -2410,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-query"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -2422,7 +2463,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-replication"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -2443,10 +2484,11 @@ dependencies = [
 
 [[package]]
 name = "mentedb-server"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "anyhow",
  "axum",
+ "axum-server",
  "bytes",
  "http-body-util",
  "hyper",
@@ -2458,7 +2500,9 @@ dependencies = [
  "mentedb-extraction",
  "prometheus",
  "prost",
+ "rcgen",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
@@ -2475,7 +2519,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-storage"
-version = "0.37.3"
+version = "0.39.2"
 dependencies = [
  "ahash 0.8.12",
  "bincode",
@@ -2589,7 +2633,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3236,7 +3280,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -3274,9 +3318,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3439,6 +3483,19 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "rcgen"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
+dependencies = [
+ "pem",
+ "ring",
+ "rustls-pki-types",
+ "time",
+ "yasna",
 ]
 
 [[package]]
@@ -3711,14 +3768,14 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "rustls"
-version = "0.23.37"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "758025cb5fccfd3bc2fd74708fd4682be41d99e5dff73c377c0646c6012c73a4"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "log",
  "once_cell",
@@ -3727,6 +3784,15 @@ dependencies = [
  "rustls-webpki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]
@@ -3741,9 +3807,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -4210,7 +4276,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4529,6 +4595,7 @@ dependencies = [
  "prost",
  "socket2 0.5.10",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tower",
  "tower-layer",
@@ -5106,7 +5173,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5466,6 +5533,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05f360fc0b24296329c78fda852a1e9ae82de9cf7b27dae4b7f62f118f77b9ed"
 dependencies = [
  "tap",
+]
+
+[[package]]
+name = "yasna"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
+dependencies = [
+ "time",
 ]
 
 [[package]]

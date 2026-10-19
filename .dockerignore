@@ -1,4 +1,7 @@
 target/
+target-*/
+.claude/
+.venv/
 .git/
 sdks/
 dashboard/

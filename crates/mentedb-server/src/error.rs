@@ -10,6 +10,7 @@ use serde_json::json;
 pub enum ApiError {
     BadRequest(String),
     NotFound(String),
+    Conflict(String),
     Unauthorized(String),
     Forbidden(String),
     RateLimited,
@@ -22,6 +23,7 @@ impl std::fmt::Display for ApiError {
         match self {
             Self::BadRequest(msg) => write!(f, "bad request: {msg}"),
             Self::NotFound(msg) => write!(f, "not found: {msg}"),
+            Self::Conflict(msg) => write!(f, "conflict: {msg}"),
             Self::Unauthorized(msg) => write!(f, "unauthorized: {msg}"),
             Self::Forbidden(msg) => write!(f, "forbidden: {msg}"),
             Self::RateLimited => write!(f, "rate limited"),
@@ -36,6 +38,7 @@ impl IntoResponse for ApiError {
         let (status, message) = match &self {
             Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
+            Self::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             Self::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
             Self::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             Self::RateLimited => (

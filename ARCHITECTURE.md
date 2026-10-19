@@ -457,18 +457,31 @@ what was deleted and why.
 ### mentedb-server
 
 Binary crate. Axum-based REST API + Tonic gRPC + WebSocket server.
-Wraps `MenteDb` in `Arc<MenteDb>` for concurrent access (no external lock).
+Each database is an `Arc<MenteDb>` shared across requests (no external lock).
 REST listens on 6677 and gRPC on 6678 by default.
 
 Key subsystems:
-- **REST API** (`handlers.rs`, `routes.rs`): `/v1/memories` (store, get, forget),
-  `/v1/recall` (MQL), `/v1/search` (vector), `/v1/edges`, `/v1/stats`,
-  `/v1/process_turn` (the full turn pipeline), `/v1/ingest` (LLM extraction from
-  a conversation), `/v1/spaces`, `/v1/auth/token`, `/v1/health`, and the admin
-  routes under `/v1/admin`
+- **Named databases** (`databases.rs`): one `MenteDb` per tenant, each in its own
+  directory with its own lock. The default database sits at the data directory
+  root and backs the routes under `/v1`; a named one sits in `<data-dir>/dbs/<name>`
+  and backs the same routes under `/v1/db/<name>`. Named databases open on first
+  use and the least recently used idle ones close past `MENTEDB_MAX_OPEN_DATABASES`
+- **REST API** (`routes.rs`, `handlers.rs`, `handlers_memory.rs`, `handlers_ops.rs`),
+  per database: `/memories` (store, get, forget, batch), `/recall` (MQL),
+  `/search` (vector), `/search/hybrid`, `/context`, `/edges`, `/stats`,
+  `/process_turn` (the full turn pipeline), `/ingest` (LLM extraction from a
+  conversation), memory history, neighbors and pins, `/conflicts`, `/profile`,
+  `/entities`, `/recent`, `/maintenance/*`, `/enrich`, `/documents`, `/backup`
+  and `/backups`, plus the admin routes under `/admin`. Global: `/v1/databases`,
+  `/v1/spaces`, `/v1/auth/token`, `/v1/health` and `/v1/ready`. The full list is
+  in the [server API reference](docs/SERVER_API.md)
 - **gRPC** (`grpc.rs`): Bidirectional streaming cognition + memory services
 - **WebSocket** (`websocket.rs`): `/v1/ws/stream` cognition stream
-- **Auth** (`auth.rs`): JWT token creation/validation middleware
+- **Auth** (`auth.rs`): JWT middleware. Tokens are verified with a shared secret
+  (HS256) or a public key (RS256, ES256, EdDSA), and the `dbs` and `read_only`
+  claims scope a token to some databases and to reads
+- **TLS** (`tls.rs`): with `--tls-cert` and `--tls-key`, REST is served over
+  HTTPS and gRPC over TLS with the same certificate
 - **Rate limiting** (`rate_limit.rs`): Token bucket rate limiter
 - **Extraction queue** (`extraction_queue.rs`): Bounded mpsc channel (capacity 64)
   with semaphore-limited concurrency (max 4 parallel LLM calls). Drains
@@ -483,9 +496,10 @@ Key subsystems:
 
 Configurable via CLI flags (`--data-dir`, `--port`, `--grpc-port`, `--jwt-secret`,
 `--require-auth`, `--admin-key`, `--llm-*`, `--auto-extract`,
-`--embedding-provider`, `--maintenance-interval-hours`) and matching `MENTEDB_*`
-environment variables; see [Self-hosting](docs/SELF_HOSTING.md). Shuts down
-gracefully on Ctrl+C (SIGINT), closing the database.
+`--embedding-provider`, `--maintenance-interval-hours`, `--tls-cert`, `--tls-key`)
+and `MENTEDB_*` environment variables, some of which have no flag (for example
+`MENTEDB_JWT_PUBLIC_KEY_FILE`); see [Self-hosting](docs/SELF_HOSTING.md). Shuts
+down gracefully on Ctrl+C (SIGINT), closing every open database.
 
 ### mentedb (facade)
 
@@ -791,7 +805,7 @@ All fallible operations return `MenteResult<T>`, which is
 ## Thread Safety & Concurrency
 
 MenteDB uses **interior mutability** throughout — each component manages its own
-fine-grained locking. The server holds `Arc<MenteDb>` (no external lock).
+fine-grained locking. The server holds one `Arc<MenteDb>` per open database (no external lock).
 
 | Component | Lock Type | Scope |
 |-----------|-----------|-------|
@@ -837,7 +851,7 @@ the embedder:
 `mentedb-server` uses the gossip and placement parts: with `MENTEDB_SHARDING=1`
 plus `MENTEDB_NODE_ADDR` and `MENTEDB_SEEDS`, nodes find each other on
 `/v1/cluster/gossip` and forward each request to the agent's owner (the agent
-id comes from the JWT). This is separate from `mentedb-replication`, which
+id comes from the token's `agent_id` claim). This is separate from `mentedb-replication`, which
 replicates one dataset with Raft and is not wired into the server.
 
 ## Index Persistence
