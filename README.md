@@ -778,6 +778,23 @@ TRAVERSE 550e8400-e29b-41d4-a716-446655440000 DEPTH 3 WHERE edge_type = caused
 CONSOLIDATE WHERE type = episodic AND accessed < "2024-01-01"
 ```
 
+### Fast MQL queries
+
+- Filter on `type` or `tag` and add a `LIMIT`. Equality on these (`=`, and
+  `IN [...]` lists) is answered from the bitmap index, so only matching
+  memories are loaded, and without `ORDER BY` loading stops once `LIMIT`
+  results are found. `RECALL memories WHERE type = episodic LIMIT 10` loads
+  10 memories whatever the database size.
+- Conditions on `content`, `salience`, `confidence`, `AS OF`, and any `!=`
+  are checked after a memory is loaded. Combine them with a `type` or `tag`
+  filter to keep the set of loaded memories small.
+- `ORDER BY` needs every candidate before it can sort, so it loads every
+  memory that passes the indexed filters. Leave it out when any `LIMIT`
+  matches will do; unordered results come back in storage order.
+- A `WHERE` with `OR`, `NOT`, or parentheses, or one with no `type` or `tag`
+  filter, visits every memory (still stopping at `LIMIT` when there is no
+  `ORDER BY`).
+
 ## Docker
 
 ```bash

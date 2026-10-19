@@ -195,7 +195,54 @@ prefer the built-in scheduler or the per database endpoint:
 and old low-value memories never decay, recall quality degrades over time. Don't
 skip it.
 
+**It does not stall live traffic.** Consolidation and archival read every
+memory of a database, which on a large database on network storage takes
+minutes. They copy the list of pages first and load the memories without
+holding the lock that stores and recalls need, so recall and writes keep
+running at close to their normal latency while a sweep is in progress.
+
 ## Production notes
+
+### Durability, flushing, and restarts
+
+Every write is durable when it returns: the engine appends it to the write
+ahead log and fsyncs the log before acknowledging. A flush is not needed for
+durability. A flush checkpoints the log (writes the cached pages to the data
+file, fsyncs it, and truncates the log), and every few flushes it also saves
+the index, graph, and cognitive snapshots. The server flushes on its own after
+maintenance and at shutdown. If you embed the engine as a library:
+
+- Do not call `flush()` after every write. Each call fsyncs the data file and
+  rewrites the memory map when anything changed, which turns a cheap write
+  into an expensive one. Call it periodically, or rely on the automatic
+  checkpoint the storage engine runs once the log grows past 8 MB.
+- Call `close()` (which runs `flush_full()`) on a clean shutdown, so the next
+  open loads every snapshot instead of rebuilding from storage.
+  `close_quick()` only checkpoints the log; the next open still finds the
+  data, it just rebuilds the snapshots it skipped.
+
+**Reopen speed.** At every checkpoint the engine persists a map of which page
+holds which memory (`memory_map.bin` in the database directory), stamped with
+a token that is also written into the log's checkpoint entry. Opening a
+database loads that map and replays only the log entries written since that
+checkpoint, so it reads just the pages those entries touched instead of every
+page. If the map is missing, damaged, or does not belong to the current log
+(for example the first open after upgrading from a version without it), open
+falls back to reading every page once and then writes the map, so the
+following opens are fast again. After a crash the free page list is rebuilt
+from the map too, reading only the free pages to verify them.
+
+For large databases, especially on network storage such as EFS, keep
+checkpoints regular (the server's maintenance flush and the 8 MB automatic
+checkpoint both count). The longer the log since the last checkpoint, the more
+pages a reopen after a crash has to read.
+
+Mode activation probes (the embedding, owner, and validity of each mode rule)
+are saved with the snapshots as `mode_probes.bin`. On open, a probe is reused
+only when its memory has not been written since the probe was taken; any other
+probe loads again on first use. A single injection recall loads at most
+`InjectionConfig::mode_probe_load_budget` probes, so a missing probe file
+spreads the reload over several requests instead of one slow one.
 
 Run with auth on:
 

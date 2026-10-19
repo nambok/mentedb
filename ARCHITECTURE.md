@@ -121,8 +121,35 @@ LZ4 compression reduces I/O for large payloads. CRC32 checksums catch torn write
 on recovery. The WAL supports `append`, `sync`, `iterate` (for crash recovery),
 and `truncate` (after checkpoint).
 
-Entry types: `PageWrite` (data mutation), `Commit` (transaction boundary),
-`Checkpoint` (safe truncation point).
+Entry types: `PageWrite` (data mutation), `PageFree` (a deleted memory's page
+returned to the free list), `Commit` (reserved, not emitted), `Checkpoint`
+(safe truncation point; its payload is the token of the memory map persisted
+with it).
+
+Durability is the WAL fsync on every write, not the flush. A checkpoint
+flushes cached pages, fsyncs the data file, appends a `Checkpoint` entry, and
+truncates the WAL to it, so after a checkpoint the WAL holds exactly the
+changes since. The engine checkpoints on its own when the WAL passes 8 MB
+after a store; `MenteDb::flush` checkpoints on every call and saves the index,
+graph, and cognitive snapshots every `flush_snapshot_interval` flushes.
+
+**Memory Map** (`memory_map.rs`):
+Which page holds which memory, persisted as `memory_map.bin` at every
+checkpoint that changed it (written to a temp file, fsynced, renamed). The
+snapshot carries a random token that is also the payload of the checkpoint's
+WAL entry. On open the engine finds the checkpoint entry carrying that token
+and applies every later entry to the map: a `PageWrite` maps its page to the
+memory its data decodes to (or to nothing), a `PageFree` unmaps the page and
+marks it free. That is the same rule a full page scan applies, so a reused
+page never keeps a stale id. When no entry carries the token (the WAL was
+truncated without a map, the map write failed, or the file is damaged or from
+an older version), open reads every page once instead and persists a fresh
+map. Each mapped page also carries a write stamp derived from the token and
+the entry's LSN, identical whether computed live, at checkpoint, or by replay
+after a crash; derived caches (mode probes) use it to tell, without loading a
+page, that a memory has not changed. After crash recovery the free list is
+rebuilt from the map's free pages (each verified to be a free page before the
+list is written) instead of from a scan of every page.
 
 **Buffer Pool** (`buffer.rs`):
 Sits between the page manager and the rest of the system. Uses CLOCK eviction
@@ -739,6 +766,12 @@ fine-grained locking. The server holds `Arc<MenteDb>` (no external lock).
 | `page_map` | `parking_lot::RwLock` on HashMap | Read: lookups, Write: store/forget |
 | `EventBus` | `RwLock` for subscriber list | Publish/subscribe |
 | `CognitionStream` | `Mutex` on ring buffer | Token feed/drain |
+
+Passes that visit many memories (MQL scans, archival, consolidation, recall's
+candidate loads, write inference) copy page ids out of `page_map` and release
+it before loading pages. A reader holding it across page loads would stall
+every store waiting for the write lock, and with the lock's writer preference
+every later reader too.
 
 **Lock ordering** (prevents deadlocks):
 1. `page_map` → `StorageEngine` (never reverse)
