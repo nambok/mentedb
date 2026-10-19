@@ -116,7 +116,14 @@ pub struct BedrockEmbeddingConfig {
     pub family: BedrockEmbeddingFamily,
     pub dimensions: usize,
     pub credentials: AwsCredentialSource,
+    /// Whole call timeout for one embedding request. An embed sits on the
+    /// write and search paths, so a stalled call must fail fast rather than
+    /// hold a request open. Default 3 seconds.
+    pub timeout: std::time::Duration,
 }
+
+/// Default whole call timeout for a Bedrock embedding request.
+pub const DEFAULT_EMBED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl BedrockEmbeddingConfig {
     /// Any supported model. `dimensions` must match what the model returns.
@@ -133,7 +140,16 @@ impl BedrockEmbeddingConfig {
             model_id,
             dimensions,
             credentials,
+            timeout: DEFAULT_EMBED_TIMEOUT,
         })
+    }
+
+    /// Use `timeout` as the whole call timeout (zero keeps the default).
+    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+        if !timeout.is_zero() {
+            self.timeout = timeout;
+        }
+        self
     }
 
     /// A known model with its native dimensions, credentials from the
@@ -174,6 +190,14 @@ impl BedrockEmbeddingConfig {
     }
 }
 
+/// The HTTP agent embedding calls go through, bounded by `timeout` per call.
+fn http_agent(timeout: std::time::Duration) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .build()
+        .into()
+}
+
 /// Synchronous Bedrock embedding provider.
 pub struct BedrockEmbeddingProvider {
     config: BedrockEmbeddingConfig,
@@ -182,10 +206,8 @@ pub struct BedrockEmbeddingProvider {
 
 impl BedrockEmbeddingProvider {
     pub fn new(config: BedrockEmbeddingConfig) -> MenteResult<Self> {
-        Ok(Self {
-            config,
-            agent: ureq::Agent::new_with_defaults(),
-        })
+        let agent = http_agent(config.timeout);
+        Ok(Self { config, agent })
     }
 
     /// Embed up to one call's worth of texts.
@@ -338,6 +360,28 @@ impl EmbeddingProvider for BedrockEmbeddingProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embed_calls_give_up_at_the_timeout() {
+        // A server that accepts and never answers, like a stalled endpoint.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let _hold = std::thread::spawn(move || {
+            let conns: Vec<_> = listener.incoming().take(1).collect();
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            drop(conns);
+        });
+        let agent = http_agent(std::time::Duration::from_millis(300));
+        let started = std::time::Instant::now();
+        let result = agent.get(&format!("http://127.0.0.1:{port}/")).call();
+        assert!(result.is_err());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(DEFAULT_EMBED_TIMEOUT, std::time::Duration::from_secs(3));
+    }
 
     /// Verify the SigV4 signing chain against AWS's published worked example
     /// (docs: "Examples of the complete Signature Version 4 signing process").

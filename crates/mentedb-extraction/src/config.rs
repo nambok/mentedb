@@ -102,6 +102,27 @@ pub struct ExtractionConfig {
     /// thinks less, which is faster and cheaper.
     #[serde(default)]
     pub effort: Option<String>,
+    /// Model for judge and rerank calls (reading and comparing memories),
+    /// when it should differ from `model`, which stays the extraction and
+    /// enrichment model. `None` uses `model` for both.
+    #[serde(default)]
+    pub reader_model: Option<String>,
+    /// Whole request timeout for one LLM call, in seconds.
+    #[serde(default = "default_request_timeout_secs")]
+    pub request_timeout_secs: u64,
+    /// Connection timeout for one LLM call, in seconds.
+    #[serde(default = "default_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+}
+
+/// Default whole request timeout for an LLM call.
+pub fn default_request_timeout_secs() -> u64 {
+    120
+}
+
+/// Default connection timeout for an LLM call.
+pub fn default_connect_timeout_secs() -> u64 {
+    30
 }
 
 /// Default output token ceiling, sized so thinking plus a full extraction fits.
@@ -124,7 +145,24 @@ impl ExtractionConfig {
             let v = v.trim().to_lowercase();
             self.effort = (!v.is_empty()).then_some(v);
         }
+        if let Some(n) = std::env::var("MENTEDB_LLM_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|n| *n > 0)
+        {
+            self.request_timeout_secs = n;
+        }
         self
+    }
+
+    /// The config for judge and rerank calls: this one with `model` set to
+    /// `reader_model` when that is given.
+    pub fn reader_config(&self) -> Self {
+        let mut c = self.clone();
+        if let Some(m) = self.reader_model.as_ref().filter(|m| !m.is_empty()) {
+            c.model = m.clone();
+        }
+        c
     }
 
     /// Create a config for OpenAI with the given API key.
@@ -192,6 +230,9 @@ impl Default for ExtractionConfig {
             extraction_passes: 1,
             max_output_tokens: default_max_output_tokens(),
             effort: None,
+            reader_model: None,
+            request_timeout_secs: default_request_timeout_secs(),
+            connect_timeout_secs: default_connect_timeout_secs(),
         }
     }
 }

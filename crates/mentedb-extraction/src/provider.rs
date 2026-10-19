@@ -288,8 +288,12 @@ impl HttpExtractionProvider {
             ));
         }
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(
+                config.request_timeout_secs.max(1),
+            ))
+            .connect_timeout(std::time::Duration::from_secs(
+                config.connect_timeout_secs.max(1),
+            ))
             .build()
             .map_err(|e| ExtractionError::ConfigError(format!("HTTP client error: {}", e)))?;
         Ok(Self {
@@ -847,6 +851,17 @@ mod claude_tests {
 
     fn cfg() -> ExtractionConfig {
         ExtractionConfig::anthropic("k")
+    }
+
+    #[test]
+    fn reader_config_swaps_only_the_model() {
+        let mut c = cfg();
+        assert_eq!(c.reader_config().model, c.model);
+        c.reader_model = Some("reader-model".to_string());
+        let r = c.reader_config();
+        assert_eq!(r.model, "reader-model");
+        assert_eq!(r.api_url, c.api_url);
+        assert_ne!(c.model, "reader-model", "the extraction model is kept");
     }
 
     #[test]
