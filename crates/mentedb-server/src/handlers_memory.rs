@@ -156,11 +156,33 @@ async fn search_hybrid(
     let agent_scope = scope_agent(&agent, parse_optional_uuid(&req, "agent_id")?)?;
     let user_scope = parse_optional_uuid(&req, "user_id")?.map(UserId);
     let project = body_str(&req, "project");
+    // Per request ranking options: an MMR diversity weight, the built in
+    // lexical reranker, and relevance first selection (choose the top k on
+    // relevance, then let decayed salience order just those).
+    let mmr_lambda = match req.get("mmr_lambda") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_f64()
+                .filter(|l| (0.0..=1.0).contains(l))
+                .ok_or_else(|| {
+                    ApiError::BadRequest("'mmr_lambda' must be between 0 and 1".into())
+                })? as f32,
+        ),
+    };
+    let rerank = body_bool(&req, "rerank")?;
+    let relevance_first = body_bool(&req, "relevance_first")?;
 
     let handle = db.handle.clone();
     let results = tokio::task::spawn_blocking(move || {
         let tag_refs: Vec<&str> = tags.iter().map(String::as_str).collect();
-        let hits = handle.recall_hybrid_scoped_at_mode(
+        let lexical = mentedb::reranker::LexicalReranker::default();
+        let opts = mentedb::HybridOptions {
+            mmr_lambda,
+            reranker: rerank.then_some(&lexical as &dyn mentedb::reranker::Reranker),
+            relevance_first,
+            record_access: true,
+        };
+        let hits = handle.recall_hybrid_scoped_with(
             &embedding,
             query_text.as_deref(),
             k,
@@ -171,6 +193,7 @@ async fn search_hybrid(
             agent_scope,
             user_scope,
             project.as_deref(),
+            &opts,
         )?;
         Ok::<_, MenteError>(
             hits.into_iter()
@@ -890,6 +913,14 @@ fn body_usize(req: &Value, field: &str) -> Result<Option<usize>, ApiError> {
                 .ok_or_else(|| ApiError::BadRequest(format!("'{field}' must be a whole number")))
         })
         .transpose()
+}
+
+fn body_bool(req: &Value, field: &str) -> Result<bool, ApiError> {
+    match req.get(field) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(ApiError::BadRequest(format!("'{field}' must be a boolean"))),
+    }
 }
 
 fn body_str(req: &Value, field: &str) -> Option<String> {

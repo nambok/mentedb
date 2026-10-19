@@ -57,18 +57,54 @@ pub fn resolve(cert: Option<PathBuf>, key: Option<PathBuf>) -> Result<Option<Tls
 pub fn load(paths: &TlsPaths) -> Result<TlsMaterial, String> {
     let cert_pem = read(&paths.cert, "certificate")?;
     let key_pem = read(&paths.key, "private key")?;
-    let rest = server_config(&cert_pem, &key_pem).map_err(|e| {
+    from_pem(cert_pem, key_pem).map_err(|e| {
         format!(
             "TLS {} / {}: {e}",
             paths.cert.display(),
             paths.key.display()
         )
-    })?;
+    })
+}
+
+/// Validate PEM bytes held in memory into TLS material.
+pub fn from_pem(cert_pem: Vec<u8>, key_pem: Vec<u8>) -> Result<TlsMaterial, String> {
+    let rest = server_config(&cert_pem, &key_pem)?;
     Ok(TlsMaterial {
         rest: Arc::new(rest),
         cert_pem,
         key_pem,
     })
+}
+
+/// TLS from files (`--tls-cert`/`--tls-key` or the `_FILE` variables) or from
+/// inline PEM (`MENTEDB_TLS_CERT_PEM`/`MENTEDB_TLS_KEY_PEM`). Each source needs
+/// both halves; mixing the two sources is an error.
+pub fn resolve_material(
+    cert_file: Option<PathBuf>,
+    key_file: Option<PathBuf>,
+    cert_pem: Option<String>,
+    key_pem: Option<String>,
+) -> Result<Option<TlsMaterial>, String> {
+    let files = cert_file.is_some() || key_file.is_some();
+    let inline = cert_pem.is_some() || key_pem.is_some();
+    if files && inline {
+        return Err(
+            "TLS is configured twice: use the certificate and key files, or \
+             MENTEDB_TLS_CERT_PEM and MENTEDB_TLS_KEY_PEM, not both"
+                .to_string(),
+        );
+    }
+    if inline {
+        return match (cert_pem, key_pem) {
+            (Some(c), Some(k)) => from_pem(c.into_bytes(), k.into_bytes())
+                .map(Some)
+                .map_err(|e| format!("TLS from MENTEDB_TLS_CERT_PEM / MENTEDB_TLS_KEY_PEM: {e}")),
+            _ => Err(
+                "set both MENTEDB_TLS_CERT_PEM and MENTEDB_TLS_KEY_PEM to serve HTTPS".to_string(),
+            ),
+        };
+    }
+    resolve(cert_file, key_file)?.as_ref().map(load).transpose()
 }
 
 fn read(path: &Path, what: &str) -> Result<Vec<u8>, String> {
@@ -113,9 +149,28 @@ where
     let make_service = app.into_make_service_with_connect_info::<SocketAddr>();
     match tls {
         None => {
-            axum::serve(listener, make_service)
-                .with_graceful_shutdown(shutdown)
-                .await
+            // Stop accepting at the signal, then give in-flight requests at
+            // most `drain_timeout` to finish before returning anyway.
+            let signalled = Arc::new(tokio::sync::Notify::new());
+            let notify = signalled.clone();
+            let serve = axum::serve(listener, make_service).with_graceful_shutdown(async move {
+                shutdown.await;
+                notify.notify_one();
+            });
+            let drain_limit = async {
+                signalled.notified().await;
+                tokio::time::sleep(drain_timeout).await;
+            };
+            tokio::select! {
+                result = serve => result,
+                _ = drain_limit => {
+                    tracing::warn!(
+                        ?drain_timeout,
+                        "requests still in flight after the drain window; shutting down anyway"
+                    );
+                    Ok(())
+                }
+            }
         }
         Some(config) => {
             let handle = axum_server::Handle::new();
@@ -157,6 +212,25 @@ mod tests {
         );
         assert!(resolve(Some("c.pem".into()), None).is_err());
         assert!(resolve(None, Some("k.pem".into())).is_err());
+    }
+
+    #[test]
+    fn inline_pem_material_and_its_conflicts() {
+        let (cert, key) = self_signed();
+        assert!(
+            resolve_material(None, None, Some(cert.clone()), Some(key.clone()))
+                .unwrap()
+                .is_some()
+        );
+        assert!(resolve_material(None, None, None, None).unwrap().is_none());
+        assert!(resolve_material(None, None, Some(cert.clone()), None).is_err());
+        assert!(
+            resolve_material(Some("c.pem".into()), None, Some(cert), Some(key)).is_err(),
+            "files and inline PEM together"
+        );
+        let (_, other_key) = self_signed();
+        let (cert2, _) = self_signed();
+        assert!(resolve_material(None, None, Some(cert2), Some(other_key)).is_err());
     }
 
     #[test]

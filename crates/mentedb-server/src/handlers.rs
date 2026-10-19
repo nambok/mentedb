@@ -187,6 +187,7 @@ pub async fn get_memory(
     agent: Option<Extension<AuthenticatedAgent>>,
     db: Db,
     Path(params): Path<HashMap<String, String>>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, ApiError> {
     let id = memory_id_param(&params)?;
     let node = db
@@ -194,7 +195,10 @@ pub async fn get_memory(
         .map_err(|_| ApiError::NotFound(format!("memory {id} not found")))?;
     check_owner(&agent, &node)?;
 
-    Ok(Json(memory_node_to_json(&node)))
+    Ok(Json(memory_node_to_json_with(
+        &node,
+        wants_embedding(&query),
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -441,9 +445,22 @@ pub async fn process_turn(
             .unwrap_or_else(mentedb::context::DeltaTracker::new)
     };
 
+    // `store: false` runs only the read half of the turn: recall, pain
+    // warnings and the delta, with nothing written to the database.
+    let store = match req.get("store") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(ApiError::BadRequest("'store' must be a boolean".into())),
+    };
+
     let db = db.handle.clone();
     let joined = tokio::task::spawn_blocking(move || {
-        let result = db.process_turn(&input, &mut tracker);
+        let result = if store {
+            db.process_turn(&input, &mut tracker).map(TurnOutcome::Full)
+        } else {
+            db.recall_turn_context(&input, &mut tracker)
+                .map(TurnOutcome::RecallOnly)
+        };
         (result, tracker)
     })
     .await
@@ -457,25 +474,34 @@ pub async fn process_turn(
         error!("process_turn failed: {e}");
         ApiError::Internal(format!("process_turn failed: {e}"))
     })?;
+    let result = match result {
+        TurnOutcome::Full(r) => r,
+        TurnOutcome::RecallOnly(r) => {
+            let context: Vec<Value> = r.context.iter().map(turn_context_json).collect();
+            return Ok((
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "stored": false,
+                    "context": context,
+                    "cache_hit": r.cache_hit,
+                    "stored_ids": [],
+                    "episodic_id": null,
+                    "pain_warnings": r.pain_warnings.len(),
+                    "delta_added": r.delta_added.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+                    "delta_removed": r.delta_removed.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+                })),
+            ));
+        }
+    };
 
-    let context: Vec<Value> = result
-        .context
-        .iter()
-        .map(|sm| {
-            json!({
-                "id": sm.memory.id.to_string(),
-                "content": sm.memory.content,
-                "memory_type": format!("{:?}", sm.memory.memory_type).to_lowercase(),
-                "relevance_score": sm.score,
-                "created_at": sm.memory.created_at,
-            })
-        })
-        .collect();
+    let context: Vec<Value> = result.context.iter().map(turn_context_json).collect();
 
     Ok((
         StatusCode::OK,
         Json(json!({
             "ok": true,
+            "stored": true,
             "context": context,
             "cache_hit": result.cache_hit,
             "stored_ids": result.stored_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
@@ -490,6 +516,22 @@ pub async fn process_turn(
             "delta_removed": result.delta_removed.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
         })),
     ))
+}
+
+/// What a turn ran: the full pipeline, or only its read half.
+enum TurnOutcome {
+    Full(mentedb::process_turn::ProcessTurnResult),
+    RecallOnly(mentedb::process_turn::RecallContextResult),
+}
+
+fn turn_context_json(sm: &mentedb::context::ScoredMemory) -> Value {
+    json!({
+        "id": sm.memory.id.to_string(),
+        "content": sm.memory.content,
+        "memory_type": format!("{:?}", sm.memory.memory_type).to_lowercase(),
+        "relevance_score": sm.score,
+        "created_at": sm.memory.created_at,
+    })
 }
 
 /// Run the extraction pipeline and store accepted memories. Returns JSON stats.
@@ -660,7 +702,7 @@ pub(crate) fn parse_uuid(val: &Value, field: &str) -> Result<Uuid, ApiError> {
         })
 }
 
-pub(crate) fn parse_memory_type(val: &Value) -> Result<MemoryType, ApiError> {
+pub fn parse_memory_type(val: &Value) -> Result<MemoryType, ApiError> {
     let s = val
         .get("memory_type")
         .and_then(|v| v.as_str())
@@ -732,7 +774,21 @@ pub(crate) fn parse_attributes(val: Option<&Value>) -> HashMap<String, Attribute
     map
 }
 
+/// Whether a `fields` query value (comma separated) asks for the embedding.
+pub(crate) fn wants_embedding(params: &HashMap<String, String>) -> bool {
+    params
+        .get("fields")
+        .is_some_and(|f| f.split(',').any(|x| x.trim() == "embedding"))
+}
+
+/// A memory as JSON, without its embedding vector. Vectors are large and
+/// rarely useful to API callers; ask with `?fields=embedding` where supported.
 pub(crate) fn memory_node_to_json(node: &MemoryNode) -> Value {
+    memory_node_to_json_with(node, false)
+}
+
+/// A memory as JSON, with the embedding when `include_embedding` is set.
+pub(crate) fn memory_node_to_json_with(node: &MemoryNode, include_embedding: bool) -> Value {
     let mut attrs = Map::new();
     for (k, v) in &node.attributes {
         let jv = match v {
@@ -747,11 +803,11 @@ pub(crate) fn memory_node_to_json(node: &MemoryNode) -> Value {
 
     let memory_type_str = format!("{:?}", node.memory_type).to_lowercase();
 
-    json!({
+    let mut out = json!({
         "id": node.id.to_string(),
         "agent_id": node.agent_id.to_string(),
+        "user_id": node.user_id.to_string(),
         "memory_type": memory_type_str,
-        "embedding": node.embedding,
         "content": node.content,
         "created_at": node.created_at,
         "accessed_at": node.accessed_at,
@@ -759,9 +815,15 @@ pub(crate) fn memory_node_to_json(node: &MemoryNode) -> Value {
         "salience": node.salience,
         "confidence": node.confidence,
         "space_id": node.space_id.to_string(),
+        "valid_from": node.valid_from,
+        "valid_until": node.valid_until,
         "attributes": attrs,
         "tags": node.tags,
-    })
+    });
+    if include_embedding && let Value::Object(m) = &mut out {
+        m.insert("embedding".into(), json!(node.embedding));
+    }
+    out
 }
 
 fn parse_permission(s: &str) -> Result<Permission, ApiError> {

@@ -1,4 +1,8 @@
 //! Token bucket rate limiter implemented as a tower Layer/Service.
+//!
+//! Requests are counted per caller: the token's `sub` (else `jti`, else its
+//! agent) when the request is authenticated, otherwise the peer IP address.
+//! The layer must sit inside the auth middleware so it sees the caller.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -13,52 +17,37 @@ use serde_json::json;
 use tokio::sync::Mutex;
 use tower::{Layer, Service};
 
-/// Per-IP token bucket.
-struct Bucket {
-    tokens: u32,
-    last_refill: Instant,
-    max_tokens: u32,
-    refill_rate: u32,
+/// Default bucket size (`MENTEDB_RATE_LIMIT_BURST`).
+pub const DEFAULT_BURST: u32 = 100;
+/// Default refill per second (`MENTEDB_RATE_LIMIT_PER_SEC`).
+pub const DEFAULT_PER_SEC: u32 = 10;
+/// Buckets kept before idle (full) ones are dropped.
+const MAX_TRACKED_KEYS: usize = 100_000;
+
+/// What requests are counted under.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Key {
+    Caller(String),
+    Ip(IpAddr),
 }
 
-impl Bucket {
-    fn new(max_tokens: u32, refill_rate: u32) -> Self {
-        Self {
-            tokens: max_tokens,
-            last_refill: Instant::now(),
-            max_tokens,
-            refill_rate,
-        }
-    }
-
-    /// Refill tokens based on elapsed time and try to consume one.
-    fn try_consume(&mut self) -> bool {
-        let now = Instant::now();
-        let elapsed = now.duration_since(self.last_refill);
-        let refill = (elapsed.as_secs_f64() * f64::from(self.refill_rate)) as u32;
-        if refill > 0 {
-            self.tokens = (self.tokens + refill).min(self.max_tokens);
-            self.last_refill = now;
-        }
-        if self.tokens > 0 {
-            self.tokens -= 1;
-            true
-        } else {
-            false
-        }
-    }
+/// One caller's token bucket.
+struct Bucket {
+    tokens: f64,
+    last_refill: Instant,
 }
 
 /// Shared rate limiter state.
 #[derive(Clone)]
 pub struct RateLimiter {
-    buckets: Arc<Mutex<HashMap<IpAddr, Bucket>>>,
+    buckets: Arc<Mutex<HashMap<Key, Bucket>>>,
     max_tokens: u32,
     refill_rate: u32,
 }
 
 impl RateLimiter {
-    /// Creates a new rate limiter with the given bucket capacity and refill rate.
+    /// A limiter allowing bursts of `max_tokens` refilled at `refill_rate` per
+    /// second. Either at 0 turns limiting off.
     pub fn new(max_tokens: u32, refill_rate: u32) -> Self {
         Self {
             buckets: Arc::new(Mutex::new(HashMap::new())),
@@ -66,11 +55,56 @@ impl RateLimiter {
             refill_rate,
         }
     }
+
+    /// `MENTEDB_RATE_LIMIT_BURST` and `MENTEDB_RATE_LIMIT_PER_SEC` (0 for
+    /// either turns limiting off), defaulting to 100 and 10.
+    pub fn from_env() -> Self {
+        let read = |name: &str, default: u32| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.trim().parse::<u32>().ok())
+                .unwrap_or(default)
+        };
+        Self::new(
+            read("MENTEDB_RATE_LIMIT_BURST", DEFAULT_BURST),
+            read("MENTEDB_RATE_LIMIT_PER_SEC", DEFAULT_PER_SEC),
+        )
+    }
+
+    fn enabled(&self) -> bool {
+        self.max_tokens > 0 && self.refill_rate > 0
+    }
+
+    async fn allow(&self, key: Key) -> bool {
+        let now = Instant::now();
+        let max = f64::from(self.max_tokens);
+        let rate = f64::from(self.refill_rate);
+        let mut buckets = self.buckets.lock().await;
+        if buckets.len() >= MAX_TRACKED_KEYS {
+            // A full bucket carries no state worth keeping.
+            buckets.retain(|_, b| {
+                b.tokens + now.duration_since(b.last_refill).as_secs_f64() * rate < max
+            });
+        }
+        let bucket = buckets.entry(key).or_insert(Bucket {
+            tokens: max,
+            last_refill: now,
+        });
+        let elapsed = now.duration_since(bucket.last_refill).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * rate).min(max);
+        bucket.last_refill = now;
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Default for RateLimiter {
     fn default() -> Self {
-        Self::new(100, 10)
+        Self::new(DEFAULT_BURST, DEFAULT_PER_SEC)
     }
 }
 
@@ -114,28 +148,52 @@ where
         let limiter = self.limiter.clone();
         let mut inner = self.inner.clone();
 
-        // Extract client IP from connection info or forwarded headers.
-        let ip = req
+        let key = req
             .extensions()
-            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-            .map(|ci| ci.0.ip())
-            .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+            .get::<crate::auth::AuthenticatedAgent>()
+            .and_then(|a| a.rate_key())
+            .map(Key::Caller)
+            .unwrap_or_else(|| {
+                Key::Ip(
+                    req.extensions()
+                        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                        .map(|ci| ci.0.ip())
+                        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
+                )
+            });
 
         Box::pin(async move {
-            let allowed = {
-                let mut buckets = limiter.buckets.lock().await;
-                let bucket = buckets
-                    .entry(ip)
-                    .or_insert_with(|| Bucket::new(limiter.max_tokens, limiter.refill_rate));
-                bucket.try_consume()
-            };
-
-            if allowed {
+            if !limiter.enabled() || limiter.allow(key).await {
                 inner.call(req).await
             } else {
                 let body = json!({ "error": "too many requests" });
                 Ok((StatusCode::TOO_MANY_REQUESTS, axum::Json(body)).into_response())
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn buckets_are_per_key_and_refill() {
+        let l = RateLimiter::new(2, 1000);
+        let a = Key::Caller("alice".into());
+        let b = Key::Caller("bob".into());
+        assert!(l.allow(a.clone()).await);
+        assert!(l.allow(a.clone()).await);
+        assert!(!l.allow(a.clone()).await, "alice's burst is spent");
+        assert!(l.allow(b.clone()).await, "bob has his own bucket");
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        assert!(l.allow(a).await, "refilled");
+    }
+
+    #[test]
+    fn zero_turns_limiting_off() {
+        assert!(!RateLimiter::new(0, 10).enabled());
+        assert!(!RateLimiter::new(10, 0).enabled());
+        assert!(RateLimiter::new(1, 1).enabled());
     }
 }

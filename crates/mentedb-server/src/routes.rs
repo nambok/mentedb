@@ -6,6 +6,7 @@ use axum::Router;
 use axum::routing::{delete, get, post};
 
 use crate::handlers;
+use crate::hosting;
 use crate::state::AppState;
 use crate::websocket;
 
@@ -13,10 +14,15 @@ use crate::websocket;
 /// default database and under `/v1/db/{db}` for a named one.
 fn database_routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/memories", post(handlers::store_memory))
+        .route(
+            "/memories",
+            post(handlers::store_memory).get(hosting::list_memories),
+        )
         .route(
             "/memories/{id}",
-            get(handlers::get_memory).delete(handlers::forget_memory),
+            get(handlers::get_memory)
+                .delete(handlers::forget_memory)
+                .patch(hosting::patch_memory),
         )
         .route("/recall", post(handlers::recall_memories))
         .route("/search", post(handlers::search_similar))
@@ -32,6 +38,7 @@ fn database_routes() -> Router<Arc<AppState>> {
         .route("/admin/mql", post(handlers::admin_run_mql))
         .merge(crate::handlers_memory::routes())
         .merge(crate::handlers_ops::routes())
+        .merge(hosting::routes())
 }
 
 /// Build the complete axum router with all v1 API routes.
@@ -52,6 +59,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/metrics", get(crate::metrics::handler))
         .route("/console", get(crate::console::handler))
         .merge(crate::handlers_ops::global_routes())
+        .merge(hosting::global_routes())
         .nest("/v1", database_routes())
         .nest("/v1/db/{db}", database_routes())
         .with_state(state)

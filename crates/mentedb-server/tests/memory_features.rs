@@ -520,7 +520,14 @@ async fn batch_store_validates_every_item_before_storing() {
     item["attributes"] = json!({ "env": "prod" });
     item["valid_until"] = json!(u64::MAX);
     let ids = batch(&app, "/v1", vec![item]).await;
-    let (_, body) = send(&app, "GET", &format!("/v1/memories/{}", ids[0]), None, None).await;
+    let (_, body) = send(
+        &app,
+        "GET",
+        &format!("/v1/memories/{}?fields=embedding", ids[0]),
+        None,
+        None,
+    )
+    .await;
     assert_eq!(body["memory_type"], "episodic");
     assert_eq!(body["tags"], json!(["ops"]));
     assert_eq!(body["attributes"]["env"], "prod");

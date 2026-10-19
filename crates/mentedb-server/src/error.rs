@@ -16,6 +16,8 @@ pub enum ApiError {
     RateLimited,
     Internal(String),
     ServiceUnavailable(String),
+    /// The request's deadline passed before the work finished.
+    GatewayTimeout(String),
 }
 
 impl std::fmt::Display for ApiError {
@@ -29,6 +31,7 @@ impl std::fmt::Display for ApiError {
             Self::RateLimited => write!(f, "rate limited"),
             Self::Internal(msg) => write!(f, "internal error: {msg}"),
             Self::ServiceUnavailable(msg) => write!(f, "service unavailable: {msg}"),
+            Self::GatewayTimeout(msg) => write!(f, "deadline exceeded: {msg}"),
         }
     }
 }
@@ -41,6 +44,7 @@ impl IntoResponse for ApiError {
             Self::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             Self::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
             Self::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
+            Self::GatewayTimeout(msg) => (StatusCode::GATEWAY_TIMEOUT, msg.clone()),
             Self::RateLimited => (
                 StatusCode::TOO_MANY_REQUESTS,
                 "too many requests".to_string(),

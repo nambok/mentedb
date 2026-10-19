@@ -31,6 +31,9 @@ pub mod handlers;
 pub mod handlers_memory;
 /// Operations endpoints.
 pub mod handlers_ops;
+/// Hosting endpoints and middleware: paged lists, in place updates, scoped
+/// drops, batch search, deadlines and the enrichment pool.
+pub mod hosting;
 /// Rule based maintenance sweep (consolidate, decay, archive).
 pub mod maintenance;
 pub mod metrics;

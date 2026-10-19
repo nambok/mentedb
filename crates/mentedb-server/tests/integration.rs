@@ -125,7 +125,9 @@ fn build_test_app_rate_limited(max_tokens: u32) -> (axum::Router, TempDir) {
             state.clone(),
             auth::auth_middleware,
         ))
-        .layer(RateLimiter::new(max_tokens, 0));
+        // One token a second: the test runs well inside that, so the bucket
+        // does not refill between its requests. (0 would turn limiting off.)
+        .layer(RateLimiter::new(max_tokens, 1));
     (app, tmp)
 }
 
@@ -789,7 +791,7 @@ mod rate_limit_tests {
 
     #[tokio::test]
     async fn requests_exceeding_limit_return_429() {
-        // Bucket has 3 tokens and 0 refill rate so it never recovers.
+        // Bucket has 3 tokens and refills one a second, slower than the test.
         let (app, _tmp) = build_test_app_rate_limited(3);
         for _ in 0..3 {
             let req = Request::get("/v1/health").body(Body::empty()).unwrap();

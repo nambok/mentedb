@@ -363,29 +363,34 @@ async fn enrich(State(state): State<Arc<AppState>>, db: Db) -> Result<Json<Value
             "enrichment needs an embedder: start the server with an embedding provider".into(),
         )
     })?;
-    let provider = mentedb_extraction::HttpExtractionProvider::new(config.clone())
+    // Extraction runs on the extraction model; the judge that links
+    // entities, summarizes communities and models the user reads stored
+    // memories, so it runs on the reader model.
+    let provider = mentedb_extraction::HttpExtractionProvider::new(config.reader_config())
         .map_err(|e| ApiError::ServiceUnavailable(format!("LLM provider unavailable: {e}")))?;
     let llm = mentedb::cognitive::CognitiveLlmService::new(
         mentedb_extraction::ExtractionLlmJudge::new(provider),
     );
     let handle = db.handle.clone();
-    let runtime = tokio::runtime::Handle::current();
-    let result = blocking("enrichment", move || {
+    // Enrichment runs on its own bounded pool so long LLM pipelines never
+    // hold the threads that serve reads.
+    let result = crate::hosting::run_on_enrichment_pool(async move {
         // The engine compares this watermark with memory creation times, so
         // the next run only considers memories stored after this one.
         let watermark = now_micros();
-        let result = runtime.block_on(mentedb::enrichment::run_enrichment(
+        let result = mentedb::enrichment::run_enrichment(
             &handle,
             config,
             &*embedder,
             Some(&llm),
             watermark,
             false,
-        ));
+        )
+        .await;
         handle.flush().map_err(internal("flush"))?;
-        Ok(result)
+        Ok::<_, ApiError>(result)
     })
-    .await?;
+    .await??;
     Ok(Json(json!({
         "database": db.name,
         "memories_stored": result.memories_stored,
@@ -858,10 +863,22 @@ fn copy_tree(src: &FsPath, dst: &FsPath, exclude: &[PathBuf]) -> std::io::Result
 /// Writes that land while the files are read may or may not be included;
 /// for a snapshot at an exact point, pause writers first.
 async fn create_backup(
-    _admin: AdminGuard,
+    _guard: MaintenanceGuard,
     State(state): State<Arc<AppState>>,
     db: Db,
+    body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, ApiError> {
+    let requested = if body.iter().all(|b| b.is_ascii_whitespace()) {
+        None
+    } else {
+        let req: Value = serde_json::from_slice(&body)
+            .map_err(|e| ApiError::BadRequest(format!("invalid JSON: {e}")))?;
+        match req.get("name") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) => Some(backup_file_name(s)?),
+            Some(_) => return Err(ApiError::BadRequest("'name' must be a string".into())),
+        }
+    };
     let db_dir = state.databases.path_of(&db.name)?;
     let root = backup_root(&state);
     let data_root = state.databases.root().to_path_buf();
@@ -885,8 +902,25 @@ async fn create_backup(
                 "the backup directory must not contain the database directory".into(),
             ));
         }
-        let file = format!("{name}-{}.{BACKUP_EXTENSION}", utc_stamp(SystemTime::now()));
+        let file = match &requested {
+            Some(rel) => rel.clone(),
+            None => format!("{name}-{}.{BACKUP_EXTENSION}", utc_stamp(SystemTime::now())),
+        };
         let path = dir.join(&file);
+        // A chosen name may hold subdirectories; they must stay inside this
+        // database's backup directory.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(io("create backup directory"))?;
+            let parent_c = parent
+                .canonicalize()
+                .map_err(io("resolve backup directory"))?;
+            let dir_c = dir.canonicalize().map_err(io("resolve backup directory"))?;
+            if !parent_c.starts_with(&dir_c) {
+                return Err(ApiError::BadRequest(
+                    "backup name escapes the backup directory".into(),
+                ));
+            }
+        }
         if path.exists() {
             return Err(ApiError::Conflict(format!(
                 "backup {file} already exists; retry"
@@ -925,6 +959,72 @@ async fn create_backup(
             "manifest": manifest,
         })),
     ))
+}
+
+/// Longest caller chosen backup name.
+const MAX_BACKUP_NAME: usize = 200;
+
+/// Check a caller chosen backup name and give the file name to write: a
+/// relative path of segments made of letters, digits, `-`, `_` and `.`,
+/// separated by `/`, with no empty, `.` or `..` segment and no leading `/`.
+/// The backup extension is appended when missing. The file lands under
+/// `<backup dir>/<database>/`.
+pub fn backup_file_name(name: &str) -> Result<String, ApiError> {
+    let bad = |why: &str| ApiError::BadRequest(format!("invalid backup name '{name}': {why}"));
+    if name.is_empty() || name.len() > MAX_BACKUP_NAME {
+        return Err(bad("use 1 to 200 characters"));
+    }
+    if name.starts_with('/') {
+        return Err(bad("absolute paths are not allowed"));
+    }
+    for segment in name.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err(bad("empty, '.' and '..' segments are not allowed"));
+        }
+        if !segment
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        {
+            return Err(bad("use letters, digits, '-', '_', '.' and '/'"));
+        }
+    }
+    let suffix = format!(".{BACKUP_EXTENSION}");
+    Ok(if name.ends_with(&suffix) {
+        name.to_string()
+    } else {
+        format!("{name}{suffix}")
+    })
+}
+
+/// Admits a database maintenance call (drop, backup) on the database in the
+/// path: the admin key, an admin token, or a token with the maintenance scope
+/// naming that database.
+pub struct MaintenanceGuard;
+
+impl FromRequestParts<Arc<AppState>> for MaintenanceGuard {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, ApiError> {
+        use axum::extract::RawPathParams;
+        let params = RawPathParams::from_request_parts(parts, state)
+            .await
+            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        let name = params
+            .iter()
+            .find(|(k, _)| *k == "db")
+            .map(|(_, v)| v.to_string())
+            .unwrap_or_else(|| DEFAULT_DB.to_string());
+        crate::hosting::authorize_maintenance(
+            state,
+            &parts.headers,
+            parts.extensions.get::<AuthenticatedAgent>(),
+            &name,
+        )?;
+        Ok(Self)
+    }
 }
 
 /// Backups of this database, newest first.
@@ -1072,11 +1172,17 @@ async fn check_embedder(
     result
 }
 
-/// Readiness: 200 when the default database answers and, if an embedder is
-/// configured, it embeds (checked at most once per configured interval).
-/// 503 naming the failing check otherwise.
-async fn ready(State(state): State<Arc<AppState>>) -> Response {
+/// Readiness: 200 when the default database answers, the data directory takes
+/// a write, the probe database (`MENTEDB_READY_PROBE_DB`) opens and locks,
+/// and, if an embedder is configured, it embeds (checked at most once per
+/// configured interval; `?embedder=skip` leaves it out). 503 naming the
+/// failing check otherwise. Liveness is `/v1/live`, which checks nothing.
+async fn ready(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<HashMap<String, String>>,
+) -> Response {
     let cfg = &ops_config().readiness;
+    let skip_embedder = q.get("embedder").is_some_and(|v| v == "skip");
     let mut checks = serde_json::Map::new();
     let mut failed: Vec<&str> = Vec::new();
 
@@ -1099,9 +1205,68 @@ async fn ready(State(state): State<Arc<AppState>>) -> Response {
         }
     }
 
+    // The data mount takes writes: create and remove a probe file.
+    let root = state.databases.root().to_path_buf();
+    let write_probe = tokio::task::spawn_blocking(move || {
+        let probe = root.join(format!(".ready-{}", Uuid::new_v4()));
+        std::fs::write(&probe, b"ok").and_then(|_| std::fs::remove_file(&probe))
+    });
+    match tokio::time::timeout(cfg.check_timeout, write_probe).await {
+        Ok(Ok(Ok(()))) => {
+            checks.insert("data_dir".into(), json!("ok"));
+        }
+        Ok(Ok(Err(e))) => {
+            checks.insert(
+                "data_dir".into(),
+                json!(format!("error: not writable: {e}")),
+            );
+            failed.push("data_dir");
+        }
+        Ok(Err(e)) => {
+            checks.insert("data_dir".into(), json!(format!("error: {e}")));
+            failed.push("data_dir");
+        }
+        Err(_) => {
+            checks.insert(
+                "data_dir".into(),
+                json!(format!("error: timed out after {:?}", cfg.check_timeout)),
+            );
+            failed.push("data_dir");
+        }
+    }
+
+    // A named database opens, which takes its directory lock.
+    if let Some(probe_db) = crate::hosting::hosting_config().ready_probe_db.clone() {
+        let dbs = state.databases.clone();
+        let open = tokio::task::spawn_blocking(move || dbs.get(&probe_db, true).map(|_| ()));
+        match tokio::time::timeout(cfg.check_timeout, open).await {
+            Ok(Ok(Ok(()))) => {
+                checks.insert("database_lock".into(), json!("ok"));
+            }
+            Ok(Ok(Err(e))) => {
+                checks.insert("database_lock".into(), json!(format!("error: {e}")));
+                failed.push("database_lock");
+            }
+            Ok(Err(e)) => {
+                checks.insert("database_lock".into(), json!(format!("error: {e}")));
+                failed.push("database_lock");
+            }
+            Err(_) => {
+                checks.insert(
+                    "database_lock".into(),
+                    json!(format!("error: timed out after {:?}", cfg.check_timeout)),
+                );
+                failed.push("database_lock");
+            }
+        }
+    }
+
     match state.databases.embedder() {
         None => {
             checks.insert("embedder".into(), json!("not_configured"));
+        }
+        Some(_) if skip_embedder => {
+            checks.insert("embedder".into(), json!("skipped"));
         }
         Some(embedder) => match check_embedder(embedder, cfg).await {
             Ok(()) => {

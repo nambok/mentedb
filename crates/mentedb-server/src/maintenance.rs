@@ -97,7 +97,8 @@ pub async fn canonicalize_topics(db: &MenteDb, config: &Option<ExtractionConfig>
     let Some(cfg) = config.clone() else {
         return 0;
     };
-    let provider = match HttpExtractionProvider::new(cfg) {
+    // Judging reads stored memories, so it runs on the reader model.
+    let provider = match HttpExtractionProvider::new(cfg.reader_config()) {
         Ok(p) => p,
         Err(e) => {
             warn!("maintenance: topic canonicalization skipped, provider build failed: {e}");
@@ -123,7 +124,8 @@ pub async fn detect_conflicts(db: &MenteDb, config: &Option<ExtractionConfig>) -
     let Some(cfg) = config.clone() else {
         return 0;
     };
-    let provider = match HttpExtractionProvider::new(cfg) {
+    // Judging reads stored memories, so it runs on the reader model.
+    let provider = match HttpExtractionProvider::new(cfg.reader_config()) {
         Ok(p) => p,
         Err(e) => {
             warn!("maintenance: conflict detection skipped, provider build failed: {e}");

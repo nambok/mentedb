@@ -352,7 +352,14 @@ pub fn validate_name(name: &str) -> Result<(), ApiError> {
 }
 
 /// Paths under a database that only read, so read-only tokens may POST them.
-const READ_ONLY_POSTS: &[&str] = &["/recall", "/search", "/search/hybrid", "/context", "/query"];
+const READ_ONLY_POSTS: &[&str] = &[
+    "/recall",
+    "/search",
+    "/search/hybrid",
+    "/context",
+    "/query",
+    "/recall_for_action",
+];
 
 /// The database a request targets: `{db}` in `/v1/db/{db}/...`, otherwise the
 /// default. Checks the caller's token scope and opens the database.
