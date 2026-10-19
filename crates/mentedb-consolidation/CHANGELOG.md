@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.1](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.42.0...mentedb-consolidation-v0.42.1) - 2026-10-19
+
+### Other
+
+- warm the salience decay input cache off the request path and keep it across quick close ([#489](https://github.com/nambok/mentedb/pull/489))
+
 ## [0.42.0](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.41.1...mentedb-consolidation-v0.42.0) - 2026-10-19
 
 ### Other
