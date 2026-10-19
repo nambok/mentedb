@@ -17,6 +17,8 @@ pub mod auth;
 pub mod cluster;
 /// Bundled management console served at /console.
 pub mod console;
+/// Named per-tenant databases.
+pub mod databases;
 /// Unified API error type.
 pub mod error;
 /// Background extraction queue with bounded concurrency.
@@ -25,6 +27,12 @@ pub mod extraction_queue;
 pub mod grpc;
 /// HTTP request handlers for the REST API.
 pub mod handlers;
+/// Memory feature endpoints.
+pub mod handlers_memory;
+/// Operations endpoints.
+pub mod handlers_ops;
+/// Rule based maintenance sweep (consolidate, decay, archive).
+pub mod maintenance;
 pub mod metrics;
 /// Token bucket rate limiting middleware.
 pub mod rate_limit;

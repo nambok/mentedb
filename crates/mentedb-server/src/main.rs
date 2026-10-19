@@ -1,18 +1,14 @@
 //! MenteDB Server: axum based REST API with WebSocket, JWT auth, and observability.
 
-mod auth;
-mod cluster;
-mod console;
-mod error;
-mod extraction_queue;
-mod grpc;
-mod handlers;
-mod maintenance;
-mod metrics;
-mod rate_limit;
-mod routes;
-mod state;
-mod websocket;
+// The binary links the library's modules instead of compiling its own copy,
+// so library items the binary does not call are not dead code here and new
+// library modules need no declaration in this file.
+mod tls;
+
+use mentedb_server::{
+    auth, cluster, databases, extraction_queue, grpc, maintenance, metrics, rate_limit, routes,
+    state,
+};
 
 use std::env;
 use std::net::SocketAddr;
@@ -55,6 +51,12 @@ struct ServerConfig {
     extraction_dedup_threshold: Option<f32>,
     embedding_provider: Option<String>,
     maintenance_interval_hours: u64,
+    /// PEM certificate chain for HTTPS (--tls-cert / MENTEDB_TLS_CERT_FILE).
+    tls_cert: Option<PathBuf>,
+    /// PEM private key for HTTPS (--tls-key / MENTEDB_TLS_KEY_FILE).
+    tls_key: Option<PathBuf>,
+    /// How long in-flight HTTPS connections get to finish on shutdown.
+    shutdown_drain_secs: u64,
 }
 fn parse_args() -> ServerConfig {
     let args: Vec<String> = env::args().collect();
@@ -74,6 +76,9 @@ fn parse_args() -> ServerConfig {
     let mut extraction_dedup_threshold: Option<f32> = None;
     let mut embedding_provider: Option<String> = None;
     let mut maintenance_interval_hours: u64 = 24;
+    let mut tls_cert: Option<PathBuf> = None;
+    let mut tls_key: Option<PathBuf> = None;
+    let mut shutdown_drain_secs: u64 = 10;
 
     let mut i = 1;
     // Skip a leading subcommand (e.g. `maintenance`) so flags still parse.
@@ -191,7 +196,9 @@ fn parse_args() -> ServerConfig {
                     embedding_provider = Some(args[i + 1].clone());
                     i += 2;
                 } else {
-                    eprintln!("Error: --embedding-provider requires a value (candle, hash, none)");
+                    eprintln!(
+                        "Error: --embedding-provider requires a value (candle, bedrock, hash, none)"
+                    );
                     std::process::exit(1);
                 }
             }
@@ -204,6 +211,24 @@ fn parse_args() -> ServerConfig {
                     i += 2;
                 } else {
                     eprintln!("Error: --maintenance-interval-hours requires a value");
+                    std::process::exit(1);
+                }
+            }
+            "--tls-cert" => {
+                if i + 1 < args.len() {
+                    tls_cert = Some(PathBuf::from(&args[i + 1]));
+                    i += 2;
+                } else {
+                    eprintln!("Error: --tls-cert requires a PEM file path");
+                    std::process::exit(1);
+                }
+            }
+            "--tls-key" => {
+                if i + 1 < args.len() {
+                    tls_key = Some(PathBuf::from(&args[i + 1]));
+                    i += 2;
+                } else {
+                    eprintln!("Error: --tls-key requires a PEM file path");
                     std::process::exit(1);
                 }
             }
@@ -272,6 +297,23 @@ fn parse_args() -> ServerConfig {
     {
         maintenance_interval_hours = n;
     }
+    if tls_cert.is_none()
+        && let Ok(v) = env::var("MENTEDB_TLS_CERT_FILE")
+        && !v.is_empty()
+    {
+        tls_cert = Some(PathBuf::from(v));
+    }
+    if tls_key.is_none()
+        && let Ok(v) = env::var("MENTEDB_TLS_KEY_FILE")
+        && !v.is_empty()
+    {
+        tls_key = Some(PathBuf::from(v));
+    }
+    if let Ok(v) = env::var("MENTEDB_SHUTDOWN_DRAIN_SECS")
+        && let Ok(n) = v.parse::<u64>()
+    {
+        shutdown_drain_secs = n;
+    }
     ServerConfig {
         data_dir,
         port,
@@ -289,6 +331,9 @@ fn parse_args() -> ServerConfig {
         extraction_dedup_threshold,
         embedding_provider,
         maintenance_interval_hours,
+        tls_cert,
+        tls_key,
+        shutdown_drain_secs,
     }
 }
 
@@ -299,7 +344,8 @@ fn parse_args() -> ServerConfig {
 /// server always wires one and is loud about quality degradation.
 ///
 /// Selection: `candle` (semantic, requires the `local-embeddings` build
-/// feature), `hash` (deterministic but non-semantic), `none` (disable).
+/// feature), `bedrock` (AWS Bedrock, requires the `bedrock` build feature),
+/// `hash` (deterministic but non-semantic), `none` (disable).
 /// Default: candle when compiled in, hash otherwise.
 fn build_embedder(
     choice: Option<&str>,
@@ -325,7 +371,7 @@ fn build_embedder(
                 match mentedb_embedding::CandleEmbeddingProvider::new() {
                     Ok(provider) => {
                         tracing::info!("using local Candle embeddings (all-MiniLM-L6-v2)");
-                        return Some(Box::new(provider));
+                        Some(Box::new(provider))
                     }
                     Err(e) => {
                         eprintln!(
@@ -333,7 +379,7 @@ fn build_embedder(
                              to non-semantic hash embeddings. Semantic search quality will be \
                              severely degraded."
                         );
-                        return Some(Box::new(mentedb_embedding::HashEmbeddingProvider::new(384)));
+                        Some(Box::new(mentedb_embedding::HashEmbeddingProvider::new(384)))
                     }
                 }
             }
@@ -342,6 +388,57 @@ fn build_embedder(
                 eprintln!(
                     "Error: --embedding-provider candle requires a build with \
                      --features local-embeddings"
+                );
+                std::process::exit(1);
+            }
+        }
+        "bedrock" => {
+            #[cfg(feature = "bedrock")]
+            {
+                // Cohere v3 by default: measurably better recall than Titan
+                // and the same model the cloud platform uses.
+                let model = env::var("MENTEDB_EMBEDDING_MODEL")
+                    .unwrap_or_else(|_| "cohere.embed-english-v3".to_string());
+                let region = env::var("MENTEDB_EMBEDDING_REGION")
+                    .or_else(|_| env::var("AWS_REGION"))
+                    .unwrap_or_else(|_| "us-east-1".to_string());
+                let config = match mentedb_embedding::BedrockEmbeddingConfig::for_model(
+                    region.clone(),
+                    &model,
+                ) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("Error: --embedding-provider bedrock: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                let provider = match mentedb_embedding::BedrockEmbeddingProvider::new(config) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("Error: --embedding-provider bedrock: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                // One real call so a missing permission or model agreement
+                // shows up in the startup log, not on the first write. A
+                // failure here is logged, not fatal, so a brief Bedrock outage
+                // does not crash loop the server.
+                use mentedb_embedding::provider::EmbeddingProvider as _;
+                match provider.embed("startup check") {
+                    Ok(_) => tracing::info!(%model, %region, "using Bedrock embeddings"),
+                    Err(e) => tracing::warn!(
+                        %model,
+                        %region,
+                        error = %e,
+                        "Bedrock embedding check failed; writes will fail until this is fixed"
+                    ),
+                }
+                Some(Box::new(provider))
+            }
+            #[cfg(not(feature = "bedrock"))]
+            {
+                eprintln!(
+                    "Error: --embedding-provider bedrock requires a build with --features bedrock"
                 );
                 std::process::exit(1);
             }
@@ -355,7 +452,9 @@ fn build_embedder(
             Some(Box::new(mentedb_embedding::HashEmbeddingProvider::new(384)))
         }
         other => {
-            eprintln!("Error: unknown embedding provider '{other}' (expected candle, hash, none)");
+            eprintln!(
+                "Error: unknown embedding provider '{other}' (expected candle, bedrock, hash, none)"
+            );
             std::process::exit(1);
         }
     }
@@ -406,33 +505,67 @@ async fn main() -> Result<()> {
         config.jwt_secret.clone(),
     );
     let admin_key = config.admin_key.clone();
-    if config.require_auth && jwt_secret.is_none() {
-        eprintln!("Error: --require-auth was set but no --jwt-secret provided");
+    let verifier = match build_verifier(&jwt_secret) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    };
+    if config.require_auth && verifier.is_none() {
+        eprintln!(
+            "Error: --require-auth was set but neither --jwt-secret nor \
+             MENTEDB_JWT_PUBLIC_KEY_FILE is configured"
+        );
         std::process::exit(1);
     }
-    if jwt_secret.is_none() {
+    if verifier.is_none() {
         eprintln!(
-            "WARNING: Running without authentication. All endpoints are open. Set --jwt-secret for production use."
+            "WARNING: Running without authentication. All endpoints are open. Set --jwt-secret \
+             or MENTEDB_JWT_PUBLIC_KEY_FILE for production use."
         );
     }
 
+    // TLS: both files or neither. Load and validate before anything binds so
+    // a bad certificate fails the start instead of the first handshake.
+    let tls = match tls::resolve(config.tls_cert.clone(), config.tls_key.clone())
+        .and_then(|paths| paths.as_ref().map(tls::load).transpose())
+    {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    };
+    let cognitive_config = match cognitive_config_from_env() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    };
+
     std::fs::create_dir_all(&data_dir)?;
 
-    let db = match build_embedder(config.embedding_provider.as_deref()) {
-        Some(embedder) => MenteDb::open_with_embedder(&data_dir, embedder)?,
-        None => MenteDb::open(&data_dir)?,
-    };
-    let db = Arc::new(db);
+    let embedder: Option<Arc<dyn mentedb_embedding::provider::EmbeddingProvider>> =
+        build_embedder(config.embedding_provider.as_deref()).map(Arc::from);
+    let databases = Arc::new(databases::Databases::open(
+        &data_dir,
+        embedder,
+        cognitive_config,
+        databases_config_from_env(),
+    )?);
+    let db = databases.default_db();
 
     // Background maintenance sweep (self-hosted overnight jobs). Default every
     // 24h; 0 disables it (run the `maintenance` subcommand from cron instead).
     maintenance::spawn_scheduler(
-        db.clone(),
+        databases.clone(),
         maintenance_interval_hours,
         extraction_config.clone(),
     );
 
-    let auth_mode = if jwt_secret.is_some() {
+    let auth_mode = if verifier.is_some() {
         "enabled"
     } else {
         "disabled (development mode)"
@@ -456,6 +589,8 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(AppState {
         db: db.clone(),
+        databases: databases.clone(),
+        verifier: verifier.map(Arc::new),
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: jwt_secret.clone(),
         admin_key: admin_key.clone(),
@@ -467,6 +602,7 @@ async fn main() -> Result<()> {
         turn_trackers: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
     });
 
+    let scheme = if tls.is_some() { "https" } else { "http" };
     let app = routes::build_router(state.clone())
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -482,10 +618,13 @@ async fn main() -> Result<()> {
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive());
 
-    println!("MenteDB v0.1.0");
+    println!("MenteDB v{}", env!("CARGO_PKG_VERSION"));
     println!("Data directory: {}", data_dir.display());
-    println!("REST API on: 0.0.0.0:{port}");
-    println!("gRPC API on: 0.0.0.0:{grpc_port}");
+    println!("REST API on: {scheme}://0.0.0.0:{port}");
+    println!(
+        "gRPC API on: 0.0.0.0:{grpc_port} ({})",
+        if tls.is_some() { "TLS" } else { "plaintext" }
+    );
     println!("Auth: {auth_mode}");
     println!();
     println!("REST Endpoints:");
@@ -513,9 +652,22 @@ async fn main() -> Result<()> {
     let grpc_addr = SocketAddr::from(([0, 0, 0, 0], grpc_port));
     let grpc_state = state.clone();
 
+    let mut grpc_builder = TonicServer::builder();
+    if let Some(t) = &tls {
+        let identity = tonic::transport::Identity::from_pem(&t.cert_pem, &t.key_pem);
+        grpc_builder = match grpc_builder
+            .tls_config(tonic::transport::ServerTlsConfig::new().identity(identity))
+        {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("Error: gRPC TLS configuration: {e}");
+                std::process::exit(1);
+            }
+        };
+    }
     let grpc_handle = tokio::spawn(async move {
         info!("gRPC server listening on {grpc_addr}");
-        TonicServer::builder()
+        grpc_builder
             .add_service(CognitionServiceServer::new(CognitionServiceImpl {
                 state: grpc_state.clone(),
             }))
@@ -530,13 +682,15 @@ async fn main() -> Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
 
-    info!("MenteDB REST server listening on {addr}");
+    info!("MenteDB REST server listening on {scheme}://{addr}");
 
-    axum::serve(
+    tls::serve_rest(
         listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
+        app,
+        tls.map(|t| t.rest),
+        shutdown_signal(),
+        std::time::Duration::from_secs(config.shutdown_drain_secs),
     )
-    .with_graceful_shutdown(shutdown_signal())
     .await?;
 
     grpc_handle.abort();
@@ -548,10 +702,80 @@ async fn main() -> Result<()> {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(10), handle).await;
     }
 
-    db.close()?;
+    drop(db);
+    databases.close_all();
     info!("MenteDB server stopped");
 
     Ok(())
+}
+
+/// Token verification from the HS256 secret or, when
+/// `MENTEDB_JWT_PUBLIC_KEY_FILE` is set, a PEM public key (RS256, ES256 or
+/// EdDSA) so tokens can be signed elsewhere and no secret lives on the server.
+/// `MENTEDB_JWT_ISSUER` / `MENTEDB_JWT_AUDIENCE` add `iss` / `aud` checks.
+fn build_verifier(jwt_secret: &Option<String>) -> Result<Option<auth::TokenVerifier>, String> {
+    let issuer = env::var("MENTEDB_JWT_ISSUER")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let audience = env::var("MENTEDB_JWT_AUDIENCE")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let verifier = match env::var("MENTEDB_JWT_PUBLIC_KEY_FILE")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        Some(path) => {
+            let pem = std::fs::read(&path)
+                .map_err(|e| format!("reading MENTEDB_JWT_PUBLIC_KEY_FILE {path}: {e}"))?;
+            Some(
+                auth::TokenVerifier::public_key_pem(&pem)
+                    .map_err(|e| format!("MENTEDB_JWT_PUBLIC_KEY_FILE {path}: {e}"))?,
+            )
+        }
+        None => jwt_secret
+            .as_deref()
+            .map(auth::TokenVerifier::shared_secret),
+    };
+    Ok(verifier.map(|v| v.with_issuer_audience(issuer, audience)))
+}
+
+/// Limits for named databases from `MENTEDB_MAX_OPEN_DATABASES` and
+/// `MENTEDB_AUTO_CREATE_DATABASES` (default on).
+fn databases_config_from_env() -> databases::DatabasesConfig {
+    let mut cfg = databases::DatabasesConfig::default();
+    if let Some(n) = env::var("MENTEDB_MAX_OPEN_DATABASES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+    {
+        cfg.max_open = n;
+    }
+    if let Ok(v) = env::var("MENTEDB_AUTO_CREATE_DATABASES") {
+        cfg.auto_create = !matches!(v.to_lowercase().as_str(), "0" | "false" | "no" | "off");
+    }
+    cfg
+}
+
+/// Engine settings every database opens with.
+///
+/// `MENTEDB_CONTRADICTION_POLICY` picks what write inference does when a new
+/// memory contradicts an older one: `supersede` (default) closes the older
+/// one, `flag` keeps both valid and records a Contradicts edge. Any other
+/// value is a startup error.
+fn cognitive_config_from_env() -> Result<mentedb::CognitiveConfig, String> {
+    cognitive_config_from(env::var("MENTEDB_CONTRADICTION_POLICY").ok().as_deref())
+}
+
+fn cognitive_config_from(
+    contradiction_policy: Option<&str>,
+) -> Result<mentedb::CognitiveConfig, String> {
+    let mut cfg = mentedb::CognitiveConfig::default();
+    if let Some(v) = contradiction_policy.filter(|v| !v.trim().is_empty()) {
+        cfg.inference_config.contradiction_policy = v
+            .parse::<mentedb_cognitive::ContradictionPolicy>()
+            .map_err(|e| format!("MENTEDB_CONTRADICTION_POLICY: {e}"))?;
+    }
+    Ok(cfg)
 }
 
 /// Build an ExtractionConfig from the ServerConfig's LLM settings.
@@ -591,19 +815,23 @@ fn build_extraction_config(config: &ServerConfig) -> Option<ExtractionConfig> {
         .clone()
         .unwrap_or_else(|| provider.default_model().to_string());
 
-    Some(ExtractionConfig {
-        provider,
-        api_key: config.llm_api_key.clone(),
-        api_url,
-        model,
-        region: config.llm_region.clone(),
-        max_extractions_per_conversation: 50,
-        quality_threshold: config.extraction_quality_threshold.unwrap_or(0.7),
-        deduplication_threshold: config.extraction_dedup_threshold.unwrap_or(0.85),
-        enable_contradiction_check: true,
-        enable_deduplication: true,
-        extraction_passes: 1,
-    })
+    Some(
+        ExtractionConfig {
+            provider,
+            api_key: config.llm_api_key.clone(),
+            api_url,
+            model,
+            region: config.llm_region.clone(),
+            max_extractions_per_conversation: 50,
+            quality_threshold: config.extraction_quality_threshold.unwrap_or(0.7),
+            deduplication_threshold: config.extraction_dedup_threshold.unwrap_or(0.85),
+            enable_contradiction_check: true,
+            enable_deduplication: true,
+            extraction_passes: 1,
+            ..ExtractionConfig::default()
+        }
+        .with_output_env(),
+    )
 }
 
 async fn shutdown_signal() {
@@ -611,4 +839,23 @@ async fn shutdown_signal() {
         .await
         .expect("failed to listen for ctrl+c");
     info!("received ctrl+c, shutting down");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mentedb_cognitive::ContradictionPolicy;
+
+    #[test]
+    fn contradiction_policy_from_env_value() {
+        let policy = |v| cognitive_config_from(v).map(|c| c.inference_config.contradiction_policy);
+        assert_eq!(policy(None), Ok(ContradictionPolicy::Supersede));
+        assert_eq!(policy(Some("")), Ok(ContradictionPolicy::Supersede));
+        assert_eq!(
+            policy(Some("supersede")),
+            Ok(ContradictionPolicy::Supersede)
+        );
+        assert_eq!(policy(Some("FLAG")), Ok(ContradictionPolicy::Flag));
+        assert!(policy(Some("ignore")).is_err());
+    }
 }

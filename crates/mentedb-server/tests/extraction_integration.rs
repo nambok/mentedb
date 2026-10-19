@@ -6,7 +6,6 @@ use std::time::Instant;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use mentedb::MenteDb;
 use mentedb_extraction::{ExtractionConfig, LlmProvider};
 use mentedb_server::routes;
 use mentedb_server::state::AppState;
@@ -19,9 +18,19 @@ fn test_state(
     auto_extract: bool,
 ) -> (Arc<AppState>, TempDir) {
     let tmp = TempDir::new().unwrap();
-    let db = MenteDb::open(tmp.path()).unwrap();
+    let databases = Arc::new(
+        mentedb_server::databases::Databases::open(
+            tmp.path(),
+            None,
+            Default::default(),
+            Default::default(),
+        )
+        .unwrap(),
+    );
     let state = Arc::new(AppState {
-        db: Arc::new(db),
+        db: databases.default_db(),
+        databases: databases.clone(),
+        verifier: None,
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: None,
         admin_key: None,
@@ -50,6 +59,7 @@ fn mock_extraction_config() -> ExtractionConfig {
         enable_contradiction_check: true,
         enable_deduplication: true,
         extraction_passes: 1,
+        ..ExtractionConfig::default()
     }
 }
 

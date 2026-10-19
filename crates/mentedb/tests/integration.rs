@@ -822,24 +822,30 @@ fn reembed_all_embeds_and_indexes_and_is_idempotent() {
     // not at the current dimension (here, missing entirely) is unrecallable
     // until reembed_all re-embeds it at the embedder's dimension and indexes it.
     let dir = tempfile::tempdir().unwrap();
+    let agent = AgentId::new();
+
+    // Written while no embedder was configured, so it has no vector. With an
+    // embedder set, store would embed it itself.
+    let m = MemoryNode::new(
+        agent,
+        MemoryType::Semantic,
+        "the deploy runs on github actions".to_string(),
+        Vec::new(),
+    );
+    let id = m.id;
+    {
+        let db = MenteDb::open(dir.path()).unwrap();
+        db.store(m).unwrap();
+        db.close().unwrap();
+    }
+
     let db = MenteDb::open_with_embedder(
         dir.path(),
         Box::new(mentedb_embedding::hash_provider::HashEmbeddingProvider::new(8)),
     )
     .unwrap();
-    let agent = AgentId::new();
-
     let target = db.embed_text("probe").unwrap().unwrap().len();
     assert_eq!(target, 8);
-
-    let m = MemoryNode::new(
-        agent,
-        MemoryType::Semantic,
-        "the deploy runs on github actions".to_string(),
-        Vec::new(), // no vector, as if from an incompatible prior embedder
-    );
-    let id = m.id;
-    db.store(m).unwrap();
 
     let n = db.reembed_all().unwrap();
     assert_eq!(n, 1, "the vectorless memory is re-embedded");

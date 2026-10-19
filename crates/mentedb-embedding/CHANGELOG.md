@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.0](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.38.0...mentedb-embedding-v0.39.0) - 2026-10-18
+
+### Added
+
+- per tenant databases, scoped tokens, HTTPS, Bedrock on the task role and the full engine API in the server ([#469](https://github.com/nambok/mentedb/pull/469))
+
 ## [0.32.0](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.31.0...mentedb-embedding-v0.32.0) - 2026-07-27
 
 ### Other

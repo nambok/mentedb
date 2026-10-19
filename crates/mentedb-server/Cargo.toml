@@ -11,7 +11,7 @@ keywords = ["database", "server", "api", "ai", "agent"]
 categories = ["database-implementations", "web-programming::http-server"]
 
 [dependencies]
-mentedb = { workspace = true }
+mentedb = { workspace = true, features = ["enrichment"] }
 mentedb-core = { workspace = true }
 mentedb-cognitive = { workspace = true }
 mentedb-extraction = { workspace = true }
@@ -26,11 +26,15 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 anyhow = { workspace = true }
 bytes = { workspace = true }
 axum = { version = "0.8", features = ["ws"] }
+# Native HTTPS for the REST API (--tls-cert / --tls-key). rustls on the ring
+# provider, the same crypto backend reqwest already uses, so no aws-lc build.
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tower = "0.5"
 tower-http = { version = "0.7", features = ["cors", "trace", "compression-gzip"] }
 http-body-util = "0.1"
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
-tonic = "0.13"
+tonic = { version = "0.13", features = ["tls-ring"] }
 prost = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 prometheus = { version = "0.13", features = ["process"] }
@@ -40,10 +44,11 @@ default = []
 # Bundle the local Candle embedding model (all-MiniLM-L6-v2) so the server has
 # zero-config semantic search. Enabled in release/Docker builds.
 local-embeddings = ["mentedb-embedding/local"]
-# Native AWS Bedrock (Anthropic Claude) LLM extraction, signed with SigV4.
-# Enables MENTEDB_LLM_PROVIDER=bedrock. Credentials come from the AWS
-# environment; region from MENTEDB_LLM_REGION / AWS_REGION.
-bedrock = ["mentedb-extraction/bedrock"]
+# Native AWS Bedrock, signed with SigV4: Claude extraction
+# (MENTEDB_LLM_PROVIDER=bedrock) and embeddings (--embedding-provider bedrock).
+# Credentials come from static env keys or the ECS task role / EKS Pod
+# Identity endpoint.
+bedrock = ["mentedb-extraction/bedrock", "mentedb-embedding/bedrock"]
 
 [build-dependencies]
 tonic-build = "0.13"
@@ -56,6 +61,7 @@ tempfile = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 mentedb-extraction = { workspace = true }
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "ring"] }
 
 [package.metadata.docs.rs]
 all-features = true

@@ -144,7 +144,7 @@ where it is wired up for you).
 > user profile from accumulated turns. On [cloud](docs/CLOUD.md) it runs in the
 > background for you. Embedded in your own app, run it yourself between
 > conversations (`db.run_enrichment()` in Python, `mentedb::enrichment::run_enrichment`
-> in Rust). `mentedb-server` does not run it.
+> in Rust). On `mentedb-server`, call `POST /v1/enrich` (needs `--llm-provider`).
 
 **Cloud, any language (no SDK, REST):**
 
@@ -237,7 +237,8 @@ The result: a clean, curated memory that actually helps the AI perform better.
 - **Type Safe IDs** MemoryId, AgentId, SpaceId newtypes prevent accidental mixing
 - **Local Candle Embeddings** Zero config semantic search using all-MiniLM-L6-v2 (384 dims), no API key required (Docker image includes it; source builds need `--features local-embeddings`)
 - **Hosted Embedding APIs** OpenAI, Cohere, and Voyage over HTTP (`mentedb-embedding`'s `http` feature; Python SDK `embedding_provider="openai" | "cohere" | "voyage"`)
-- **AWS Bedrock Embeddings** Native Amazon Titan embeddings via a lightweight SigV4 signer (no async AWS SDK); enable `mentedb-embedding`'s `bedrock` feature, credentials from the standard AWS environment variables. Also available from the Python SDK as `embedding_provider="bedrock"`
+- **AWS Bedrock Embeddings** Cohere Embed v3 (batches of 96) and Amazon Titan embeddings via a lightweight SigV4 signer (no async AWS SDK); enable `mentedb-embedding`'s `bedrock` feature. Credentials come from AWS environment keys or the ECS task role / EKS Pod Identity endpoint, refreshed before they expire. Also available from the Python SDK as `embedding_provider="bedrock"`
+- **Self-Hosted Server** One process serves many databases (`/v1/db/{name}/...`, one directory and lock per tenant), tokens scoped to databases and optionally read only (verifiable with a public key, so no shared secret on the server), native HTTPS, Bedrock embeddings and extraction through the task role, and REST endpoints for hybrid search, heads-up context, pins, history, graph neighbors, conflicts, documents, maintenance and backups. See the [server API reference](docs/SERVER_API.md)
 - **gRPC + REST + MCP** Three integration paths for any use case
 
 ### Entity-Centric Memory
@@ -313,11 +314,20 @@ curl -X POST http://localhost:6677/v1/memories \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"agent_id": "...", "content": "User prefers dark mode", "memory_type": "semantic", "tags": ["preferences"]}'
 
-# Recall memories with MQL
+# Hybrid search (vector + keyword) with text the server embeds
+curl -X POST http://localhost:6677/v1/search/hybrid \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"query": "what theme does the user like", "k": 5}'
+
+# Recall with MQL
 curl -X POST http://localhost:6677/v1/recall \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"query": "RECALL memories WHERE type = semantic LIMIT 10"}'
+  -d '{"query": "RECALL memories WHERE tag = \"preferences\" LIMIT 10"}'
 ```
+
+Every route also works per database under `/v1/db/{name}/...`. The full list of
+endpoints, fields, auth rules and error codes is in the
+[server API reference](docs/SERVER_API.md).
 
 ### 5. gRPC
 
@@ -615,7 +625,7 @@ for (id, decision) in decisions {
 
 ## Sleeptime Enrichment
 
-MenteDB includes a 4-phase enrichment pipeline that converts raw conversations into structured knowledge. It is meant to run between conversations, not in the hot path. The engine tracks when enough new memories have accumulated (`needs_enrichment()`, opt in through `CognitiveConfig::enrichment_config`), and the caller runs the pipeline. Cloud runs it for you; embedded, call `run_enrichment` yourself (Python: `db.run_enrichment()`).
+MenteDB includes a 4-phase enrichment pipeline that converts raw conversations into structured knowledge. It is meant to run between conversations, not in the hot path. The engine tracks when enough new memories have accumulated (`needs_enrichment()`, opt in through `CognitiveConfig::enrichment_config`), and the caller runs the pipeline. Cloud runs it for you; on `mentedb-server`, call `POST /v1/enrich`; embedded, call `run_enrichment` yourself (Python: `db.run_enrichment()`).
 
 | Phase | What it does |
 |-------|-------------|
@@ -630,7 +640,7 @@ Enrichment results feed back into `process_turn` context retrieval — richer se
 
 ```rust
 // Enable enrichment in Cargo.toml:
-// mentedb = { version = "0.37", features = ["enrichment"] }
+// mentedb = { version = "0.39", features = ["enrichment"] }
 
 use mentedb::enrichment::{run_enrichment, EnrichmentResult};
 
@@ -703,9 +713,9 @@ MenteDB is organized as a Cargo workspace with 14 crates:
 | `mentedb-context` | Attention aware context assembly, U curve ordering, delta tracking |
 | `mentedb-cognitive` | Write inference, belief propagation, pain signals, phantom memories, speculative cache |
 | `mentedb-consolidation` | Temporal decay, memory consolidation, salience management, archival |
-| `mentedb-embedding` | Embedding providers: local Candle, OpenAI, Cohere, and Voyage over HTTP, AWS Bedrock Titan, hash |
+| `mentedb-embedding` | Embedding providers: local Candle, OpenAI, Cohere, and Voyage over HTTP, AWS Bedrock Cohere and Titan, hash |
 | `mentedb-extraction` | LLM powered memory extraction pipeline |
-| `mentedb-server` | REST + gRPC server with JWT auth, space ACLs, rate limiting |
+| `mentedb-server` | REST + gRPC server with named databases, scoped JWT auth, HTTPS, space ACLs, rate limiting |
 | `mentedb-cli` | `mentedb` command line client: run MQL against a local data directory or a running server |
 | `mentedb-replication` | Raft based replication (experimental) |
 
@@ -713,11 +723,13 @@ MenteDB is organized as a Cargo workspace with 14 crates:
 
 MenteDB includes production security features:
 
-- **JWT Authentication** on the REST and gRPC API once a JWT secret is set (without one the server warns and runs open; `--require-auth` refuses to start without a secret)
+- **JWT Authentication** on all REST and gRPC endpoints once a verifier is configured, with a shared secret (HS256) or a public key (RS256, ES256, EdDSA) so tokens can be signed elsewhere. Without either the server warns and runs open; `--require-auth` refuses to start without one
+- **Database Scoped Tokens** `dbs` and `read_only` claims limit a token to some databases and to reads
 - **Agent Isolation** JWT claims enforce per agent data access
 - **Space ACLs** fine grained permissions for multi agent setups
-- **Admin Keys** separate admin authentication for token issuance
-- **Rate Limiting** token bucket request limiting per client IP
+- **Admin Keys** separate admin authentication for token issuance, database management and backups
+- **HTTPS** the server terminates TLS for REST and gRPC itself (`--tls-cert`, `--tls-key`)
+- **Rate Limiting** per client IP token bucket on every request
 - **Embedding Validation** dimension mismatch returns errors, not panics
 
 ```bash
@@ -736,15 +748,18 @@ Configure the server's extraction pipeline (used by `POST /v1/ingest` and by aut
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MENTEDB_LLM_PROVIDER` | openai, anthropic, ollama, bedrock (server built with `--features bedrock`), none | none |
-| `MENTEDB_LLM_API_KEY` | API key for the provider | |
+| `MENTEDB_LLM_PROVIDER` | openai, anthropic, ollama, bedrock (server built with the `bedrock` feature, as the Docker image is), none | none |
+| `MENTEDB_LLM_API_KEY` | API key for the provider (not used by ollama or bedrock) | |
 | `MENTEDB_LLM_MODEL` | Model name | Provider default |
 | `MENTEDB_LLM_BASE_URL` | Custom base URL (Ollama, proxies) | Provider default |
 | `MENTEDB_LLM_REGION` | AWS region for bedrock (falls back to `AWS_REGION`) | |
 | `MENTEDB_AUTO_EXTRACT` | `true` to queue LLM extraction for conversation shaped `POST /v1/memories` bodies (same as `--auto-extract`) | off |
 | `MENTEDB_EXTRACTION_QUALITY_THRESHOLD` | Min confidence to store (0.0 to 1.0) | 0.7 |
 | `MENTEDB_EXTRACTION_DEDUP_THRESHOLD` | Similarity threshold for dedup (0.0 to 1.0) | 0.85 |
-| `MENTEDB_EMBEDDING_PROVIDER` | Server embeddings: candle, hash, none | candle when built with `local-embeddings`, else hash |
+| `MENTEDB_EMBEDDING_PROVIDER` | Server embeddings: candle, bedrock, hash, none | candle when built with `local-embeddings`, else hash |
+| `MENTEDB_EMBEDDING_MODEL` | Bedrock embedding model | `cohere.embed-english-v3` |
+
+Every server variable (auth, databases, TLS, Bedrock, backups) is listed in [Self-hosting](docs/SELF_HOSTING.md#environment-variable-reference).
 
 Semantic search, auto-linking, and contradiction detection all depend on real embeddings. The Docker image ships with local Candle embeddings; a plain `cargo install mentedb-server` falls back to non-semantic hash embeddings and warns loudly at startup — build with `--features local-embeddings` for full quality.
 

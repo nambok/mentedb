@@ -181,15 +181,13 @@ pub async fn route(State(state): State<Arc<AppState>>, req: Request, next: Next)
 /// The agent id a request belongs to, from its Bearer JWT. `None` without auth (no
 /// secret, no token, or a token that does not validate).
 fn agent_from_request(req: &Request, state: &AppState) -> Option<String> {
-    let secret = state.jwt_secret.as_deref()?;
+    let verifier = state.verifier.as_ref()?;
     let token = req
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))?;
-    crate::auth::validate_token(secret, token)
-        .ok()
-        .map(|c| c.agent_id)
+    verifier.verify(token).ok().map(|c| c.agent_id)
 }
 
 /// Reverse-proxy the request to the owning node and relay its response.

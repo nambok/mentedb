@@ -482,9 +482,9 @@ impl MenteDB {
         })
     }
 
-    /// Standing rules for a class of agent actions (memories tagged
-    /// `trigger:<action>`), newest first, superseded rules excluded. The
-    /// action cued recall channel; see the docs on action rules.
+    /// Standing rules that apply to an agent action, described in plain text.
+    /// The text is embedded and matched semantically and by keyword, ranked by
+    /// relevance, superseded rules excluded. See the docs on action rules.
     #[pyo3(signature = (trigger, agent_id=None, k=6))]
     fn recall_for_action(
         &self,
@@ -500,8 +500,9 @@ impl MenteDB {
             Some(s) => Some(parse_agent_id(s)?),
             None => None,
         };
+        let embedding = self.embed(trigger)?;
         let rules = db
-            .recall_for_action(trigger, aid, None, k)
+            .recall_for_action(&embedding, Some(trigger), aid, None, k)
             .map_err(to_pyerr)?;
         Python::attach(|py| {
             let list = pyo3::types::PyList::empty(py);
@@ -5523,7 +5524,9 @@ fn build_extraction_config_from_env(provider_override: Option<&str>) -> PyResult
         enable_contradiction_check: true,
         enable_deduplication: true,
         extraction_passes,
-    })
+        ..ExtractionConfig::default()
+    }
+    .with_output_env())
 }
 
 // ---------------------------------------------------------------------------
