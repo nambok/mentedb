@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.0](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.40.0...mentedb-cognitive-v0.41.0) - 2026-10-19
+
+### Added
+
+- server hosting gaps: memory updates, scoped ops, shutdown, auth scopes, batch read and MQL filter fixes ([#481](https://github.com/nambok/mentedb/pull/481))
+
 ## [0.40.0](https://github.com/nambok/mentedb/compare/mentedb-cognitive-v0.39.2...mentedb-cognitive-v0.40.0) - 2026-10-19
 
 ### Other

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.0](https://github.com/nambok/mentedb/compare/mentedb-index-v0.40.0...mentedb-index-v0.41.0) - 2026-10-19
+
+### Added
+
+- server hosting gaps: memory updates, scoped ops, shutdown, auth scopes, batch read and MQL filter fixes ([#481](https://github.com/nambok/mentedb/pull/481))
+
+### Fixed
+
+- find a memory again after it is stored under a removed or live id ([#479](https://github.com/nambok/mentedb/pull/479))
+
 ## [0.40.0](https://github.com/nambok/mentedb/compare/mentedb-index-v0.39.2...mentedb-index-v0.40.0) - 2026-10-19
 
 ### Other
