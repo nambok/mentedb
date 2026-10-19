@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.0](https://github.com/nambok/mentedb/compare/mentedb-graph-v0.41.1...mentedb-graph-v0.42.0) - 2026-10-19
+
+### Other
+
+- ORDER BY salience DESC LIMIT loads only the top candidates ([#487](https://github.com/nambok/mentedb/pull/487))
+
 ## [0.41.1](https://github.com/nambok/mentedb/compare/mentedb-graph-v0.41.0...mentedb-graph-v0.41.1) - 2026-10-19
 
 ### Fixed
