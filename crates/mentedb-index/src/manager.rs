@@ -169,6 +169,27 @@ impl IndexManager {
         }
     }
 
+    /// Replace a memory's bitmap entries (its tags plus the reserved type,
+    /// user and agent keys) with its current state. Used on its own when only
+    /// the tags of a stored memory change.
+    pub fn reindex_tags(&self, node: &MemoryNode) {
+        self.bitmap.remove_all(node.id);
+        for tag in &node.tags {
+            self.bitmap.add_tag(node.id, tag);
+        }
+        // Structured-browse dimensions (memory type, owner user, owner agent) are
+        // indexed as reserved bitmap keys so the dashboard can narrow by them in
+        // O(matches), the same way it narrows by a tag, instead of scanning every
+        // memory. The NUL prefix keeps them from ever colliding with a user tag
+        // and out of every tag-enumeration path (none of which use a NUL prefix).
+        // remove_all above clears these too, so a re-index reflects current state.
+        self.bitmap
+            .add_tag(node.id, &type_index_key(node.memory_type));
+        self.bitmap.add_tag(node.id, &user_index_key(node.user_id));
+        self.bitmap
+            .add_tag(node.id, &agent_index_key(node.agent_id));
+    }
+
     /// Index a memory node across all indexes.
     pub fn index_memory(&self, node: &MemoryNode) {
         // Vector index
@@ -188,21 +209,7 @@ impl IndexManager {
         // the node) reflects the node's CURRENT tags exactly, not the union across
         // every stored version. Without this, a removed tag lingers in the index
         // and over-counts on query_tag. Harmless no-op on a first insert.
-        self.bitmap.remove_all(node.id);
-        for tag in &node.tags {
-            self.bitmap.add_tag(node.id, tag);
-        }
-        // Structured-browse dimensions (memory type, owner user, owner agent) are
-        // indexed as reserved bitmap keys so the dashboard can narrow by them in
-        // O(matches), the same way it narrows by a tag, instead of scanning every
-        // memory. The NUL prefix keeps them from ever colliding with a user tag
-        // and out of every tag-enumeration path (none of which use a NUL prefix).
-        // remove_all above clears these too, so a re-index reflects current state.
-        self.bitmap
-            .add_tag(node.id, &type_index_key(node.memory_type));
-        self.bitmap.add_tag(node.id, &user_index_key(node.user_id));
-        self.bitmap
-            .add_tag(node.id, &agent_index_key(node.agent_id));
+        self.reindex_tags(node);
 
         // Temporal index
         self.temporal.insert(node.id, node.created_at);
