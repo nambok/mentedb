@@ -8,9 +8,10 @@ MenteDB pre digests knowledge for single pass transformer consumption. Every wri
 triggers inference. Every read is shaped by attention budgets. The engine thinks about
 what it stores so the LLM doesn't have to.
 
-The system is organized as a Cargo workspace of 13 crates, each owning a distinct
+The system is organized as a Cargo workspace of 14 crates, each owning a distinct
 responsibility. The facade crate (`mentedb`) wires them together behind a small,
-coherent API: `open`, `store`, `recall`, `relate`, `forget`, `close`.
+coherent API: `open`, `store`, `recall`, `relate`, `forget`, `close`, and the
+one call turn pipeline `process_turn`.
 
 ## Crate Map
 
@@ -18,46 +19,50 @@ coherent API: `open`, `store`, `recall`, `relate`, `forget`, `close`.
 mentedb (workspace root)
  |
  +-- mentedb-core            Fundamental types shared by every crate
- +-- mentedb-storage          Page manager, WAL, buffer pool
+ +-- mentedb-storage          Page manager, WAL, buffer pool, single-writer lock, backup
  +-- mentedb-index            HNSW vectors, BM25 keyword, bitmap tags, temporal, salience
  +-- mentedb-graph            CSR/CSC knowledge graph, traversal, belief propagation
  +-- mentedb-query            MQL lexer, parser, query planner
  +-- mentedb-context          Token budgets, U curve attention, delta serving, serializers
  +-- mentedb-cognitive        Stream cognition, write time inference, phantoms, pain signals
  +-- mentedb-consolidation    Decay, compression, fact extraction, archival, GDPR forget
- +-- mentedb-extraction       LLM-powered entity/relation extraction pipeline
- +-- mentedb-embedding        Embedding provider abstraction (OpenAI, local)
- +-- mentedb-replication      Multi-node replication protocol
- +-- mentedb-server           HTTP/TCP server wrapping the facade
- +-- mentedb                  Unified facade re-exporting the subsystems
+ +-- mentedb-extraction       LLM-powered memory extraction pipeline
+ +-- mentedb-embedding        Embedding providers (HTTP APIs, AWS Bedrock, local Candle, hash)
+ +-- mentedb-replication      Raft replication layer (openraft); not used by the server
+ +-- mentedb-server           REST + gRPC + WebSocket server wrapping the facade
+ +-- mentedb-cli              Command line client: run MQL locally or against a server
+ +-- mentedb                  Facade: subsystems, process_turn pipeline, sharding
 ```
 
 ### Dependency Graph
 
 ```
-mentedb-server
+mentedb-server ----> mentedb, mentedb-extraction, mentedb-embedding,
+                     mentedb-cognitive, mentedb-core
+mentedb-cli -------> mentedb
     |
     v
 mentedb  (facade)
     |
     +-----> mentedb-core
-    +-----> mentedb-storage -----> mentedb-core
-    +-----> mentedb-index -------> mentedb-core
-    +-----> mentedb-graph -------> mentedb-core
-    +-----> mentedb-query -------> mentedb-core
-    +-----> mentedb-context -----> mentedb-core
-    
-mentedb-cognitive ------------> mentedb-core
-mentedb-consolidation --------> mentedb-core
-mentedb-extraction -----------> mentedb-core
-mentedb-embedding ------------> mentedb-core
-mentedb-replication ----------> mentedb-core
+    +-----> mentedb-storage ---------> mentedb-core
+    +-----> mentedb-index -----------> mentedb-core
+    +-----> mentedb-graph -----------> mentedb-core
+    +-----> mentedb-query -----------> mentedb-core
+    +-----> mentedb-context ---------> mentedb-core
+    +-----> mentedb-cognitive -------> mentedb-core
+    +-----> mentedb-consolidation ---> mentedb-core
+    +-----> mentedb-embedding -------> mentedb-core
+    +-----> mentedb-extraction ------> mentedb-core, mentedb-cognitive, mentedb-embedding
+
+mentedb-replication ----------> mentedb-core, mentedb-storage
 ```
 
-All subsystem crates depend only on `mentedb-core`. The facade crate pulls in
-storage, index, graph, query, and context. The cognitive and consolidation crates
-are deliberately decoupled, they share types through core but can be compiled and
-tested independently.
+The subsystem crates depend on `mentedb-core` and, with two exceptions
+(`mentedb-extraction` builds on cognitive and embedding, `mentedb-replication`
+on storage), on nothing else in the workspace, so each can be compiled and
+tested on its own. The facade crate pulls them all in. `mentedb-replication`
+is a standalone crate: neither the facade nor the server depends on it.
 
 ## Crate Details
 
@@ -85,12 +90,20 @@ only shared type definitions and error handling.
 | `ConflictResolver` | `conflict.rs` | Resolves conflicting writes (keep latest, keep highest confidence, merge) |
 | `MenteError` | `error.rs` | Unified error enum with `MenteResult<T>` alias |
 
-**Scalar aliases** (in `types.rs`):
+`AgentRegistry`, `EventBus`, `VersionStore`, and `ConflictResolver` are library
+building blocks: the `MenteDb` engine does not use them on its own write path
+today (they are exercised by tests and available to embedders). The server uses
+`SpaceManager` for its `/v1/spaces` routes.
+
+**Identifiers and scalar aliases** (in `types.rs`). The ids are distinct
+newtypes over a UUID, so the compiler rejects passing one kind where another is
+expected:
 
 ```rust
-pub type MemoryId   = Uuid;
-pub type AgentId    = Uuid;
-pub type SpaceId    = Uuid;
+pub struct MemoryId(pub Uuid);
+pub struct AgentId(pub Uuid);
+pub struct UserId(pub Uuid);     // end user, an owner axis orthogonal to AgentId
+pub struct SpaceId(pub Uuid);
 pub type Embedding  = Vec<f32>;
 pub type Timestamp  = u64;       // microseconds since epoch
 pub type Salience   = f32;       // 0.0 .. 1.0
@@ -156,13 +169,27 @@ Sits between the page manager and the rest of the system. Uses CLOCK eviction
 (an approximation of LRU that avoids the overhead of maintaining a linked list
 on every access). Pages can be pinned to prevent eviction during active use.
 The pool is wrapped in a `parking_lot::Mutex` for thread safety. Default capacity is 1024 pages
-(16 MB of buffered data).
+(64 MB of buffered data at 64 KB per page); frames are allocated on demand up to
+that cap.
 
 **Storage Engine** (`engine.rs`):
 Wires page manager, WAL, and buffer pool together. Provides `store_memory`
 (serializes a `MemoryNode` to JSON, writes to an allocated page via WAL) and
 `load_memory` (reads a page, deserializes). Memory layout per page:
 `[length: u32 LE][JSON bytes]`.
+
+**Single writer** (`lock.rs`): opening a directory takes an exclusive lock on a
+`LOCK` file in it, held until close or process exit. A second open, from
+another process or another handle in the same process, fails fast with a
+"locked" error instead of silently corrupting state. On Linux the lock is a
+`fcntl` open file description lock (`F_OFD_SETLK`), which the NFSv4 lock
+manager enforces across hosts, so the rule holds when the directory sits on
+NFS or EFS mounted by several machines; a crashed holder frees it once the NFS
+lease expires. On macOS and Windows it is a `flock`, which covers one host.
+Each write transaction additionally runs under a `flock` on the WAL file.
+
+**Backup** (`backup.rs`): backup and restore to a single file, a JSON manifest
+followed by length prefixed file entries.
 
 ### mentedb-index
 
@@ -176,10 +203,10 @@ layer), ef_construction=200, ef_search=50, cosine distance by default. Supports
 insert, search (returns k nearest with distances), remove (tombstone), and
 serialize/deserialize for persistence.
 
-Why build HNSW from scratch instead of wrapping a library? Control. MenteDB needs
-to serialize the index into its own page format, evict graph layers under memory
-pressure, and integrate distance calculations with the salience scoring pipeline.
-A dependency like `hnswlib` would force an opaque memory model.
+Why build HNSW from scratch instead of wrapping a library? Control. MenteDB
+serializes the index in its own format, filters search to a candidate set (tag
+or time prefilters), and integrates distance calculations with the salience
+scoring pipeline. A dependency like `hnswlib` would force an opaque memory model.
 
 **Bitmap Index** (`bitmap.rs`):
 Uses roaring bitmaps for set operations on tags. Each tag maps to a bitmap of
@@ -210,8 +237,11 @@ even when the content itself never contains them.
 **Index Manager** (`manager.rs`):
 `index_memory` fans out a single `MemoryNode` to every index. `hybrid_search`
 retrieves candidates from HNSW (vector) and BM25 (keyword) independently and fuses
-them with Reciprocal Rank Fusion, then applies tag, temporal, and validity
-filters. The recall layer above it (in the `mentedb` crate) finishes the ranking:
+them with Reciprocal Rank Fusion (k = 60), then applies tag, temporal, and validity
+filters. A magnitude aware fusion (`FusionConfig::magnitude_aware`, set through
+`MenteDb::set_fusion`) is available as an alternative: it min-max normalizes each
+leg's scores and takes a weighted sum, so a much stronger match cannot fall
+below a weaker one the way adjacent RRF ranks can. It is off by default. The recall layer above it (in the `mentedb` crate) finishes the ranking:
 it blends in decay-adjusted salience, applies optional project scope weighting
 (down-weighting memories tagged for a different project than the query's), then
 runs two optional, config-gated passes over the fused pool, a pluggable reranker
@@ -293,6 +323,7 @@ Translates AST statements into `QueryPlan` variants:
 | `TRAVERSE from ... depth ...` | `GraphTraversal` |
 | `FORGET ...` | `Delete` |
 | `RELATE ... AS ...` | `EdgeInsert` |
+| `CONSOLIDATE ...` | `Consolidate` |
 
 ### mentedb-context
 
@@ -400,8 +431,10 @@ reorder memories to maximize separation between confusing pairs.
 
 **Speculative Pre-assembly** (`speculative.rs`):
 Predicts upcoming queries based on conversation trajectory and pre-builds
-context windows. Uses Jaccard keyword overlap to match incoming queries
-against cached predictions. LRU eviction keeps the cache bounded.
+context windows. Matches incoming queries against cached predictions by
+embedding cosine similarity when both sides have an embedding, and by Jaccard
+keyword overlap otherwise. LRU eviction keeps the cache bounded, and the
+maintenance sweep evicts stale entries.
 
 ### mentedb-consolidation
 
@@ -449,20 +482,49 @@ what was deleted and why.
 ### mentedb-server
 
 Binary crate. Axum-based REST API + Tonic gRPC + WebSocket server.
-Wraps `MenteDb` in `Arc<MenteDb>` for concurrent access (no external lock).
+Each database is an `Arc<MenteDb>` shared across requests (no external lock).
+REST listens on 6677 and gRPC on 6678 by default.
 
 Key subsystems:
-- **REST API** (`handlers.rs`): Memory CRUD, MQL recall, vector search, ingest
+- **Named databases** (`databases.rs`): one `MenteDb` per tenant, each in its own
+  directory with its own lock. The default database sits at the data directory
+  root and backs the routes under `/v1`; a named one sits in `<data-dir>/dbs/<name>`
+  and backs the same routes under `/v1/db/<name>`. Named databases open on first
+  use and the least recently used idle ones close past `MENTEDB_MAX_OPEN_DATABASES`
+- **REST API** (`routes.rs`, `handlers.rs`, `handlers_memory.rs`, `handlers_ops.rs`),
+  per database: `/memories` (store, get, forget, batch), `/recall` (MQL),
+  `/search` (vector), `/search/hybrid`, `/context`, `/edges`, `/stats`,
+  `/process_turn` (the full turn pipeline), `/ingest` (LLM extraction from a
+  conversation), memory history, neighbors and pins, `/conflicts`, `/profile`,
+  `/entities`, `/recent`, `/maintenance/*`, `/enrich`, `/documents`, `/backup`
+  and `/backups`, plus the admin routes under `/admin`. Global: `/v1/databases`,
+  `/v1/spaces`, `/v1/auth/token`, `/v1/health` and `/v1/ready`. The full list is
+  in the [server API reference](docs/SERVER_API.md)
 - **gRPC** (`grpc.rs`): Bidirectional streaming cognition + memory services
-- **WebSocket** (`websocket.rs`): Real-time memory event streaming
-- **Auth** (`auth.rs`): JWT token creation/validation middleware
+- **WebSocket** (`websocket.rs`): `/v1/ws/stream` cognition stream
+- **Auth** (`auth.rs`): JWT middleware. Tokens are verified with a shared secret
+  (HS256) or a public key (RS256, ES256, EdDSA), and the `dbs` and `read_only`
+  claims scope a token to some databases and to reads
+- **TLS** (`tls.rs`): with `--tls-cert` and `--tls-key`, REST is served over
+  HTTPS and gRPC over TLS with the same certificate
 - **Rate limiting** (`rate_limit.rs`): Token bucket rate limiter
 - **Extraction queue** (`extraction_queue.rs`): Bounded mpsc channel (capacity 64)
   with semaphore-limited concurrency (max 4 parallel LLM calls). Drains
-  gracefully on shutdown.
+  on shutdown (up to 10 seconds).
+- **Maintenance** (`maintenance.rs`): a timed sweep (every 24h by default) that
+  consolidates, decays, archives, and evicts stale cache entries; also runnable
+  once with the `maintenance` subcommand
+- **Metrics and console** (`metrics.rs`, `console.rs`): Prometheus `/metrics`
+  (aggregate only) and a bundled web console at `/console`
+- **Cluster** (`cluster.rs`): optional sharding across several servers, see
+  [Sharding](#sharding)
 
-Configurable via CLI args (`--data-dir`, `--port`, `--grpc-port`, `--jwt-secret`).
-Handles graceful shutdown on SIGTERM/SIGINT.
+Configurable via CLI flags (`--data-dir`, `--port`, `--grpc-port`, `--jwt-secret`,
+`--require-auth`, `--admin-key`, `--llm-*`, `--auto-extract`,
+`--embedding-provider`, `--maintenance-interval-hours`, `--tls-cert`, `--tls-key`)
+and `MENTEDB_*` environment variables, some of which have no flag (for example
+`MENTEDB_JWT_PUBLIC_KEY_FILE`); see [Self-hosting](docs/SELF_HOSTING.md). Shuts
+down gracefully on Ctrl+C (SIGINT), closing every open database.
 
 ### mentedb (facade)
 
@@ -475,16 +537,21 @@ pub use mentedb_index as index;
 pub use mentedb_graph as graph;
 pub use mentedb_query as query;
 pub use mentedb_context as context;
+pub use mentedb_cognitive as cognitive;
+pub use mentedb_consolidation as consolidation;
 ```
 
 Provides a `prelude` module with the most common types and the `MenteDb`
 struct itself.
 
-`MenteDb` exposes six public methods:
+The core `MenteDb` methods (the struct has many more for recall variants,
+maintenance, and the cognitive features):
 
 | Method | Description |
 |--------|-------------|
 | `open(path)` | Opens or creates a database at the given directory |
+| `open_with_embedder(path, embedder)` | Same, with an embedding provider for semantic recall |
+| `process_turn(input, delta)` | The full turn pipeline: recall context, store the turn, infer, analyze |
 | `store(node)` | Persists a memory, indexes it, registers it in the graph |
 | `recall(mql)` | Parses an MQL query, executes it, assembles a context window |
 | `recall_similar(embedding, k)` | Vector similarity search returning top-k matches |
@@ -590,10 +657,12 @@ decisions that conflict with MenteDB's requirements:
 HNSW is the standard algorithm for approximate nearest neighbor search in
 high dimensional spaces. Building it from scratch gives MenteDB:
 
-1. **Serialization control**: The index serializes into MenteDB's own page
-   format, so it participates in WAL, buffer pool, and checkpoint.
-2. **Memory pressure awareness**: Individual graph layers can be evicted
-   under memory pressure instead of keeping the entire index in RAM.
+1. **Serialization control**: The index serializes to its own compact
+   binary snapshot (bincode), written next to the data files and reconciled
+   with the WAL protected memory pages on open.
+2. **Filtered search**: Search can be restricted to a precomputed candidate
+   set (from tag or time filters) instead of searching globally and filtering
+   afterwards.
 3. **Custom distance functions**: Cosine, Euclidean, and dot product are
    built in, but the architecture allows plugging in domain specific
    metrics.
@@ -627,7 +696,7 @@ and maintain. The hand written approach gives:
 
 ### Configurable Heuristics
 
-Every threshold in MenteDB is configurable: contradiction similarity (0.95),
+Most thresholds in MenteDB are configurable: contradiction similarity (0.95),
 related edge range (0.6 to 0.85), salience decay half life (7 days), budget
 zone percentages, HNSW parameters, belief propagation factors. The defaults
 are reasonable starting points, but AI agent behavior varies widely. A coding
@@ -695,18 +764,22 @@ Based on trajectory predictions, the speculative cache pre-builds context
 windows for anticipated queries. If the prediction hits (Jaccard keyword
 overlap above the threshold), the pre-assembled context is served
 immediately, skipping the search/score/assemble pipeline entirely. Cache
-misses fall back to the normal path with no penalty.
+misses fall back to the normal path.
 
 ## Configuration
 
-`MenteConfig` unifies all subsystem configurations:
+`MenteConfig` (in `mentedb-core`) describes the subsystem settings and their
+defaults. Note that the engine does not read it today: `MenteDb` is tuned through
+`mentedb::CognitiveConfig` (write inference, decay, recall passes such as MMR and
+the reranker pool, injection and dedup thresholds), the storage engine uses its
+built in defaults, and the server takes flags and environment variables.
 
 ```rust
 MenteConfig {
     storage: StorageConfig {
         data_dir: PathBuf,
         buffer_pool_size: 1024,       // pages
-        page_size: 16384,             // bytes
+        page_size: 65536,             // bytes
     },
     index: IndexConfig {
         hnsw_m: 16,
@@ -749,13 +822,15 @@ All fallible operations return `MenteResult<T>`, which is
 | `Query(String)` | MQL parse error with position information |
 | `Serialization(String)` | Encode/decode failure (JSON or bincode) |
 | `CapacityExceeded(String)` | Buffer pool full, space limit reached |
+| `EmbeddingDimensionMismatch { .. }` | An embedding's length does not match the index |
 | `PermissionDenied { agent_id, space_id }` | Access control violation |
+| `ResourceExhausted(String)` | A configured resource limit was hit |
 | `Io(std::io::Error)` | Underlying filesystem error |
 
 ## Thread Safety & Concurrency
 
 MenteDB uses **interior mutability** throughout — each component manages its own
-fine-grained locking. The server holds `Arc<MenteDb>` (no external lock).
+fine-grained locking. The server holds one `Arc<MenteDb>` per open database (no external lock).
 
 | Component | Lock Type | Scope |
 |-----------|-----------|-------|
@@ -783,6 +858,33 @@ every later reader too.
 - Write operations only lock the specific component being mutated
 - LLM extraction runs in a background `tokio::spawn` task — no lock held during API calls
 
+## Sharding
+
+One database directory has exactly one writer, so the way to scale out is to
+give each account (agent) its own directory and spread accounts over nodes.
+`mentedb::sharding` owns that logic and leaves storage of the shared state to
+the embedder:
+
+- **Placement** (`sharding/placement.rs`): rendezvous (highest random weight)
+  hashing with a fixed FNV-1a hash, so every node computes the same owner for a
+  key, and adding or removing a node moves only about 1/N of the keys.
+- **Leases** (`Coordinator`, `LeaseStore`, `NodeRegistry`): ownership is an
+  expiring lease with an epoch that fences writes, so a node that lost
+  ownership is rejected even if it has not noticed. `resolve(key)` answers
+  "serve locally" or "forward to this address". The lease and membership
+  backends are traits the embedder implements (for example over a database with
+  conditional writes), so the engine takes no external dependency.
+- **Gossip** (`sharding/gossip.rs`): membership without a coordinator. Each
+  round a node exchanges its view with a few peers and keeps the newest
+  announcement per node; a node that stops announcing is dropped after a
+  timeout.
+
+`mentedb-server` uses the gossip and placement parts: with `MENTEDB_SHARDING=1`
+plus `MENTEDB_NODE_ADDR` and `MENTEDB_SEEDS`, nodes find each other on
+`/v1/cluster/gossip` and forward each request to the agent's owner (the agent
+id comes from the token's `agent_id` claim). This is separate from `mentedb-replication`, which
+replicates one dataset with Raft and is not wired into the server.
+
 ## Index Persistence
 
 Indexes are persisted as **bincode** binary format for fast serialization (~5x smaller,
@@ -791,8 +893,8 @@ MemoryNode pages and the knowledge graph use JSON due to `skip_serializing_if` c
 
 ## Testing Strategy
 
-Each crate has its own unit tests (`#[cfg(test)]` modules). Integration
-tests live in `tests/` directories within each crate. The workspace is
+Each crate has its own unit tests (`#[cfg(test)]` modules). Most crates also
+have integration tests in their own `tests/` directory. The workspace is
 tested with `cargo test --workspace`.
 
 Key test categories:

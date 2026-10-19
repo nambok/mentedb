@@ -128,18 +128,23 @@ result = db.process_turn(user_message="what database am I using?", turn_id=1)
 for memory in result.context:            # -> prepend these to your prompt
     print(memory.content)
 
-# result.facts_extracted     -> what was learned this turn (needs an LLM)
+# result.facts_extracted     -> simple facts pulled from this turn by built in patterns
 # result.contradiction_count -> conflicting beliefs detected
 ```
 
-One call runs the full 14-step cognitive pipeline: embedding, speculative cache,
-hybrid search, pain signals, episodic storage, fact extraction, contradiction
-detection, sentiment analysis, and more. Fact extraction needs an LLM: set
+One call runs the full cognitive pipeline: embedding, speculative cache, hybrid
+search, pain signals, episodic storage with write inference, pattern based fact
+extraction, contradiction detection, sentiment analysis, and more. None of that
+needs an LLM. Richer LLM extraction (semantic facts and typed entities, through
+`db.ingest()`, `db.extract()` and the enrichment pipeline) needs one: set
 `MENTEDB_LLM_PROVIDER` and `MENTEDB_LLM_API_KEY` (or use [cloud](docs/CLOUD.md),
-where it is wired up for you). Without an LLM you still get storage and recall.
+where it is wired up for you).
 
-> **Enrichment runs automatically in the background** — semantic facts, entity graphs,
-> community summaries, and a user profile are built over time after each `process_turn`.
+> **Enrichment** builds semantic facts, entity graphs, community summaries, and a
+> user profile from accumulated turns. On [cloud](docs/CLOUD.md) it runs in the
+> background for you. Embedded in your own app, run it yourself between
+> conversations (`db.run_enrichment()` in Python, `mentedb::enrichment::run_enrichment`
+> in Rust). On `mentedb-server`, call `POST /v1/enrich` (needs `--llm-provider`).
 
 **Cloud, any language (no SDK, REST):**
 
@@ -161,10 +166,11 @@ Your assistant then calls `process_turn` automatically every turn.
 **Embed in Rust:**
 
 ```rust
+use std::path::Path;
 use mentedb::{MenteDb, process_turn::ProcessTurnInput};
 use mentedb_context::DeltaTracker;
 
-let db = MenteDb::open("./my-agent-memory")?;
+let db = MenteDb::open(Path::new("./my-agent-memory"))?;
 let mut delta = DeltaTracker::default();
 let result = db.process_turn(&ProcessTurnInput {
     user_message: "I switched from PostgreSQL to SQLite".into(),
@@ -183,7 +189,7 @@ Every database ever built assumes the consumer can compensate for bad data organ
 
 ### The Memory Quality Problem
 
-Most AI memory tools store everything and retrieve by similarity. The result: **context windows full of noise.** Studies show up to 97% of automatically stored memories are irrelevant.
+Most AI memory tools store everything and retrieve by similarity. The result: **context windows full of noise.**
 
 MenteDB solves this with **write time intelligence:**
 
@@ -217,20 +223,20 @@ The result: a clean, curated memory that actually helps the AI perform better.
 - **Hybrid Retrieval** Vector similarity (HNSW) fused with BM25 keyword search via reciprocal rank fusion, plus tag, temporal, and validity filtering. Optional second-pass reranking (pluggable, e.g. a cross-encoder or LLM judge) and optional MMR diversity selection so near-duplicate memories do not crowd the context budget
 - **Contextual Retrieval** An optional per-memory `context` blurb is indexed and embedded alongside the content (never stored in it), so a memory is findable by situating terms it never literally contains. The caller generates the context; the engine indexes it
 - **Project Scope Weighting** Recall can weight down memories tagged for other projects so the project you are working in ranks first, without hiding a strongly relevant cross-project memory
-- **Action Rules** Rules about how to perform a class of action (commit style, PR format) are tagged `trigger:<action>` and fetched with `recall_for_action(trigger, agent, user, k)` at the moment the action runs, not by topic similarity. Deterministic tag-index lookup, same visibility scoping as every other recall, superseded rules excluded, newest first. The Claude Code integration surfaces them through a PreToolUse hook right before `git commit` and `gh pr create`
+- **Action Rules** Rules about how to perform a class of action (commit style, PR format) are fetched at the moment the action runs with `recall_for_action(action_embedding, action_text, agent_id, user_id, k)`. It is hybrid recall over the meaning and the text of the action (no fixed action vocabulary), weighted toward memory types that govern behavior (procedures, corrections, anti patterns), with the same visibility scoping as every other recall and superseded rules excluded. The Claude Code integration surfaces them through a PreToolUse hook right before git commits and pull requests
 - **Write Time Intelligence** Quality filter, deduplication, and contradiction detection at ingest
-- **LLM Powered Cognitive Inference** CognitiveLlmService judges whether new memories invalidate, update, or are compatible with existing ones (supports Anthropic, OpenAI, Ollama)
+- **LLM Powered Cognitive Inference** CognitiveLlmService judges whether new memories invalidate, update, or are compatible with existing ones (supports Anthropic, OpenAI, Ollama, and AWS Bedrock behind the `bedrock` feature)
 - **Bi-Temporal Validity** Memories and edges carry `valid_from`/`valid_until` timestamps. Temporal invalidation instead of deletion. Point-in-time queries via `recall_similar_at(embedding, k, timestamp)` or in MQL with `RECALL ... AS OF <timestamp>`
 - **Attention Optimized Context Assembly** Respects the U curve (critical data at start/end of context)
 - **Belief Propagation** When facts change, downstream beliefs are flagged for re evaluation
-- **Delta Aware Serving** Only sends what changed since last turn (90% reduction in memory retrieval tokens over 20 turns)
+- **Delta Aware Serving** Only sends what changed since last turn (80 to 91 percent fewer memory retrieval tokens over 20 turns in the bundled benchmarks, see [Token Efficiency](#token-efficiency))
 - **Cognitive Memory Tiers** Working, Episodic, Semantic, Procedural, Archival
 - **Knowledge Graph** CSR/CSC graph with BFS/DFS traversal and contradiction detection
 - **Memory Spaces** Multi agent isolation with per space ACLs
 - **MQL** Mente Query Language with full boolean logic (AND, OR, NOT, and grouping), ordering (`ORDER BY salience DESC`), and point-in-time recall (`AS OF <timestamp>`)
 - **Type Safe IDs** MemoryId, AgentId, SpaceId newtypes prevent accidental mixing
-- **Binary Embeddings** Base64 encoded storage, 65% smaller than JSON arrays
 - **Local Candle Embeddings** Zero config semantic search using all-MiniLM-L6-v2 (384 dims), no API key required (Docker image includes it; source builds need `--features local-embeddings`)
+- **Hosted Embedding APIs** OpenAI, Cohere, and Voyage over HTTP (`mentedb-embedding`'s `http` feature; Python SDK `embedding_provider="openai" | "cohere" | "voyage"`)
 - **AWS Bedrock Embeddings** Cohere Embed v3 (batches of 96) and Amazon Titan embeddings via a lightweight SigV4 signer (no async AWS SDK); enable `mentedb-embedding`'s `bedrock` feature. Credentials come from AWS environment keys or the ECS task role / EKS Pod Identity endpoint, refreshed before they expire. Also available from the Python SDK as `embedding_provider="bedrock"`
 - **Self-Hosted Server** One process serves many databases (`/v1/db/{name}/...`, one directory and lock per tenant), tokens scoped to databases and optionally read only (verifiable with a public key, so no shared secret on the server), native HTTPS, Bedrock embeddings and extraction through the task role, and REST endpoints for hybrid search, heads-up context, pins, history, graph neighbors, conflicts, documents, maintenance and backups. See the [server API reference](docs/SERVER_API.md)
 - **gRPC + REST + MCP** Three integration paths for any use case
@@ -293,11 +299,11 @@ cargo install mentedb-mcp
 mentedb-mcp setup copilot
 ```
 
-See [mentedb-mcp](https://github.com/nambok/mentedb-mcp) for setup, configuration, and the full list of 32 tools.
+See [mentedb-mcp](https://github.com/nambok/mentedb-mcp) for setup and configuration.
 
-**Key tools:** `process_turn` (the primary API — one call per turn), `store_memory`, `search_memories`, `forget_memory`, `assemble_context`, `relate_memories`, `write_inference`, `get_cognitive_state`, and 20+ more covering knowledge graph, consolidation, and cognitive systems.
+**Tools:** by default the server exposes four essential tools: `process_turn` (the primary API, one call per turn), `store_memory`, `search_memories`, and `forget_memory`. In local mode, `--full-tools` exposes all 32, adding `assemble_context`, `relate_memories`, `write_inference`, `get_cognitive_state`, and others covering the knowledge graph, consolidation, and cognitive systems.
 
-### 2. REST API
+### 4. REST API
 
 ```bash
 # Start the server
@@ -323,11 +329,11 @@ Every route also works per database under `/v1/db/{name}/...`. The full list of
 endpoints, fields, auth rules and error codes is in the
 [server API reference](docs/SERVER_API.md).
 
-### 3. gRPC
+### 5. gRPC
 
-Bidirectional streaming for real time cognition updates. Proto file at `crates/mentedb-server/proto/mentedb.proto`.
+Served on port 6678 (`--grpc-port`): unary Store, Recall, Search, Forget, and Relate calls, plus a bidirectional stream for live cognition alerts. Proto file at `crates/mentedb-server/proto/mentedb.proto`.
 
-### 4. SDKs
+### 6. SDKs
 
 **Python:** `pip install mentedb`
 ```python
@@ -392,7 +398,7 @@ graph TD
     end
 
     subgraph Embeddings["Embedding Providers"]
-        EMB["Candle local / OpenAI / Cohere / AWS Bedrock Titan / hash"]
+        EMB["Candle local / OpenAI / Cohere / Voyage / AWS Bedrock Titan / hash"]
     end
 
     subgraph Retrieval["Retrieval"]
@@ -475,7 +481,7 @@ graph TD
 
 ## Agent File Ingestion and Rule Delivery
 
-`ingest_agent_file` (deterministic) and `ingest_agent_file_llm` (any format, any language, via an extraction provider) break an agent instruction file into atomic, self contained memories: open vocabulary action triggers (`trigger:git-commit`, `trigger:order-refund`), section tags for cluster completion, and exemplar turns that anchor mode activation for standing directives ("longterm fixes only", "use the t function for user visible text"). Delivery runs through four channels: relevance injection, action rules at the tool moment, mode activation by activity, and cluster completion for dense rule sections. Measured on real public agent files (openai/codex, kiali, temporal, freerouting), two pass delivery (retrieve at the prompt, review against the draft) reached 100 percent rule compliance at 2 to 8 times fewer tokens than carrying the file in context, including a held out file never used during development. Re ingesting keeps memory in sync with the file, so the file stays the source of truth and the normal workflow does not change: edit it as always and ingest again, new rules are stored, unchanged rules deduplicate, edited rules replace their old version, and rules deleted from the file are forgotten (report field `removed`; opt out with `sync: false`; give each file its own `source_tag` when several files share one agent scope). The benchmark lives in this repository under [benchmarks/agent_file](benchmarks/agent_file).
+`ingest_agent_file` (deterministic) and `ingest_agent_file_llm` (any format, any language, via an extraction provider) break an agent instruction file into atomic, self contained memories: open vocabulary action triggers (`trigger:git-commit`, `trigger:order-refund`), section tags for cluster completion, and exemplar turns that anchor mode activation for standing directives ("longterm fixes only", "use the t function for user visible text"). Delivery runs through four channels: relevance injection, action rules at the tool moment, mode activation by activity, and cluster completion for dense rule sections. Measured on real public agent files (openai/codex, kiali, temporal, freerouting; results in the [write up](https://mentedb.com/blog/infinite-context-window-for-ai-with-memory)), two pass delivery (retrieve at the prompt, review against the draft) reached 100 percent rule compliance at 2 to 8 times fewer tokens than carrying the file in context, including a held out file never used during development. Re ingesting keeps memory in sync with the file, so the file stays the source of truth and the normal workflow does not change: edit it as always and ingest again, new rules are stored, unchanged rules deduplicate, edited rules replace their old version, and rules deleted from the file are forgotten (report field `removed`; opt out with `sync: false`; give each file its own `source_tag` when several files share one agent scope). The benchmark lives in this repository under [benchmarks/agent_file](benchmarks/agent_file).
 
 ## Cognitive Engine
 
@@ -542,7 +548,7 @@ let config = CognitiveConfig {
     archival_evaluation: true,    // memory lifecycle management
     ..Default::default()
 };
-let db = MenteDb::open_with_config("./memory", config)?;
+let db = MenteDb::open_with_config(std::path::Path::new("./memory"), config)?;
 ```
 
 ### Pain Registry
@@ -590,7 +596,7 @@ Resolve aliases to canonical names:
 
 ```rust
 db.add_entity_alias("JS", "JavaScript", 0.95);
-let resolved = db.resolve_entity("JS"); // → "javascript"
+let resolved = db.resolve_entity("JS").canonical; // "javascript"
 ```
 
 ### Memory Compression
@@ -619,7 +625,7 @@ for (id, decision) in decisions {
 
 ## Sleeptime Enrichment
 
-MenteDB includes a 4-phase background enrichment pipeline that automatically converts raw conversations into structured knowledge. It runs after `process_turn` when enough new memories accumulate — no manual trigger needed.
+MenteDB includes a 4-phase enrichment pipeline that converts raw conversations into structured knowledge. It is meant to run between conversations, not in the hot path. The engine tracks when enough new memories have accumulated (`needs_enrichment()`, opt in through `CognitiveConfig::enrichment_config`), and the caller runs the pipeline. Cloud runs it for you; on `mentedb-server`, call `POST /v1/enrich`; embedded, call `run_enrichment` yourself (Python: `db.run_enrichment()`).
 
 | Phase | What it does |
 |-------|-------------|
@@ -630,15 +636,16 @@ MenteDB includes a 4-phase background enrichment pipeline that automatically con
 
 Enrichment results feed back into `process_turn` context retrieval — richer semantic memories, entity graphs, community summaries, and the user profile all improve recall quality. The pipeline is idempotent and tracks provenance via `source:enrichment` tags and `Derived` edges.
 
-**Requires an LLM provider** (OpenAI, Anthropic, or Ollama). Without one, the engine works perfectly — enrichment just doesn't run. See [LLM Extraction Config](#llm-extraction-config) for setup.
+**Requires an LLM provider** (OpenAI, Anthropic, Ollama, or AWS Bedrock). Without one, the rest of the engine works as usual and enrichment does not run. See [LLM Extraction Config](#llm-extraction-configuration) for setup.
 
 ```rust
 // Enable enrichment in Cargo.toml:
-// mentedb = { version = "0.8", features = ["enrichment"] }
+// mentedb = { version = "0.39", features = ["enrichment"] }
 
 use mentedb::enrichment::{run_enrichment, EnrichmentResult};
 
-let result = run_enrichment(&db, config, &embedder, Some(&cognitive_llm), turn_id).await;
+let skip_extraction = false;
+let result = run_enrichment(&db, config, &embedder, Some(&cognitive_llm), turn_id, skip_extraction).await;
 println!("Stored {} memories, linked {} entities", result.memories_stored, result.sync_linked + result.llm_linked);
 ```
 
@@ -667,8 +674,8 @@ A request that lands on a node that does not own the user is forwarded to the on
 that does, so any node can front the fleet. Zero-copy handoff assumes the fleet
 shares storage (each user's database on a shared volume); on purely local disks
 placement still routes correctly, but a rebalanced user's data does not follow it
-automatically yet. A single well-provisioned node already serves hundreds of users;
-the fleet is for when one node's write throughput becomes the ceiling.
+automatically yet. Start with a single node; the fleet is for when one node's write
+throughput becomes the ceiling.
 
 ## Observability
 
@@ -693,7 +700,7 @@ into an existing Grafana.
 
 ## Crates
 
-MenteDB is organized as a Cargo workspace with 13 crates:
+MenteDB is organized as a Cargo workspace with 14 crates:
 
 | Crate | Description |
 |-------|-------------|
@@ -706,16 +713,17 @@ MenteDB is organized as a Cargo workspace with 13 crates:
 | `mentedb-context` | Attention aware context assembly, U curve ordering, delta tracking |
 | `mentedb-cognitive` | Write inference, belief propagation, pain signals, phantom memories, speculative cache |
 | `mentedb-consolidation` | Temporal decay, memory consolidation, salience management, archival |
-| `mentedb-embedding` | Embedding provider abstraction |
+| `mentedb-embedding` | Embedding providers: local Candle, OpenAI, Cohere, and Voyage over HTTP, AWS Bedrock Cohere and Titan, hash |
 | `mentedb-extraction` | LLM powered memory extraction pipeline |
 | `mentedb-server` | REST + gRPC server with named databases, scoped JWT auth, HTTPS, space ACLs, rate limiting |
+| `mentedb-cli` | `mentedb` command line client: run MQL against a local data directory or a running server |
 | `mentedb-replication` | Raft based replication (experimental) |
 
 ## Security
 
 MenteDB includes production security features:
 
-- **JWT Authentication** on all REST and gRPC endpoints, verified with a shared secret (HS256) or a public key (RS256, ES256, EdDSA) so tokens can be signed elsewhere
+- **JWT Authentication** on all REST and gRPC endpoints once a verifier is configured, with a shared secret (HS256) or a public key (RS256, ES256, EdDSA) so tokens can be signed elsewhere. Without either the server warns and runs open; `--require-auth` refuses to start without one
 - **Database Scoped Tokens** `dbs` and `read_only` claims limit a token to some databases and to reads
 - **Agent Isolation** JWT claims enforce per agent data access
 - **Space ACLs** fine grained permissions for multi agent setups
@@ -736,14 +744,16 @@ mentedb-server --require-auth --data-dir /var/mentedb/data
 
 ## LLM Extraction Configuration
 
-Configure the extraction pipeline via environment variables:
+Configure the server's extraction pipeline (used by `POST /v1/ingest` and by auto extraction) via environment variables or the matching `--llm-*` flags:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MENTEDB_LLM_PROVIDER` | openai, anthropic, ollama, bedrock, none | none |
+| `MENTEDB_LLM_PROVIDER` | openai, anthropic, ollama, bedrock (server built with the `bedrock` feature, as the Docker image is), none | none |
 | `MENTEDB_LLM_API_KEY` | API key for the provider (not used by ollama or bedrock) | |
 | `MENTEDB_LLM_MODEL` | Model name | Provider default |
 | `MENTEDB_LLM_BASE_URL` | Custom base URL (Ollama, proxies) | Provider default |
+| `MENTEDB_LLM_REGION` | AWS region for bedrock (falls back to `AWS_REGION`) | |
+| `MENTEDB_AUTO_EXTRACT` | `true` to queue LLM extraction for conversation shaped `POST /v1/memories` bodies (same as `--auto-extract`) | off |
 | `MENTEDB_EXTRACTION_QUALITY_THRESHOLD` | Min confidence to store (0.0 to 1.0) | 0.7 |
 | `MENTEDB_EXTRACTION_DEDUP_THRESHOLD` | Similarity threshold for dedup (0.0 to 1.0) | 0.85 |
 | `MENTEDB_EMBEDDING_PROVIDER` | Server embeddings: candle, bedrock, hash, none | candle when built with `local-embeddings`, else hash |
@@ -767,9 +777,9 @@ RECALL memories WHERE NOT tag = "archived" LIMIT 20
 RECALL memories WHERE content ~> "database migration strategies" LIMIT 10
 
 -- Point-in-time recall (bitemporal AS OF): only memories whose validity
--- window contained the timestamp. A fact superseded after t is still
--- returned when you ask "as of" a moment it was true.
-RECALL memories WHERE type = semantic AS OF 1700000000 LIMIT 10
+-- window contained the timestamp (microseconds since the Unix epoch). A fact
+-- superseded after t is still returned when you ask "as of" a moment it was true.
+RECALL memories WHERE type = semantic AS OF 1700000000000000 LIMIT 10
 
 -- Graph traversal
 TRAVERSE 550e8400-e29b-41d4-a716-446655440000 DEPTH 3 WHERE edge_type = caused
@@ -822,15 +832,21 @@ docker-compose up -d
 
 ## Benchmarks
 
-### Quality Benchmarks (5/5 passing)
+### Quality Benchmarks
+
+`python3 benchmarks/run_all.py`. The first three run without an LLM; the last two
+need `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 
 | Test | Result | Key Metric |
 |------|--------|------------|
 | Stale Belief | PASS | Superseded memories correctly excluded via graph edges |
 | Delta Savings | PASS | 90.7% reduction in memory retrieval tokens over 20 turns |
-| Sustained Conversation | PASS | 100 turns, 3 projects, 0% stale returns, 0.29ms insert |
-| Attention Budget | PASS | U-curve ordering maintains 100% LLM compliance |
-| Noise Ratio | PASS | 100% useful vs 80% naive, +20pp improvement |
+| Sustained Conversation | FAIL | 100 turns, 3 projects, 0% stale returns, but average insert is 12 to 28ms across runs, over the test's 5ms gate (the full write pipeline grew; see the 10K scale test) |
+| Attention Budget | PASS (earlier run) | U-curve ordering maintains 100% LLM compliance |
+| Noise Ratio | PASS (earlier run) | 100% useful vs 80% naive, +20pp improvement |
+
+The no LLM rows were last run with the published Python package (`mentedb` 0.32.2
+on PyPI). The two LLM rows are from an earlier run and were not repeated.
 
 ### LLM Accuracy Benchmarks (62 cases)
 
@@ -927,7 +943,7 @@ MenteDB's context assembler uses purpose-built serialization formats instead of 
 | Delta serving (cumulative) | 2,004 |
 | **Savings** | **79.7%** |
 
-Delta serving only sends memories that changed since the last turn. Early turns have overhead from the delta header, but by turn 10+ savings exceed 85% per turn.
+Delta serving only sends memories that changed since the last turn. Early turns have overhead from the delta header; from turn 10 on, savings per turn range from about 75% to 94%.
 
 **Memory density** (memories that fit within a serialized output budget):
 
@@ -958,7 +974,7 @@ cargo bench
 
 ```bash
 cargo build              # Build all crates
-cargo test               # Run 477+ tests
+cargo test --workspace   # Run the test suite (780+ tests)
 cargo clippy             # Lint
 cargo bench              # Benchmarks
 cargo doc --open         # Documentation

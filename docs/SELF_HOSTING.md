@@ -6,7 +6,7 @@ API key and you're done.
 
 There are two moving parts to understand:
 
-1. **The server** handles every conversation turn (store, recall, extract).
+1. **The server** handles every conversation turn (store, recall, analyze).
 2. **The maintenance sweep** runs periodically to keep memory healthy
    (merge duplicates, forget stale facts, decay old ones). This is the part
    people forget, so it is built in, see [Step 5](#step-5-overnight-maintenance).
@@ -53,28 +53,38 @@ commit (`sha-1a2b3c4`) and `latest`, and carry the OCI labels
 deployment to an exact release and trace it back to the commit it was built
 from.
 
-The server listens on `6677` (REST) and `6678` (gRPC). Data lives in `--data-dir`.
+The server listens on `6677` (REST, `/metrics`, `/console`) and `6678` (gRPC;
+add `-p 6678:6678` to the `docker run` above to reach it). Data lives in
+`--data-dir` (default `./mentedb-data`; the image uses `/var/mentedb/data`, so
+mount your volume there). The server takes an exclusive lock on each database
+directory: a second process that opens the same directory fails fast with a
+"locked" error instead of corrupting it.
 The image runs the overnight maintenance sweep automatically (every 24h by
 default, see [Step 5](#step-5-overnight-maintenance)), so a plain `docker run`
 already keeps memory healthy with nothing extra to schedule.
 
 ## Step 2: Configure an LLM (recommended)
 
-**What it does:** the LLM extracts what matters from each turn (facts,
-preferences, corrections), detects contradictions, and powers consolidation.
-Without it you still get storage and keyword/vector recall, but no automatic
-fact extraction.
+**What it does:** the LLM reads conversations and pulls out what matters (facts,
+preferences, corrections) as separate memories. It powers `POST /v1/ingest`,
+`--auto-extract` on stored memories, and topic labels in the maintenance sweep.
+Without it you still get the whole `process_turn` pipeline (storage, hybrid
+recall, rule based fact extraction, embedding based contradiction detection),
+just no LLM extraction.
 
 ```bash
 export MENTEDB_LLM_PROVIDER=anthropic      # openai | anthropic | ollama | bedrock | none
 export MENTEDB_LLM_API_KEY=sk-ant-...
-export MENTEDB_LLM_MODEL=claude-sonnet-5-5 # optional, provider default otherwise
+export MENTEDB_LLM_MODEL=claude-haiku-5-5  # optional, this is the anthropic default
 mentedb-server --data-dir ./data --auto-extract
 ```
 
-`--auto-extract` (or `MENTEDB_AUTO_EXTRACT=1`) turns on per-turn extraction. For
-a fully local setup, point `MENTEDB_LLM_PROVIDER=ollama` and
-`MENTEDB_LLM_BASE_URL=http://localhost:11434`. On AWS, `bedrock` calls Claude
+`--auto-extract` (or `MENTEDB_AUTO_EXTRACT=1`) queues LLM extraction in the
+background whenever a memory stored through `POST /v1/memories` looks like a
+conversation. For a fully local setup, set `MENTEDB_LLM_PROVIDER=ollama`; it
+calls `http://localhost:11434/api/chat` with model `llama3` by default. If you
+set `MENTEDB_LLM_BASE_URL`, give the full endpoint URL (for example
+`http://localhost:11434/api/chat`), not just the host. On AWS, `bedrock` calls Claude
 through Bedrock with the task role and no API key, see
 [Bedrock on AWS](#bedrock-on-aws-with-a-task-role).
 
@@ -93,12 +103,16 @@ against the output limit. Two optional settings control this:
 **What it does:** embeddings power semantic search, auto-linking, and
 contradiction detection. Without a real embedder only keyword recall works.
 
-- `candle` (default in the Docker image): local, semantic (all-MiniLM-L6-v2,
-  384 dims), no API key. Requires the `local-embeddings` build feature.
+- `candle` (the default when the server is built with the `local-embeddings`
+  feature, as the Docker image is): local, semantic (all-MiniLM-L6-v2, 384
+  dims), no API key. The model downloads on first start.
 - `bedrock`: AWS Bedrock, Cohere Embed v3 by default (1024 dims), credentials
   from the task role. Requires the `bedrock` build feature, which the Docker
   image has. See [Bedrock on AWS](#bedrock-on-aws-with-a-task-role).
-- `hash`: deterministic but **not** semantic. Fine for testing, weak for recall.
+- `hash` (the default for a plain `cargo install mentedb-server`, which does not
+  include `local-embeddings`): deterministic but **not** semantic. Fine for
+  testing, weak for recall. For semantic recall from Cargo, install with
+  `cargo install mentedb-server --features local-embeddings`.
 - `none`: disables embeddings (not recommended).
 
 Without a flag the server uses `candle` when it was built with
@@ -134,8 +148,9 @@ MENTEDB_CONTRADICTION_POLICY=flag mentedb-server --data-dir ./data
 ## Step 4: Use it
 
 Every turn goes through one call. **`process_turn`** embeds the message, runs
-hybrid recall (vector + keyword + graph), stores the turn, extracts facts,
-detects contradictions, and returns attention-ordered context for your prompt.
+hybrid recall (vector + keyword), stores the turn, extracts simple facts with
+rules, links related memories, checks for contradictions, and returns
+attention-ordered context for your prompt. It needs no LLM.
 
 **REST:**
 
@@ -144,6 +159,13 @@ curl -X POST http://localhost:6677/v1/process_turn \
   -H "Content-Type: application/json" \
   -d '{"user_message":"I switched from Postgres to SQLite","assistant_response":"Noted.","turn_id":0}'
 ```
+
+The response carries `context` (a list of `{id, content, memory_type,
+relevance_score, created_at}`), `stored_ids`, `contradictions`,
+`facts_extracted`, `pain_warnings` (a count), `predicted_topics`, and the delta
+fields `delta_added` / `delta_removed`. (`POST /v1/ingest` is a different call:
+it takes a whole `conversation` string plus an `agent_id` and needs an LLM
+configured.)
 
 **SDK** (Python / TypeScript / Rust):
 
@@ -170,6 +192,7 @@ order:
 | Decay | Ages salience so old, unused memories rank lower over time. |
 | Archival | Forgets cold memories flagged for deletion (capped per sweep). |
 | Cache eviction | Clears stale speculative pre-assembly cache entries. |
+| Topic labels | With an LLM configured, gives recent conversation topics a stable label. |
 
 **It is built into the server and on by default (every 24h).** The scheduled
 sweep covers every database open at that moment, the default and the named
@@ -183,11 +206,15 @@ mentedb-server --data-dir ./data --maintenance-interval-hours 0   # disable
 ```
 
 **Or run it one-shot from cron** (set the interval to 0 to avoid double-running).
-The one-shot command sweeps the default database only, so with named databases
-prefer the built-in scheduler or the per database endpoint:
+The `maintenance` subcommand opens the data directory itself, so it only runs
+when no server holds that directory (a running server makes it exit with a
+"locked" error), and it sweeps the default database only. Use it during a
+maintenance window or for a directory an embedded SDK uses between runs. For an
+always-on server, and with named databases, use the built-in scheduler or the
+per database endpoint instead:
 
 ```bash
-# /etc/cron.d/mentedb, 2am daily
+# /etc/cron.d/mentedb, 2am daily, against a directory no server is holding
 0 2 * * *  mentedb-server maintenance --data-dir /var/lib/mentedb
 ```
 
@@ -540,6 +567,18 @@ Neither needs a token. The Docker image's `HEALTHCHECK` uses `/v1/ready`. A
 load balancer health check should use `/v1/ready` too, so an instance whose
 Bedrock access broke is taken out of rotation instead of failing writes.
 
+## Running several servers (sharding)
+
+One server owns one data directory. To spread many agents over several servers,
+set `MENTEDB_SHARDING=1`, `MENTEDB_NODE_ADDR`, and `MENTEDB_SEEDS` on each node.
+The nodes gossip to agree on who is alive, every node computes the same owner
+for each agent (rendezvous hashing), and a request that lands on the wrong node
+is forwarded to the owner, so each agent's database is only written by one node.
+Routing reads the `agent_id` claim of the request's token, so run sharded nodes
+with auth on and give each agent an agent bound token. Requests without a token,
+and tokens scoped to databases with no `agent_id`, are not spread by agent.
+`/metrics` reports `mentedb_cluster_live_nodes`.
+
 ## Environment variable reference
 
 Command line flags, where they exist, win over the variable, except for
@@ -580,11 +619,11 @@ Command line flags, where they exist, win over the variable, except for
 | `MENTEDB_LLM_PROVIDER` | `--llm-provider` | `none` | `openai`, `anthropic`, `ollama`, `bedrock`, or `none` |
 | `MENTEDB_LLM_API_KEY` | `--llm-api-key` | unset | API key (not used by `ollama` or `bedrock`) |
 | `MENTEDB_LLM_MODEL` | `--llm-model` | provider default | `gpt-4o-mini`, `claude-haiku-5-5`, `llama3`, or `us.anthropic.claude-haiku-5-5` for Bedrock |
-| `MENTEDB_LLM_BASE_URL` | `--llm-base-url` | provider default | For Ollama or a proxy |
+| `MENTEDB_LLM_BASE_URL` | `--llm-base-url` | provider endpoint | Full endpoint URL, for Ollama on another host or a proxy |
 | `MENTEDB_LLM_REGION` | `--llm-region` | `AWS_REGION`, else `us-east-1` | Bedrock region for extraction |
 | `MENTEDB_LLM_MAX_OUTPUT_TOKENS` | | `16000` | Output ceiling per LLM call, thinking included |
 | `MENTEDB_LLM_EFFORT` | | model default | `low`, `medium` or `high` |
-| `MENTEDB_AUTO_EXTRACT` | `--auto-extract` | `false` | Per-turn fact extraction; `true` or `1` enables |
+| `MENTEDB_AUTO_EXTRACT` | `--auto-extract` | `false` | Background LLM extraction for conversation shaped `POST /v1/memories` bodies; `true` or `1` enables |
 | `MENTEDB_EXTRACTION_QUALITY_THRESHOLD` | | `0.7` | Min confidence to store an extracted fact |
 | `MENTEDB_EXTRACTION_DEDUP_THRESHOLD` | | `0.85` | Similarity above which an extraction is a duplicate |
 

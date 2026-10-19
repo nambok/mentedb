@@ -5,7 +5,7 @@ overnight maintenance runs for you. Three steps.
 
 ## 1. Get an API key
 
-Sign up at [app.mentedb.com](https://app.mentedb.com) (email or GitHub), open
+Sign up at [app.mentedb.com](https://app.mentedb.com), open
 **API Keys**, and create one. It looks like `mdb_...` and is shown once, copy it
 somewhere safe.
 
@@ -16,8 +16,8 @@ export MENTEDB_API_KEY=mdb_your_key_here
 ```
 
 That is the only credential you need. The endpoint defaults to
-`https://api.mentedb.com`; override it with `MENTEDB_CLOUD_URL` if you ever need
-to.
+`https://api.mentedb.com`; the MCP connector reads `MENTEDB_API_URL` if you
+ever need to point it somewhere else.
 
 ## 3. Connect
 
@@ -63,9 +63,11 @@ and Node, cloud and self-hosted.
 
 ## What runs for you
 
-Every night the platform runs the same maintenance a self-hoster would have to
-schedule, consolidation, decay, archival, and cache eviction, plus enrichment
-and profile building. You do nothing. That is the whole point of cloud.
+In the background, every few hours, the platform runs the upkeep a self-hoster
+would have to schedule: it distills recent turns into facts, merges near
+duplicates, decays salience, and forgets what has gone cold, and once a day it
+rebuilds your profile from the facts that survive. You do nothing. That is the
+whole point of cloud.
 
 ---
 

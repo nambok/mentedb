@@ -5,8 +5,10 @@ everything you need to get started.
 
 ## Prerequisites
 
-- Rust stable toolchain (1.85+, edition 2024)
+- A recent stable Rust toolchain (edition 2024; CI builds with the latest stable, the Docker image with 1.94)
 - `rustfmt` and `clippy` components installed
+- The Protocol Buffers compiler (`protoc`), used to build the gRPC code in
+  `mentedb-server` (`brew install protobuf` or `apt-get install protobuf-compiler`)
 - Git
 
 Install the toolchain and components:
@@ -140,9 +142,11 @@ iteration.
 Read [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed explanation of the
 system design, crate structure, data flow, and design decisions.
 
-The key architectural principle: each crate owns a single responsibility
-and depends only on `mentedb-core` for shared types. The `mentedb` facade
-crate wires everything together. Changes to one subsystem should not
+The key architectural principle: each crate owns a single responsibility,
+and the subsystem crates (storage, index, graph, query, context, cognitive,
+consolidation, embedding) depend only on `mentedb-core` for shared types.
+The `mentedb` facade crate wires everything together; `mentedb-extraction`,
+`mentedb-replication`, and `mentedb-server` build on a few of the others. Changes to one subsystem should not
 require changes to another.
 
 ## How to Add a New Cognitive Feature
@@ -192,8 +196,9 @@ pub use my_feature::{MyFeature, MyFeatureConfig, MyResult};
 
 ### 4. Add Configuration
 
-If the feature has configurable parameters, add them to
-`CognitiveConfig` in `crates/mentedb-core/src/config.rs`.
+If the feature has configurable parameters, add them to the
+`CognitiveConfig` the engine is opened with, in `crates/mentedb/src/lib.rs`
+(the facade's feature toggles and per subsystem settings).
 
 ### 5. Write Tests
 

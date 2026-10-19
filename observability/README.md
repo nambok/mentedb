@@ -17,7 +17,14 @@ open http://localhost:3000        # Grafana (anonymous admin), "MenteDB" dashboa
 
 Grafana comes up at `:3000` (no login), Prometheus at `:9090`. The dashboard shows
 up/uptime/memories/live nodes, request rate, latency percentiles, CPU, and resident
-memory.
+memory. The CPU and memory panels read the standard `process_*` metrics, which the
+server exports only on Linux (for example in the Docker image); on macOS those two
+panels stay empty.
+
+Beyond what the dashboard plots, `/metrics` also exports store and recall
+counters (`mentedb_stores_total`, `mentedb_recalls_total`), their latest
+latencies, buffer pool hits, misses and evictions, and storage, graph and vector
+index sizes.
 
 ## Point it at your nodes
 
