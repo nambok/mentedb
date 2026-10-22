@@ -188,7 +188,7 @@ jobs:
           rm -f Cargo.toml.bak
       - name: Install protobuf compiler (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Install protobuf compiler (macOS)
         if: runner.os == 'macOS'
         run: brew install protobuf

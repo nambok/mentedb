@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get install -y protobuf-compiler
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo check --locked --workspace
       # The local-embeddings feature (candle, hf-hub) is off by default, so a
       # plain workspace check misses breaks in it, which then only surface in
@@ -41,7 +41,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - run: sudo apt-get install -y protobuf-compiler
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       # The SDKs are outside the workspace, so the jobs above never compile
       # them and an engine API change only failed at publish time.
       - run: cargo check --manifest-path sdks/python/Cargo.toml
@@ -53,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get install -y protobuf-compiler
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo test --locked --workspace
 
   fmt:
@@ -74,5 +74,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - run: sudo apt-get install -y protobuf-compiler
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo clippy --locked --workspace -- -D warnings

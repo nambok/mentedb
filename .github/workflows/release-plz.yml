@@ -28,7 +28,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Install protobuf compiler
-        run: sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Publish all workspace crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -161,7 +161,7 @@ jobs:
       # release-pr runs cargo-semver-checks, which builds mentedb-server and
       # its gRPC code generation needs protoc.
       - name: Install protobuf compiler
-        run: sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Run release-plz
         uses: release-plz/action@v0.5
         with:
