@@ -1,3 +1,13 @@
+# eMudhra CA compromise (CVE-2026-111943): the system trust store must not trust
+# "emSign ECC Root CA - G3", the only emSign G3 root in the Mozilla set
+# (SHA-256 86:A1:EC:BA:08:9C:4A:8D:3B:BE:27:34:C6:12:BA:34:1D:81:3E:04:3C:F9:E8:A8:62:CD:5C:57:A3:6B:BE:6B;
+# webpki-roots 1.0.10 removes the same one; emSign G1, C1 and C3 are not affected).
+# ca-certificates 20250419~deb12u2 (bookworm-security) already drops it. Every
+# Debian stage below requires at least that version, removes the root by exact
+# file name, rebuilds the store with update-ca-certificates --fresh, and fails
+# the build if these exact certificate bytes (DER, base64) are still in the bundle.
+ARG EMSIGN_ECC_G3_DER_B64=MIICTjCCAdOgAwIBAgIKPPYHqWhwDtqLhDAKBggqhkjOPQQDAzBrMQswCQYDVQQGEwJJTjETMBEGA1UECxMKZW1TaWduIFBLSTElMCMGA1UEChMcZU11ZGhyYSBUZWNobm9sb2dpZXMgTGltaXRlZDEgMB4GA1UEAxMXZW1TaWduIEVDQyBSb290IENBIC0gRzMwHhcNMTgwMjE4MTgzMDAwWhcNNDMwMjE4MTgzMDAwWjBrMQswCQYDVQQGEwJJTjETMBEGA1UECxMKZW1TaWduIFBLSTElMCMGA1UEChMcZU11ZGhyYSBUZWNobm9sb2dpZXMgTGltaXRlZDEgMB4GA1UEAxMXZW1TaWduIEVDQyBSb290IENBIC0gRzMwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAAQjpQy4LRL1KPOxst3iAhKAnjlfSU2fySU0WXTsuwYc58Byr+iuL+FBVIcUqEqy6HyC5ltqtdyzdc6LBtCGI79G1Y4PPwT01xySfvalY8L1X44uT6EYGQIrMgqCZH0Wk9GjQjBAMB0GA1UdDgQWBBR8XQKEE9TMipuBzhccLikenEhjQjAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAwNpADBmAjEAvvNhzwIQHWSVB7gYboiFBS+DCBeQyh+KTOgNG3qxrdWBCUfvO6wIBHxcmbHtRwfSAjEAnbpV/KlK6O3t5nYBQnvI+GDZjVGLVTv7jHvrZQnD+JbNR6iC8hZVdyR+EhCVBCyj
+
 # Builder stage
 # Rust 1.94: several deps (konst, redb) now require >= 1.89; keep headroom so a
 # dependency MSRV bump does not break the image build (which CI does not run).
@@ -9,7 +19,23 @@
 # together.
 FROM rust:1.94-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 AS builder
 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev protobuf-compiler && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y pkg-config libssl-dev protobuf-compiler ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Distrust emSign ECC Root CA - G3 (see the top of this file).
+ARG EMSIGN_ECC_G3_DER_B64
+RUN set -eu; \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge '20250419~deb12u2' \
+        || { echo 'ca-certificates is older than 20250419~deb12u2 (bookworm-security)' >&2; exit 1; }; \
+    rm -f /usr/share/ca-certificates/mozilla/emSign_ECC_Root_CA_-_G3.crt; \
+    sed -i 's|^mozilla/emSign_ECC_Root_CA_-_G3\.crt$|!&|' /etc/ca-certificates.conf; \
+    update-ca-certificates --fresh > /dev/null; \
+    test "$(grep -c 'BEGIN CERTIFICATE' /etc/ssl/certs/ca-certificates.crt)" -gt 100; \
+    if tr -d '\n' < /etc/ssl/certs/ca-certificates.crt | grep -qF "$EMSIGN_ECC_G3_DER_B64"; then \
+        echo 'emSign ECC Root CA - G3 is still in the system trust store' >&2; exit 1; \
+    fi; \
+    if ls /etc/ssl/certs | grep -qF 'emSign_ECC_Root_CA_-_G3'; then \
+        echo 'emSign ECC Root CA - G3 is still linked in /etc/ssl/certs' >&2; exit 1; \
+    fi
 
 WORKDIR /build
 COPY . .
@@ -32,6 +58,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Distrust emSign ECC Root CA - G3 (see the top of this file).
+ARG EMSIGN_ECC_G3_DER_B64
+RUN set -eu; \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge '20250419~deb12u2' \
+        || { echo 'ca-certificates is older than 20250419~deb12u2 (bookworm-security)' >&2; exit 1; }; \
+    rm -f /usr/share/ca-certificates/mozilla/emSign_ECC_Root_CA_-_G3.crt; \
+    sed -i 's|^mozilla/emSign_ECC_Root_CA_-_G3\.crt$|!&|' /etc/ca-certificates.conf; \
+    update-ca-certificates --fresh > /dev/null; \
+    test "$(grep -c 'BEGIN CERTIFICATE' /etc/ssl/certs/ca-certificates.crt)" -gt 100; \
+    if tr -d '\n' < /etc/ssl/certs/ca-certificates.crt | grep -qF "$EMSIGN_ECC_G3_DER_B64"; then \
+        echo 'emSign ECC Root CA - G3 is still in the system trust store' >&2; exit 1; \
+    fi; \
+    if ls /etc/ssl/certs | grep -qF 'emSign_ECC_Root_CA_-_G3'; then \
+        echo 'emSign ECC Root CA - G3 is still linked in /etc/ssl/certs' >&2; exit 1; \
+    fi
 
 # Run as a fixed non-root uid/gid so volume ownership is predictable across
 # hosts and orchestrators (chown a bind mount to 10001:10001).
