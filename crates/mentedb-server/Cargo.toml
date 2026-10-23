@@ -61,7 +61,7 @@ tempfile = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 mentedb-extraction = { workspace = true }
-rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "ring"] }
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 
 [package.metadata.docs.rs]
 all-features = true
