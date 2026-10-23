@@ -180,7 +180,7 @@ where
                 shutdown_handle.graceful_shutdown(Some(drain_timeout));
             });
             let std_listener = listener.into_std()?;
-            axum_server::from_tcp_rustls(std_listener, RustlsConfig::from_config(config))
+            axum_server::from_tcp_rustls(std_listener, RustlsConfig::from_config(config))?
                 .handle(handle)
                 .serve(make_service)
                 .await
