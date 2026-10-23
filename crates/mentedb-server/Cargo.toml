@@ -37,7 +37,7 @@ jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 tonic = { version = "0.13", features = ["tls-ring"] }
 prost = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-prometheus = { version = "0.13", features = ["process"] }
+prometheus = { version = "0.14", features = ["process"] }
 
 [features]
 default = []
