@@ -1546,7 +1546,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb"
-version = "0.43.0"
+version = "0.43.1"
 dependencies = [
  "crc32fast",
  "mentedb-cognitive",
@@ -1569,7 +1569,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-cognitive"
-version = "0.43.0"
+version = "0.43.1"
 dependencies = [
  "ahash",
  "crossbeam",
@@ -1584,7 +1584,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-consolidation"
-version = "0.43.0"
+version = "0.43.1"
 dependencies = [
  "ahash",
  "mentedb-core",
@@ -1595,7 +1595,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-context"
-version = "0.43.0"
+version = "0.43.1"
 dependencies = [
  "ahash",
  "mentedb-core",
@@ -1607,7 +1607,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-core"
-version = "0.43.0"
+version = "0.43.1"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1622,7 +1622,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-embedding"
-version = "0.43.0"
+version = "0.43.1"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1643,7 +1643,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-extraction"
-version = "0.43.0"
+version = "0.43.1"
 dependencies = [
  "mentedb-cognitive",
  "mentedb-core",
@@ -1659,7 +1659,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-graph"
-version = "0.43.0"
+version = "0.43.1"
 dependencies = [
  "ahash",
  "bincode",
@@ -1674,7 +1674,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-index"
-version = "0.43.0"
+version = "0.43.1"
 dependencies = [
  "ahash",
  "bincode",
@@ -1712,7 +1712,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-query"
-version = "0.43.0"
+version = "0.43.1"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -1723,7 +1723,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-storage"
-version = "0.43.0"
+version = "0.43.1"
 dependencies = [
  "ahash",
  "bincode",
@@ -2458,9 +2458,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.37"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "758025cb5fccfd3bc2fd74708fd4682be41d99e5dff73c377c0646c6012c73a4"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "log",
  "once_cell",
