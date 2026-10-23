@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.0](https://github.com/nambok/mentedb/compare/mentedb-index-v0.43.2...mentedb-index-v0.44.0) - 2026-10-23
+
+### Fixed
+
+- *(index)* keep every hnsw node reachable with heuristic neighbour selection ([#505](https://github.com/nambok/mentedb/pull/505))
+
 ## [0.43.0](https://github.com/nambok/mentedb/compare/mentedb-index-v0.42.1...mentedb-index-v0.43.0) - 2026-10-19
 
 ### Added
