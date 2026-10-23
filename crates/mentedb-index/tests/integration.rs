@@ -30,6 +30,7 @@ fn test_hybrid_search_full_pipeline() {
             ef_construction: 100,
             ef_search: 30,
             metric: DistanceMetric::Cosine,
+            ..Default::default()
         },
         ..Default::default()
     });
@@ -142,6 +143,7 @@ fn test_many_memories_hybrid() {
             ef_construction: 50,
             ef_search: 20,
             metric: DistanceMetric::Euclidean,
+            ..Default::default()
         },
         ..Default::default()
     });

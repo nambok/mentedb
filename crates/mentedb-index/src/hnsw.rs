@@ -8,7 +8,8 @@ use std::collections::{BinaryHeap, HashSet};
 
 use ahash::HashMap;
 use parking_lot::RwLock;
-use rand::Rng;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
 use mentedb_core::MenteError;
@@ -415,6 +416,25 @@ struct HnswInner {
     ef_construction: usize,
     level_mult: f64,
     metric: DistanceMetric,
+    /// Fill each neighbour list back to capacity with the closest links the
+    /// diversity heuristic set aside (`keepPrunedConnections` in the HNSW
+    /// paper). Not persisted, like `ef_search`, so the file format is
+    /// unchanged and a loaded index uses the default.
+    #[serde(skip, default = "default_keep_pruned")]
+    keep_pruned_connections: bool,
+    /// Number of links pointing at each node, per layer, from any node
+    /// (tombstones included, since search routes through them). Derived
+    /// from `nodes`, so it is not persisted and is rebuilt on load.
+    #[serde(skip)]
+    in_degree: Vec<Vec<u32>>,
+    /// Source of node levels. Not persisted: a loaded index draws fresh
+    /// entropy, a new one uses `HnswConfig::seed` when set.
+    #[serde(skip, default = "StdRng::from_os_rng")]
+    level_rng: StdRng,
+}
+
+fn default_keep_pruned() -> bool {
+    true
 }
 
 /// Thread-safe HNSW index.
@@ -433,6 +453,15 @@ pub struct HnswConfig {
     pub ef_search: usize,
     /// Distance metric used for similarity computation.
     pub metric: DistanceMetric,
+    /// After the diversity heuristic picks a node's neighbours, fill the
+    /// remaining slots with the closest candidates it set aside, so every
+    /// node keeps a full neighbour list (`keepPrunedConnections` in the HNSW
+    /// paper). Turning it off keeps only the links the heuristic chose.
+    pub keep_pruned_connections: bool,
+    /// Seed for the random level of each inserted node. `None` draws from
+    /// the operating system. Set it to build the same graph from the same
+    /// inserts, for tests and reproductions.
+    pub seed: Option<u64>,
 }
 
 impl Default for HnswConfig {
@@ -442,6 +471,8 @@ impl Default for HnswConfig {
             ef_construction: 200,
             ef_search: 50,
             metric: DistanceMetric::Cosine,
+            keep_pruned_connections: true,
+            seed: None,
         }
     }
 }
@@ -463,6 +494,12 @@ impl HnswIndex {
                 ef_construction: config.ef_construction,
                 level_mult,
                 metric: config.metric,
+                keep_pruned_connections: config.keep_pruned_connections,
+                in_degree: Vec::new(),
+                level_rng: match config.seed {
+                    Some(seed) => StdRng::seed_from_u64(seed),
+                    None => StdRng::from_os_rng(),
+                },
             }),
         }
     }
@@ -519,7 +556,7 @@ impl HnswIndex {
     /// Link a new node for `id` into the graph and point the id at it. The
     /// caller has already checked that `id` is not live.
     fn insert_node(inner: &mut HnswInner, id: MemoryId, vector: &[f32]) {
-        let node_level = random_level(inner.level_mult, inner.m);
+        let node_level = random_level(&mut inner.level_rng, inner.level_mult);
         let node_idx = inner.nodes.len();
 
         let mut layers = Vec::with_capacity(node_level + 1);
@@ -532,6 +569,7 @@ impl HnswIndex {
             vector: vector.to_vec(),
             layers,
         });
+        inner.in_degree.push(vec![0; node_level + 1]);
         inner.id_to_idx.insert(id, node_idx);
 
         // First node becomes entry point
@@ -606,12 +644,14 @@ impl HnswIndex {
             );
         }
 
-        // For each level from min(node_level, start_level) down to 0, do ef-search and connect
+        // For each level from min(node_level, start_level) down to 0, do
+        // ef-search and connect.
+        let keep_pruned = inner.keep_pruned_connections;
         let top = node_level.min(start_level);
         for level in (0..=top).rev() {
             let max_conn = if level == 0 { m_max0 } else { m };
 
-            let candidates = search_layer(
+            let mut candidates = search_layer(
                 &inner.nodes,
                 &inner.deleted,
                 current_ep,
@@ -620,35 +660,23 @@ impl HnswIndex {
                 level,
                 metric,
             );
+            // Only nodes of the same dimension can ever be neighbours.
+            candidates.retain(|c| inner.nodes[c.idx].vector.len() == query.len());
 
-            // Select M nearest neighbours
-            let neighbours = select_neighbours(&candidates, max_conn);
+            let neighbours =
+                select_neighbours(&inner.nodes, &candidates, max_conn, keep_pruned, metric);
 
             // Add bidirectional connections
             inner.nodes[node_idx].layers[level] = neighbours.iter().map(|c| c.idx).collect();
+            for c in &neighbours {
+                inner.in_degree[c.idx][level] += 1;
+            }
 
-            for &cand in &neighbours {
-                let neighbour_idx = cand.idx;
-                inner.nodes[neighbour_idx].layers[level].push(node_idx);
-
-                // Prune if over capacity
-                if inner.nodes[neighbour_idx].layers[level].len() > max_conn {
-                    let nv = inner.nodes[neighbour_idx].vector.clone();
-                    let mut scored: Vec<Candidate> = inner.nodes[neighbour_idx].layers[level]
-                        .iter()
-                        .map(|&ni| Candidate {
-                            dist: compute_distance(&nv, &inner.nodes[ni].vector, metric),
-                            idx: ni,
-                        })
-                        .collect();
-                    scored.sort_unstable_by(|a, b| {
-                        a.dist
-                            .partial_cmp(&b.dist)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                    scored.truncate(max_conn);
-                    inner.nodes[neighbour_idx].layers[level] =
-                        scored.iter().map(|c| c.idx).collect();
+            for c in &neighbours {
+                inner.nodes[c.idx].layers[level].push(node_idx);
+                inner.in_degree[node_idx][level] += 1;
+                if inner.nodes[c.idx].layers[level].len() > max_conn {
+                    shrink_links(inner, c.idx, level, max_conn, node_idx);
                 }
             }
 
@@ -821,9 +849,10 @@ impl HnswIndex {
 
     /// Deserialize an index from bytes (bincode, with JSON fallback for migration).
     pub fn deserialize(data: &[u8], ef_search: usize) -> MenteResult<Self> {
-        let inner: HnswInner = bincode::deserialize(data)
+        let mut inner: HnswInner = bincode::deserialize(data)
             .or_else(|_| serde_json::from_slice(data))
             .map_err(|e| MenteError::Serialization(e.to_string()))?;
+        inner.rebuild_in_degree();
         Ok(Self {
             ef_search,
             inner: RwLock::new(inner),
@@ -844,13 +873,33 @@ impl HnswIndex {
     }
 }
 
+impl HnswInner {
+    /// Recount the links pointing at every node from the adjacency lists.
+    fn rebuild_in_degree(&mut self) {
+        let mut in_degree: Vec<Vec<u32>> =
+            self.nodes.iter().map(|n| vec![0; n.layers.len()]).collect();
+        for node in &self.nodes {
+            for (level, links) in node.layers.iter().enumerate() {
+                for &target in links {
+                    if let Some(count) = in_degree
+                        .get_mut(target)
+                        .and_then(|layers| layers.get_mut(level))
+                    {
+                        *count += 1;
+                    }
+                }
+            }
+        }
+        self.in_degree = in_degree;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
 
 /// Random level assignment: floor(-ln(uniform) * level_mult).
-fn random_level(level_mult: f64, _m: usize) -> usize {
-    let mut rng = rand::rng();
+fn random_level(rng: &mut StdRng, level_mult: f64) -> usize {
     let r: f64 = rng.random::<f64>();
     // Avoid log(0)
     let r = r.max(f64::EPSILON);
@@ -963,9 +1012,131 @@ fn search_layer(
     res
 }
 
-/// Select the nearest `max_count` neighbours from sorted candidates.
-fn select_neighbours(candidates: &[Candidate], max_count: usize) -> Vec<Candidate> {
-    candidates.iter().copied().take(max_count).collect()
+/// Pick up to `max_count` neighbours for a node from `candidates`, sorted by
+/// ascending distance to that node, with the diversity heuristic of the HNSW
+/// paper (algorithm 4): a candidate is taken only when it is closer to the
+/// node than to every neighbour already taken. Keeping only the nearest
+/// candidates instead clusters the links inside one dense region and leaves
+/// points between regions with no incoming link at all, so greedy search can
+/// never reach them. With `keep_pruned`, the slots left over are filled with
+/// the closest candidates the heuristic set aside.
+fn select_neighbours(
+    nodes: &[HnswNode],
+    candidates: &[Candidate],
+    max_count: usize,
+    keep_pruned: bool,
+    metric: DistanceMetric,
+) -> Vec<Candidate> {
+    let mut selected: Vec<Candidate> = Vec::with_capacity(max_count);
+    let mut set_aside: Vec<Candidate> = Vec::new();
+    for &cand in candidates {
+        if selected.len() >= max_count {
+            break;
+        }
+        let diverse = selected.iter().all(|s| {
+            compute_distance(&nodes[cand.idx].vector, &nodes[s.idx].vector, metric) > cand.dist
+        });
+        if diverse {
+            selected.push(cand);
+        } else {
+            set_aside.push(cand);
+        }
+    }
+    if keep_pruned {
+        let room = max_count - selected.len();
+        selected.extend(set_aside.into_iter().take(room));
+    }
+    selected
+}
+
+/// Bring the neighbour list of `node` at `level` back to `max_conn` links
+/// after the link to `added` pushed it over.
+///
+/// The links to drop follow the diversity rule of [`select_neighbours`]: a
+/// link is redundant when its target is closer to another neighbour than to
+/// `node`, because search reaches it through that neighbour anyway. With
+/// `keep_pruned_connections` the list keeps every slot, so only the excess
+/// goes. The list already held its links before `added` joined, so only
+/// redundancy involving `added` is new: links farther than `added` that it
+/// covers go first, then `added` itself when a nearer link covers it, then
+/// the farthest link. That is one pass over the list, where rerunning the
+/// heuristic from scratch would be quadratic in it on every insert. Without
+/// `keep_pruned_connections`, the heuristic picks the links to keep.
+///
+/// In every case a link is never dropped when it is the last one pointing at
+/// its target: that would leave the target with no incoming link at this
+/// layer, unreachable by any search however large `ef` is. A droppable link
+/// goes in its place, and when every link is the last one into its target
+/// the list stays over capacity rather than cut a node off.
+fn shrink_links(inner: &mut HnswInner, node: usize, level: usize, max_conn: usize, added: usize) {
+    let metric = inner.metric;
+    let nodes = &inner.nodes;
+    let base = &nodes[node].vector;
+    let mut scored: Vec<Candidate> = nodes[node].layers[level]
+        .iter()
+        .map(|&ni| Candidate {
+            dist: compute_distance(base, &nodes[ni].vector, metric),
+            idx: ni,
+        })
+        .collect();
+    scored.sort_unstable_by(|a, b| {
+        a.dist
+            .partial_cmp(&b.dist)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let excess = scored.len().saturating_sub(max_conn);
+    let droppable = |c: &Candidate| inner.in_degree[c.idx][level] > 1;
+    let mut drop: Vec<usize> = Vec::with_capacity(excess);
+
+    if inner.keep_pruned_connections {
+        if let Some(pos) = scored.iter().position(|c| c.idx == added) {
+            let added_vec = &nodes[added].vector;
+            for far in scored[pos + 1..].iter().rev() {
+                if drop.len() == excess {
+                    break;
+                }
+                if droppable(far)
+                    && compute_distance(&nodes[far.idx].vector, added_vec, metric) < far.dist
+                {
+                    drop.push(far.idx);
+                }
+            }
+            let added_cand = &scored[pos];
+            if drop.len() < excess
+                && droppable(added_cand)
+                && scored[..pos].iter().any(|near| {
+                    compute_distance(added_vec, &nodes[near.idx].vector, metric) < added_cand.dist
+                })
+            {
+                drop.push(added);
+            }
+        }
+        for c in scored.iter().rev() {
+            if drop.len() == excess {
+                break;
+            }
+            if droppable(c) && !drop.contains(&c.idx) {
+                drop.push(c.idx);
+            }
+        }
+    } else {
+        let keep = select_neighbours(nodes, &scored, max_conn, false, metric);
+        let kept: HashSet<usize> = keep.iter().map(|c| c.idx).collect();
+        drop = scored
+            .iter()
+            .filter(|c| !kept.contains(&c.idx) && droppable(c))
+            .map(|c| c.idx)
+            .collect();
+    }
+
+    if drop.is_empty() {
+        return;
+    }
+    inner.nodes[node].layers[level].retain(|i| !drop.contains(i));
+    for target in drop {
+        inner.in_degree[target][level] -= 1;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1062,6 +1233,7 @@ mod tests {
             ef_construction: 100,
             ef_search: 50,
             metric: DistanceMetric::Euclidean,
+            ..Default::default()
         });
         for _ in 0..n {
             idx.insert(MemoryId::new(), &random_vec(dim)).unwrap();
@@ -1179,6 +1351,7 @@ mod tests {
             ef_construction: 100,
             ef_search: 50,
             metric: DistanceMetric::Euclidean,
+            ..Default::default()
         });
         let ids: Vec<MemoryId> = (0..60).map(|_| MemoryId::new()).collect();
         let old: Vec<Vec<f32>> = ids.iter().map(|_| random_vec(old_dim)).collect();
@@ -1247,6 +1420,7 @@ mod tests {
             ef_construction: 100,
             ef_search: 30,
             metric: DistanceMetric::Euclidean,
+            ..Default::default()
         });
 
         let dim = 16;
@@ -1277,5 +1451,141 @@ mod tests {
         let results = idx2.search(&vec, 1);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, id);
+    }
+
+    /// Live nodes of the entry point's dimension that a search can never
+    /// reach: walks every layer 0 link from the entry point, through
+    /// tombstones as search does. Also checks the in degree bookkeeping
+    /// against a recount of the links.
+    fn unreachable_at_layer_zero(idx: &HnswIndex) -> Vec<usize> {
+        let inner = idx.inner.read();
+        let mut recount: Vec<Vec<u32>> = inner
+            .nodes
+            .iter()
+            .map(|n| vec![0; n.layers.len()])
+            .collect();
+        for node in &inner.nodes {
+            for (level, links) in node.layers.iter().enumerate() {
+                for &t in links {
+                    recount[t][level] += 1;
+                }
+            }
+        }
+        assert_eq!(recount, inner.in_degree, "in degree bookkeeping drifted");
+
+        let Some(ep) = inner.entry_point else {
+            return Vec::new();
+        };
+        let dim = inner.nodes[ep].vector.len();
+        let mut seen = HashSet::from([ep]);
+        let mut stack = vec![ep];
+        while let Some(current) = stack.pop() {
+            for &next in &inner.nodes[current].layers[0] {
+                if seen.insert(next) {
+                    stack.push(next);
+                }
+            }
+        }
+        (0..inner.nodes.len())
+            .filter(|i| {
+                !inner.deleted.contains(i)
+                    && inner.nodes[*i].vector.len() == dim
+                    && !seen.contains(i)
+            })
+            .collect()
+    }
+
+    fn seeded_vec(rng: &mut StdRng, dim: usize) -> Vec<f32> {
+        (0..dim).map(|_| rng.random::<f32>()).collect()
+    }
+
+    fn seeded_config(seed: u64) -> HnswConfig {
+        HnswConfig {
+            m: 8,
+            ef_construction: 100,
+            ef_search: 50,
+            metric: DistanceMetric::Euclidean,
+            seed: Some(seed),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn every_live_node_stays_reachable_at_layer_zero() {
+        // Pruning neighbour lists by distance alone dropped the last link
+        // into some nodes, so no search could reach them at any ef: about a
+        // third of graphs this size had at least one such node.
+        for seed in 0..20 {
+            let idx = HnswIndex::new(seeded_config(seed));
+            let mut rng = StdRng::seed_from_u64(1_000 + seed);
+            for _ in 0..300 {
+                idx.insert(MemoryId::new(), &seeded_vec(&mut rng, 16))
+                    .unwrap();
+            }
+            assert_eq!(
+                unreachable_at_layer_zero(&idx),
+                Vec::<usize>::new(),
+                "seed {seed}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_live_node_stays_reachable_through_upserts_and_removes() {
+        let dim = 16;
+        let idx = HnswIndex::new(seeded_config(42));
+        let mut rng = StdRng::seed_from_u64(42);
+        let ids: Vec<MemoryId> = (0..200).map(|_| MemoryId::new()).collect();
+        for id in &ids {
+            idx.insert(*id, &seeded_vec(&mut rng, dim)).unwrap();
+        }
+        for (i, id) in ids.iter().enumerate() {
+            match i % 3 {
+                0 => idx.upsert(*id, &seeded_vec(&mut rng, dim)),
+                1 => idx.remove(*id).unwrap(),
+                _ => {}
+            }
+            idx.insert(MemoryId::new(), &seeded_vec(&mut rng, dim))
+                .unwrap();
+        }
+        assert_eq!(unreachable_at_layer_zero(&idx), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn in_degree_is_rebuilt_after_load() {
+        let idx = HnswIndex::new(seeded_config(3));
+        let mut rng = StdRng::seed_from_u64(3);
+        for _ in 0..100 {
+            idx.insert(MemoryId::new(), &seeded_vec(&mut rng, 8))
+                .unwrap();
+        }
+        let back = HnswIndex::deserialize(&idx.serialize().unwrap(), 50).unwrap();
+        for _ in 0..100 {
+            back.insert(MemoryId::new(), &seeded_vec(&mut rng, 8))
+                .unwrap();
+        }
+        assert_eq!(unreachable_at_layer_zero(&back), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn same_seed_and_inserts_build_the_same_graph() {
+        let build = || {
+            let idx = HnswIndex::new(seeded_config(9));
+            let mut rng = StdRng::seed_from_u64(9);
+            for i in 0..80u128 {
+                idx.insert(
+                    MemoryId::from(uuid::Uuid::from_u128(i + 1)),
+                    &seeded_vec(&mut rng, 8),
+                )
+                .unwrap();
+            }
+            let inner = idx.inner.read();
+            inner
+                .nodes
+                .iter()
+                .map(|n| n.layers.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(build(), build());
     }
 }
