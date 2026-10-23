@@ -1,9 +1,10 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use mentedb_cognitive::speculative::SpeculativeCache;
 use mentedb_cognitive::trajectory::{
     DecisionState, TrajectoryNode, TrajectoryTracker, TransitionMap,
 };
 use mentedb_core::types::MemoryId;
+use std::hint::black_box;
 
 fn generate_topics(n: usize) -> Vec<String> {
     let domains = [

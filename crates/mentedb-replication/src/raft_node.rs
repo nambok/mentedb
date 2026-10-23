@@ -1,7 +1,6 @@
 //! Raft node wrapper with MenteDB-specific types.
 
 use std::fmt;
-use std::io::Cursor;
 
 use openraft::async_runtime::watch::WatchReceiver;
 use openraft::{BasicNode, Raft};
@@ -18,7 +17,6 @@ openraft::declare_raft_types!(
         R = MenteResponse,
         Node = BasicNode,
         NodeId = u64,
-        SnapshotData = Cursor<Vec<u8>>,
 );
 
 /// A request that can be replicated through Raft consensus.

@@ -1,8 +1,9 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mentedb::MenteDb;
 use mentedb::core::memory::{MemoryNode, MemoryType};
 use mentedb_context::{AssemblyConfig, ContextAssembler, ScoredMemory};
 use mentedb_core::types::AgentId;
+use std::hint::black_box;
 use tempfile::TempDir;
 
 fn generate_embedding(dim: usize, seed: u64) -> Vec<f32> {

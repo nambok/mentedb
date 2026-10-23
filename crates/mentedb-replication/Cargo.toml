@@ -12,7 +12,7 @@ mentedb-core = { workspace = true }
 mentedb-storage = { workspace = true }
 
 # Raft consensus
-openraft = { version = "0.10.0-alpha.17", features = ["serde"] }
+openraft = { version = "0.10.0-alpha.37", features = ["serde"] }
 
 # Serialization
 serde = { workspace = true }

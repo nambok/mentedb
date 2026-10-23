@@ -5,6 +5,7 @@
 //! AppendEntries, Vote, and full Snapshot transfer.
 
 use std::future::Future;
+use std::io::Cursor;
 
 use openraft::errors::{RPCError, ReplicationClosed, StreamingError, Unreachable};
 use openraft::network::{RPCOption, RaftNetworkFactory, RaftNetworkV2};
@@ -16,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::raft_node::TypeConfig;
 
-type SnapshotOf = openraft::type_config::alias::SnapshotOf<TypeConfig>;
+type SnapshotOf = openraft::type_config::alias::SnapshotOf<TypeConfig, Cursor<Vec<u8>>>;
 type VoteOf = openraft::type_config::alias::VoteOf<TypeConfig>;
 type MenteRPCError = RPCError<TypeConfig>;
 type MenteStreamingError = StreamingError<TypeConfig>;
@@ -87,6 +88,8 @@ impl MenteNetwork {
 }
 
 impl RaftNetworkV2<TypeConfig> for MenteNetwork {
+    type SnapshotData = Cursor<Vec<u8>>;
+
     async fn append_entries(
         &mut self,
         req: AppendEntriesRequest<TypeConfig>,

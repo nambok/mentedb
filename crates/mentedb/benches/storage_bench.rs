@@ -1,10 +1,11 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use mentedb::context::{AssemblyConfig, ContextAssembler, ScoredMemory};
 use mentedb::core::memory::{MemoryNode, MemoryType};
 use mentedb::index::hnsw::{HnswConfig, HnswIndex};
 use mentedb::query::mql::Mql;
 use mentedb::storage::StorageEngine;
 use mentedb_core::types::{AgentId, MemoryId};
+use std::hint::black_box;
 
 fn random_embedding(dim: usize) -> Vec<f32> {
     // Simple pseudo-random via system time mixed with counter.

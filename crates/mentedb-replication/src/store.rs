@@ -25,7 +25,7 @@ type LogId = openraft::type_config::alias::LogIdOf<TypeConfig>;
 type Vote = openraft::type_config::alias::VoteOf<TypeConfig>;
 type Entry = openraft::type_config::alias::EntryOf<TypeConfig>;
 type StoredMembership = openraft::type_config::alias::StoredMembershipOf<TypeConfig>;
-type Snapshot = openraft::type_config::alias::SnapshotOf<TypeConfig>;
+type Snapshot = openraft::type_config::alias::SnapshotOf<TypeConfig, Cursor<Vec<u8>>>;
 type SnapshotMeta = openraft::type_config::alias::SnapshotMetaOf<TypeConfig>;
 type EntryResponder = openraft::storage::EntryResponder<TypeConfig>;
 
@@ -240,6 +240,7 @@ impl Default for StateMachine {
 }
 
 impl RaftStateMachine<TypeConfig> for StateMachine {
+    type SnapshotData = Cursor<Vec<u8>>;
     type SnapshotBuilder = StateMachineSnapshot;
 
     async fn applied_state(&mut self) -> Result<(Option<LogId>, StoredMembership), io::Error> {
@@ -278,10 +279,6 @@ impl RaftStateMachine<TypeConfig> for StateMachine {
         }
     }
 
-    async fn begin_receiving_snapshot(&mut self) -> Result<Cursor<Vec<u8>>, io::Error> {
-        Ok(Cursor::new(Vec::new()))
-    }
-
     async fn install_snapshot(
         &mut self,
         _meta: &SnapshotMeta,
@@ -304,20 +301,17 @@ pub struct StateMachineSnapshot {
 }
 
 impl openraft::storage::RaftSnapshotBuilder<TypeConfig> for StateMachineSnapshot {
+    type SnapshotData = Cursor<Vec<u8>>;
+
     async fn build_snapshot(&mut self) -> Result<Snapshot, io::Error> {
         let json = serde_json::to_vec(&self.data).map_err(io::Error::other)?;
 
         let last_applied = self.data.last_applied_log;
         let membership = self.data.last_membership.clone();
 
-        let snapshot_id = last_applied
-            .map(|id| format!("{}-{}", id.leader_id, id.index))
-            .unwrap_or_else(|| "0-0".to_string());
-
         let meta = SnapshotMeta {
             last_log_id: last_applied,
             last_membership: membership,
-            snapshot_id,
         };
 
         Ok(Snapshot {
