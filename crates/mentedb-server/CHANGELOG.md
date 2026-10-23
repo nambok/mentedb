@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.43.2](https://github.com/nambok/mentedb/compare/mentedb-server-v0.43.1...mentedb-server-v0.43.2) - 2026-10-23
+
+### Other
+
+- *(deps)* bump axum-server from 0.7.3 to 0.8.0 ([#504](https://github.com/nambok/mentedb/pull/504))
+
 ## [0.43.1](https://github.com/nambok/mentedb/compare/mentedb-server-v0.43.0...mentedb-server-v0.43.1) - 2026-10-23
 
 ### Other

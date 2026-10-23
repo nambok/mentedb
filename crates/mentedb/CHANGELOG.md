@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.43.2](https://github.com/nambok/mentedb/compare/mentedb-v0.43.1...mentedb-v0.43.2) - 2026-10-23
+
+### Other
+
+- *(deps)* bump cargo minor and patch versions and adapt to openraft 0.10.0-alpha.37 ([#503](https://github.com/nambok/mentedb/pull/503))
+
 ## [0.43.0](https://github.com/nambok/mentedb/compare/mentedb-v0.42.1...mentedb-v0.43.0) - 2026-10-19
 
 ### Added
