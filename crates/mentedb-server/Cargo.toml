@@ -51,7 +51,7 @@ local-embeddings = ["mentedb-embedding/local"]
 bedrock = ["mentedb-extraction/bedrock", "mentedb-embedding/bedrock"]
 
 [build-dependencies]
-tonic-build = "0.13"
+tonic-build = "0.14"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
