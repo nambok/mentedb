@@ -33,7 +33,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tower = "0.5"
 tower-http = { version = "0.7", features = ["cors", "trace", "compression-gzip"] }
 http-body-util = "0.1"
-jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 tonic = { version = "0.14", features = ["tls-ring"] }
 prost = "0.14"
 tonic-prost = "0.14"
