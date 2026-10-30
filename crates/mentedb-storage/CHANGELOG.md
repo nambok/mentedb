@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.1](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.44.0...mentedb-storage-v0.44.1) - 2026-10-30
+
+### Fixed
+
+- *(storage)* refuse to open a directory migrated to the record format ([#515](https://github.com/nambok/mentedb/pull/515))
+
 ## [0.43.0](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.42.1...mentedb-storage-v0.43.0) - 2026-10-19
 
 ### Added
