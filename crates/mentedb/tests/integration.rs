@@ -577,7 +577,7 @@ fn test_store_batch_runs_write_inference() {
         agent,
         MemoryType::Semantic,
         "User enjoys the Acme office".to_string(),
-        vec![0.75, 0.66143782, 0.0, 0.0],
+        vec![0.75, 0.661_437_8, 0.0, 0.0],
     );
     let m2_id = m2.id;
     db.store_batch(vec![m2]).unwrap();

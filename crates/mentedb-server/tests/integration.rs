@@ -42,7 +42,7 @@ fn build_test_app_with_auth() -> (axum::Router, TempDir) {
         db: databases.default_db(),
         databases: databases.clone(),
         verifier: Some(Arc::new(
-            mentedb_server::auth::TokenVerifier::shared_secret(&JWT_SECRET.to_string()),
+            mentedb_server::auth::TokenVerifier::shared_secret(JWT_SECRET),
         )),
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: Some(JWT_SECRET.to_string()),
@@ -150,7 +150,7 @@ fn build_test_app_with_auth_no_admin_key() -> (axum::Router, TempDir) {
         db: databases.default_db(),
         databases: databases.clone(),
         verifier: Some(Arc::new(
-            mentedb_server::auth::TokenVerifier::shared_secret(&JWT_SECRET.to_string()),
+            mentedb_server::auth::TokenVerifier::shared_secret(JWT_SECRET),
         )),
         spaces: Arc::new(tokio::sync::RwLock::new(mentedb_core::SpaceManager::new())),
         jwt_secret: Some(JWT_SECRET.to_string()),
