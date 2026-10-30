@@ -1,86 +1,55 @@
-//! Persisted memory map: which page holds which memory.
+//! Record map: which extent holds which memory, persisted at checkpoints.
 //!
-//! Opening a database used to rebuild the memory id to page id map by loading
-//! every page, which on network storage costs minutes for large databases. The
-//! map is instead persisted at checkpoint time and replayed forward from the
-//! WAL on open, so a cold open reads only the pages the WAL touched.
+//! The engine keeps the whole locator to extent table in memory; every read
+//! resolves its locator through it. The table is persisted at checkpoint time
+//! and replayed forward from the WAL on open, so a cold open reads no records.
 //!
 //! # Anchoring
 //!
-//! Each checkpoint appends a `Checkpoint` WAL entry whose payload is a random
-//! 16 byte token, then writes the snapshot stamped with the same token, then
-//! truncates the WAL to that entry. The snapshot is the map as of its
-//! checkpoint entry, so the map now is the snapshot plus every WAL entry after
-//! the entry carrying its token. A snapshot whose token is not in the WAL
-//! (the WAL was truncated by a checkpoint or recovery that did not write a
-//! snapshot, the snapshot write failed, or the file is from another database)
-//! can never be matched again, because tokens are never reused for a changed
-//! map. On any doubt (missing, corrupt, unmatched, inconsistent page count)
-//! the caller falls back to a full page scan.
+//! Each checkpoint that changed the table appends a `Checkpoint` WAL entry
+//! whose payload is a random 16 byte token, then writes the snapshot stamped
+//! with the same token, then truncates the WAL to that entry. The table now is
+//! the snapshot plus every WAL entry after the entry carrying its token. A
+//! snapshot whose token is not in the WAL can never be matched again, because
+//! tokens are never reused for a changed table. On any doubt (missing,
+//! corrupt, unmatched, inconsistent with the file) open falls back to a scan of
+//! the record chain.
 //!
-//! The table is keyed by page, mirroring exactly what a full scan observes:
-//! a page holds a memory when its last write decodes as one, and a freed page
-//! holds none. Each entry also carries a stamp, a random value refreshed on
-//! every write applied to that page, which lets derived caches (mode probes)
-//! persist alongside and detect, without loading the page, that the memory
-//! changed since they were captured.
+//! Each entry also carries a stamp, a value refreshed on every write to the
+//! record, which lets derived caches (mode probes, salience bounds) persist
+//! alongside and detect, without loading the record, that it changed since
+//! they were captured.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
-use mentedb_core::MemoryNode;
 use mentedb_core::error::{MenteError, MenteResult};
 use mentedb_core::types::MemoryId;
 
-use crate::page::{PAGE_DATA_SIZE, PageId};
-use crate::wal::{WalEntry, WalEntryType};
+use crate::record::{Extent, FreeSpace, PageId, RecordOp, le_u32, le_u64};
 
-/// File name of the persisted memory map inside the database directory.
-pub const MEMORY_MAP_FILE: &str = "memory_map.bin";
+/// File name of the persisted record map inside the database directory.
+pub const MEMORY_MAP_FILE: &str = "records_map.bin";
 
-const MAGIC: &[u8; 8] = b"MDBMMAP1";
+const MAGIC: &[u8; 8] = b"MDBRMAP1";
 const FORMAT_VERSION: u32 = 1;
 
 /// Checkpoint token carried in the `Checkpoint` WAL entry payload.
 pub(crate) type Token = [u8; 16];
 
-/// A memory the map knows about: its id, its page, and the page's write stamp.
+/// A memory the map knows about: its id, its locator, and its write stamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MappedMemory {
     pub id: MemoryId,
     pub page: PageId,
-    /// Changes whenever the page is written. Equal stamps for the same page
-    /// mean no write was applied to it in between.
+    /// Changes whenever the record is written. Equal stamps for the same
+    /// locator mean no write was applied to it in between.
     pub stamp: u64,
 }
 
-/// Decode a memory node from a page's data region, with exactly the rules
-/// [`crate::StorageEngine::load_memory`] applies after the page type check.
-/// `data` may be shorter than a page; the missing tail reads as zeros.
-pub(crate) fn decode_memory(data: &[u8]) -> MenteResult<MemoryNode> {
-    let data = &data[..data.len().min(PAGE_DATA_SIZE)];
-    let mut prefix = [0u8; 4];
-    let n = data.len().min(4);
-    prefix[..n].copy_from_slice(&data[..n]);
-    let len = u32::from_le_bytes(prefix) as usize;
-    if len == 0 || len + 4 > PAGE_DATA_SIZE {
-        return Err(MenteError::Storage(format!(
-            "invalid memory node length prefix: {len}"
-        )));
-    }
-    if 4 + len > data.len() {
-        // The page tail is zero filled, and JSON never ends in NUL bytes, so
-        // the page would not decode either.
-        return Err(MenteError::Serialization(
-            "memory node runs past the written data".into(),
-        ));
-    }
-    serde_json::from_slice(&data[4..4 + len]).map_err(|e| MenteError::Serialization(e.to_string()))
-}
-
-/// A fresh random stamp or token half.
-fn random_u64() -> u64 {
+/// A fresh random stamp.
+pub(crate) fn random_u64() -> u64 {
     let (a, b) = uuid::Uuid::new_v4().as_u64_pair();
     a ^ b.rotate_left(17)
 }
@@ -90,10 +59,9 @@ pub(crate) fn new_token() -> Token {
 }
 
 /// The stamp of the WAL entry at `lsn` written while `token` anchored the
-/// map. Deterministic, so the stamp a write gets live, the stamp a checkpoint
-/// gives it rolling the map forward, and the stamp a reopen gives it replaying
-/// the WAL are the same value. LSNs only grow while a token anchors the map,
-/// so (token, lsn) never repeats.
+/// map. Deterministic, so the stamp a write gets live and the stamp a reopen
+/// gives it replaying the WAL are the same value. LSNs only grow while a
+/// token anchors the map, so (token, lsn) never repeats.
 pub(crate) fn entry_stamp(token: &Token, lsn: u64) -> u64 {
     fn mix(mut z: u64) -> u64 {
         z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -101,177 +69,104 @@ pub(crate) fn entry_stamp(token: &Token, lsn: u64) -> u64 {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
-    let mut a = [0u8; 8];
-    let mut b = [0u8; 8];
-    a.copy_from_slice(&token[..8]);
-    b.copy_from_slice(&token[8..]);
-    mix(u64::from_le_bytes(a) ^ mix(u64::from_le_bytes(b) ^ mix(lsn)))
+    let a = le_u64(&token[..8]);
+    let b = le_u64(&token[8..]);
+    mix(a ^ mix(b ^ mix(lsn)))
 }
 
-/// The page level view of which memories live where.
+/// Where one record lives and what it holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RecordEntry {
+    pub(crate) id: MemoryId,
+    pub(crate) stamp: u64,
+    pub(crate) extent: Extent,
+}
+
+/// The locator to extent table.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct MemoryTable {
-    /// page -> (memory id, write stamp), for pages holding a decodable memory.
-    pages: BTreeMap<u64, (MemoryId, u64)>,
-    /// Pages whose last logged operation freed them.
-    free: BTreeSet<u64>,
+pub(crate) struct RecordTable {
+    pub(crate) records: BTreeMap<u64, RecordEntry>,
+    /// Next locator to hand out; above every locator ever used.
+    pub(crate) next_locator: u64,
 }
 
-impl MemoryTable {
-    /// Record that `page` now holds `id` (or no memory when `None`), written
-    /// with `stamp`.
-    pub(crate) fn set_page(&mut self, page: u64, id: Option<MemoryId>, stamp: u64) {
-        self.free.remove(&page);
-        match id {
-            Some(id) => {
-                self.pages.insert(page, (id, stamp));
-            }
-            None => {
-                self.pages.remove(&page);
-            }
-        }
-    }
-
-    /// Record that `page` was freed.
-    pub(crate) fn set_free(&mut self, page: u64) {
-        self.pages.remove(&page);
-        self.free.insert(page);
-    }
-
-    /// Record a page found by a full scan. There is no WAL entry to derive a
-    /// stamp from, so it gets a fresh random one.
-    pub(crate) fn set_scanned(&mut self, page: u64, id: MemoryId) {
-        self.set_page(page, Some(id), random_u64());
-    }
-
-    /// Apply one WAL entry written under `token`. Returns true when the entry
-    /// can change the map.
-    pub(crate) fn apply(&mut self, entry: &WalEntry, token: &Token) -> bool {
-        match entry.entry_type {
-            WalEntryType::PageWrite => {
-                let id = decode_memory(&entry.data).ok().map(|n| n.id);
-                self.set_page(entry.page_id, id, entry_stamp(token, entry.lsn));
-                true
-            }
-            WalEntryType::PageFree => {
-                self.set_free(entry.page_id);
-                true
-            }
-            WalEntryType::Checkpoint | WalEntryType::Commit => false,
-        }
-    }
-
-    /// Pages whose last logged operation freed them.
-    pub(crate) fn free_pages(&self) -> &BTreeSet<u64> {
-        &self.free
-    }
-
-    /// Highest page id referenced, if any.
-    fn max_page(&self) -> Option<u64> {
-        let a = self.pages.keys().next_back().copied();
-        let b = self.free.iter().next_back().copied();
-        a.max(b)
-    }
-
-    /// Every mapped memory in page order, the order a full scan returns.
-    pub(crate) fn memories(&self) -> Vec<MappedMemory> {
-        self.pages
-            .iter()
-            .map(|(&page, &(id, stamp))| MappedMemory {
+impl RecordTable {
+    /// Apply one logged operation with the given stamp.
+    pub(crate) fn apply(&mut self, op: &RecordOp, stamp: u64) {
+        match op {
+            RecordOp::Write {
+                locator,
                 id,
+                extent,
+                ..
+            } => {
+                self.records.insert(
+                    *locator,
+                    RecordEntry {
+                        id: *id,
+                        stamp,
+                        extent: *extent,
+                    },
+                );
+            }
+            RecordOp::Free { locator, .. } => {
+                self.records.remove(locator);
+            }
+        }
+        self.next_locator = self.next_locator.max(op.locator() + 1);
+    }
+
+    /// Every mapped memory in locator order.
+    pub(crate) fn memories(&self) -> Vec<MappedMemory> {
+        self.records
+            .iter()
+            .map(|(&page, e)| MappedMemory {
+                id: e.id,
                 page: PageId(page),
-                stamp,
+                stamp: e.stamp,
             })
             .collect()
     }
 
-    /// The memory and stamp recorded for `page`.
-    pub(crate) fn get(&self, page: u64) -> Option<(MemoryId, u64)> {
-        self.pages.get(&page).copied()
+    /// Highest block any record occupies, exclusive (1 when empty).
+    pub(crate) fn max_end(&self) -> u64 {
+        self.records
+            .values()
+            .map(|e| e.extent.end())
+            .max()
+            .unwrap_or(1)
+    }
+
+    /// The free space of a file of `end` blocks holding these records.
+    pub(crate) fn free_space(&self, end: u64) -> MenteResult<FreeSpace> {
+        FreeSpace::from_live(self.records.values().map(|e| e.extent).collect(), end)
     }
 }
 
-/// The memory table as of the checkpoint entry carrying `token`.
+/// A persisted table and the checkpoint token it is anchored on.
 #[derive(Debug, Clone)]
-pub(crate) struct MapAnchor {
+pub(crate) struct Snapshot {
     pub(crate) token: Token,
-    /// Page count when the snapshot was taken; the page file never shrinks,
-    /// so a smaller count on open means the files do not belong together.
-    pub(crate) page_count: u64,
-    pub(crate) table: MemoryTable,
-    /// Writes since the anchor's checkpoint, recorded as they happen (page ->
-    /// memory and stamp, None when freed or not a memory), so stamp lookups
-    /// see the current write. Not persisted: the WAL holds the same writes and
-    /// rolling forward reproduces these exact stamps. A write path that does
-    /// not record here only makes lookups older, which callers treat as stale.
-    pub(crate) pending: std::collections::HashMap<u64, Option<(MemoryId, u64)>>,
-}
-
-impl MapAnchor {
-    /// Index of the last `Checkpoint` entry carrying this anchor's token.
-    fn position(&self, entries: &[WalEntry]) -> Option<usize> {
-        entries
-            .iter()
-            .rposition(|e| e.entry_type == WalEntryType::Checkpoint && e.data == self.token)
-    }
-
-    /// Roll the table forward over the entries after this anchor's checkpoint.
-    /// Returns None when the anchor's checkpoint is not in `entries` (the map
-    /// cannot be derived), else whether any entry changed the table.
-    pub(crate) fn advance(&mut self, entries: &[WalEntry]) -> Option<bool> {
-        let pos = self.position(entries)?;
-        let mut changed = false;
-        for e in &entries[pos + 1..] {
-            changed |= self.table.apply(e, &self.token);
-        }
-        self.pending.clear();
-        Some(changed)
-    }
-
-    /// Record a write logged at `lsn` under this anchor.
-    pub(crate) fn note_write(&mut self, page: u64, id: Option<MemoryId>, lsn: u64) {
-        let stamp = entry_stamp(&self.token, lsn);
-        self.pending.insert(page, id.map(|i| (i, stamp)));
-    }
-
-    /// The memory and stamp `page` holds now.
-    pub(crate) fn current(&self, page: u64) -> Option<(MemoryId, u64)> {
-        match self.pending.get(&page) {
-            Some(v) => *v,
-            None => self.table.get(page),
-        }
-    }
-
-    /// Whether the snapshot is internally consistent with a page file of
-    /// `page_count` pages.
-    pub(crate) fn fits(&self, page_count: u64) -> bool {
-        self.page_count <= page_count
-            && self.table.max_page().is_none_or(|m| m < self.page_count)
-            && !self.table.pages.contains_key(&0)
-            && !self.table.free.contains(&0)
-    }
+    pub(crate) table: RecordTable,
 }
 
 fn put_u64(buf: &mut Vec<u8>, v: u64) {
     buf.extend_from_slice(&v.to_le_bytes());
 }
 
-fn encode(anchor: &MapAnchor) -> Vec<u8> {
-    let t = &anchor.table;
-    let mut buf = Vec::with_capacity(64 + t.pages.len() * 32 + t.free.len() * 8);
+pub(crate) fn encode(token: &Token, t: &RecordTable) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(64 + t.records.len() * 56);
     buf.extend_from_slice(MAGIC);
     buf.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
-    buf.extend_from_slice(&anchor.token);
-    put_u64(&mut buf, anchor.page_count);
-    put_u64(&mut buf, t.pages.len() as u64);
-    for (&page, &(id, stamp)) in &t.pages {
-        put_u64(&mut buf, page);
-        buf.extend_from_slice(id.0.as_bytes());
-        put_u64(&mut buf, stamp);
-    }
-    put_u64(&mut buf, t.free.len() as u64);
-    for &page in &t.free {
-        put_u64(&mut buf, page);
+    buf.extend_from_slice(token);
+    put_u64(&mut buf, t.next_locator);
+    put_u64(&mut buf, t.records.len() as u64);
+    for (&locator, e) in &t.records {
+        put_u64(&mut buf, locator);
+        buf.extend_from_slice(e.id.0.as_bytes());
+        put_u64(&mut buf, e.stamp);
+        put_u64(&mut buf, e.extent.start);
+        put_u64(&mut buf, e.extent.blocks);
     }
     let crc = crc32fast::hash(&buf);
     buf.extend_from_slice(&crc.to_le_bytes());
@@ -289,67 +184,67 @@ impl Reader<'_> {
             .pos
             .checked_add(n)
             .filter(|&e| e <= self.buf.len())
-            .ok_or_else(|| MenteError::Storage("memory map snapshot truncated".into()))?;
+            .ok_or_else(|| MenteError::Storage("record map snapshot truncated".into()))?;
         let s = &self.buf[self.pos..end];
         self.pos = end;
         Ok(s)
     }
 
     fn u64(&mut self) -> MenteResult<u64> {
-        let mut b = [0u8; 8];
-        b.copy_from_slice(self.take(8)?);
-        Ok(u64::from_le_bytes(b))
+        Ok(le_u64(self.take(8)?))
     }
 }
 
-fn decode(bytes: &[u8]) -> MenteResult<MapAnchor> {
-    let bad = |what: &str| MenteError::Storage(format!("memory map snapshot {what}"));
-    if bytes.len() < MAGIC.len() + 4 + 16 + 8 + 8 + 8 + 4 {
+pub(crate) fn decode(bytes: &[u8]) -> MenteResult<Snapshot> {
+    let bad = |what: &str| MenteError::Storage(format!("record map snapshot {what}"));
+    if bytes.len() < MAGIC.len() + 4 + 16 + 8 + 8 + 4 {
         return Err(bad("too short"));
     }
     let (body, crc_bytes) = bytes.split_at(bytes.len() - 4);
-    let mut crc = [0u8; 4];
-    crc.copy_from_slice(crc_bytes);
-    if crc32fast::hash(body) != u32::from_le_bytes(crc) {
+    if crc32fast::hash(body) != le_u32(crc_bytes) {
         return Err(bad("checksum mismatch"));
     }
     let mut r = Reader { buf: body, pos: 0 };
     if r.take(8)? != MAGIC {
         return Err(bad("magic mismatch"));
     }
-    let mut v = [0u8; 4];
-    v.copy_from_slice(r.take(4)?);
-    if u32::from_le_bytes(v) != FORMAT_VERSION {
+    if le_u32(r.take(4)?) != FORMAT_VERSION {
         return Err(bad("version mismatch"));
     }
     let mut token = [0u8; 16];
     token.copy_from_slice(r.take(16)?);
-    let page_count = r.u64()?;
-    let n_pages = r.u64()?;
-    let mut table = MemoryTable::default();
-    for _ in 0..n_pages {
-        let page = r.u64()?;
+    let next_locator = r.u64()?;
+    let n = r.u64()?;
+    let mut table = RecordTable {
+        records: BTreeMap::new(),
+        next_locator,
+    };
+    for _ in 0..n {
+        let locator = r.u64()?;
         let id = uuid::Uuid::from_slice(r.take(16)?).map_err(|e| bad(&e.to_string()))?;
         let stamp = r.u64()?;
-        table.pages.insert(page, (MemoryId(id), stamp));
-    }
-    let n_free = r.u64()?;
-    for _ in 0..n_free {
-        table.free.insert(r.u64()?);
+        let start = r.u64()?;
+        let blocks = r.u64()?;
+        if locator >= next_locator {
+            return Err(bad("has a locator past its counter"));
+        }
+        table.records.insert(
+            locator,
+            RecordEntry {
+                id: MemoryId(id),
+                stamp,
+                extent: Extent { start, blocks },
+            },
+        );
     }
     if r.pos != body.len() {
         return Err(bad("has trailing bytes"));
     }
-    Ok(MapAnchor {
-        token,
-        page_count,
-        table,
-        pending: Default::default(),
-    })
+    Ok(Snapshot { token, table })
 }
 
 /// Read the snapshot in `dir`. `Ok(None)` when there is none.
-pub(crate) fn read_snapshot(dir: &Path) -> MenteResult<Option<MapAnchor>> {
+pub(crate) fn read_snapshot(dir: &Path) -> MenteResult<Option<Snapshot>> {
     match std::fs::read(dir.join(MEMORY_MAP_FILE)) {
         Ok(bytes) => decode(&bytes).map(Some),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -359,12 +254,12 @@ pub(crate) fn read_snapshot(dir: &Path) -> MenteResult<Option<MapAnchor>> {
 
 /// Write the snapshot atomically: a reader sees the old file or the complete
 /// new one, never a mix (temp file, fsync, rename).
-pub(crate) fn write_snapshot(dir: &Path, anchor: &MapAnchor) -> MenteResult<()> {
+pub(crate) fn write_snapshot(dir: &Path, token: &Token, table: &RecordTable) -> MenteResult<()> {
     let path = dir.join(MEMORY_MAP_FILE);
     let tmp = dir.join(format!("{MEMORY_MAP_FILE}.tmp"));
     {
         let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(&encode(anchor))?;
+        file.write_all(&encode(token, table))?;
         file.sync_all()?;
     }
     std::fs::rename(&tmp, &path)?;
@@ -380,27 +275,35 @@ pub(crate) fn remove_snapshot(dir: &Path) {
 mod tests {
     use super::*;
 
-    fn anchor() -> MapAnchor {
-        let mut table = MemoryTable::default();
-        table.set_scanned(1, MemoryId::new());
-        table.set_scanned(3, MemoryId::new());
-        table.set_free(2);
-        MapAnchor {
+    fn snap() -> Snapshot {
+        let mut table = RecordTable::default();
+        for (loc, start) in [(1u64, 1u64), (3, 4)] {
+            table.apply(
+                &RecordOp::Write {
+                    locator: loc,
+                    id: MemoryId::new(),
+                    extent: Extent { start, blocks: 3 },
+                    payload: vec![],
+                    remainder: None,
+                    freed: None,
+                },
+                random_u64(),
+            );
+        }
+        Snapshot {
             token: new_token(),
-            page_count: 4,
             table,
-            pending: Default::default(),
         }
     }
 
     #[test]
     fn snapshot_roundtrips() {
         let dir = tempfile::tempdir().unwrap();
-        let a = anchor();
-        write_snapshot(dir.path(), &a).unwrap();
+        let a = snap();
+        assert_eq!(a.table.next_locator, 4);
+        write_snapshot(dir.path(), &a.token, &a.table).unwrap();
         let b = read_snapshot(dir.path()).unwrap().unwrap();
         assert_eq!(a.token, b.token);
-        assert_eq!(a.page_count, b.page_count);
         assert_eq!(a.table, b.table);
         assert!(!dir.path().join(format!("{MEMORY_MAP_FILE}.tmp")).exists());
     }
@@ -408,7 +311,8 @@ mod tests {
     #[test]
     fn corrupt_snapshot_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        write_snapshot(dir.path(), &anchor()).unwrap();
+        let s = snap();
+        write_snapshot(dir.path(), &s.token, &s.table).unwrap();
         let path = dir.path().join(MEMORY_MAP_FILE);
         let mut bytes = std::fs::read(&path).unwrap();
         let mid = bytes.len() / 2;
@@ -422,13 +326,11 @@ mod tests {
     }
 
     #[test]
-    fn fits_rejects_pages_past_the_count() {
-        let a = anchor();
-        assert!(a.fits(4));
-        assert!(a.fits(10));
-        assert!(!a.fits(3), "page file smaller than the snapshot");
-        let mut b = anchor();
-        b.page_count = 3;
-        assert!(!b.fits(10), "page 3 recorded beyond its own page count");
+    fn free_space_follows_the_table() {
+        let s = snap();
+        assert_eq!(s.table.max_end(), 7);
+        let f = s.table.free_space(10).unwrap();
+        assert_eq!(f.free_blocks(), 3);
+        assert!(s.table.free_space(6).is_err(), "extent past the end");
     }
 }

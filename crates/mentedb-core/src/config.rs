@@ -33,33 +33,40 @@ pub struct MenteConfig {
 pub struct StorageConfig {
     /// Directory for data files.
     pub data_dir: String,
-    /// Number of pages in the buffer pool.
-    ///
-    /// Currently informational: the storage engine uses a fixed pool of 1024
-    /// frames and does not read this field yet.
-    #[serde(default = "default_buffer_pool_size")]
-    pub buffer_pool_size: usize,
-    /// Page size in bytes.
-    ///
-    /// Currently informational: pages are a fixed 64 KB compile-time constant
-    /// (`mentedb_storage::PAGE_SIZE`) and the engine does not read this field.
-    #[serde(default = "default_page_size")]
-    pub page_size: usize,
+    /// Bytes of decoded memory records the storage engine keeps in memory per
+    /// open database. Each record is charged its encoded size (about 5 KB for
+    /// a memory with a 1024 dimension embedding). A host with spare memory
+    /// can set this to the database size so every scan after the first is
+    /// served from memory instead of the file system.
+    #[serde(default = "default_cache_bytes")]
+    pub cache_bytes: u64,
+    /// The WAL is checkpointed (record file synced, record map persisted, log
+    /// truncated) once it grows past this many bytes.
+    #[serde(default = "default_wal_checkpoint_bytes")]
+    pub wal_checkpoint_bytes: u64,
+    /// Largest encoded memory record accepted; bigger writes fail with
+    /// `CapacityExceeded`.
+    #[serde(default = "default_max_record_bytes")]
+    pub max_record_bytes: u64,
 }
 
-fn default_buffer_pool_size() -> usize {
-    1024
+fn default_cache_bytes() -> u64 {
+    64 * 1024 * 1024
 }
-fn default_page_size() -> usize {
-    65536
+fn default_wal_checkpoint_bytes() -> u64 {
+    8 * 1024 * 1024
+}
+fn default_max_record_bytes() -> u64 {
+    16 * 1024 * 1024
 }
 
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
             data_dir: "data".to_string(),
-            buffer_pool_size: default_buffer_pool_size(),
-            page_size: default_page_size(),
+            cache_bytes: default_cache_bytes(),
+            wal_checkpoint_bytes: default_wal_checkpoint_bytes(),
+            max_record_bytes: default_max_record_bytes(),
         }
     }
 }
@@ -321,8 +328,9 @@ mod tests {
         let cfg = MenteConfig::default();
 
         assert_eq!(cfg.storage.data_dir, "data");
-        assert_eq!(cfg.storage.buffer_pool_size, 1024);
-        assert_eq!(cfg.storage.page_size, 65536);
+        assert_eq!(cfg.storage.cache_bytes, 64 * 1024 * 1024);
+        assert_eq!(cfg.storage.wal_checkpoint_bytes, 8 * 1024 * 1024);
+        assert_eq!(cfg.storage.max_record_bytes, 16 * 1024 * 1024);
 
         assert_eq!(cfg.index.hnsw_m, 16);
         assert_eq!(cfg.index.hnsw_ef_construction, 200);
@@ -364,8 +372,8 @@ mod tests {
         let json = r#"{
             "storage": {
                 "data_dir": "/var/mentedb",
-                "buffer_pool_size": 2048,
-                "page_size": 8192
+                "cache_bytes": 2147483648,
+                "buffer_pool_size": 2048
             },
             "index": {
                 "hnsw_m": 32,
@@ -382,8 +390,9 @@ mod tests {
         let cfg = MenteConfig::from_file(&path).unwrap();
 
         assert_eq!(cfg.storage.data_dir, "/var/mentedb");
-        assert_eq!(cfg.storage.buffer_pool_size, 2048);
-        assert_eq!(cfg.storage.page_size, 8192);
+        assert_eq!(cfg.storage.cache_bytes, 2 * 1024 * 1024 * 1024);
+        // Retired keys from older config files are ignored, not rejected.
+        assert_eq!(cfg.storage.max_record_bytes, 16 * 1024 * 1024);
         assert_eq!(cfg.index.hnsw_m, 32);
         assert_eq!(cfg.index.hnsw_ef_construction, 400);
         assert_eq!(cfg.index.hnsw_ef_search, 100);
@@ -408,10 +417,7 @@ mod tests {
         let cfg = MenteConfig::from_file(&path).unwrap();
         let defaults = MenteConfig::default();
 
-        assert_eq!(
-            cfg.storage.buffer_pool_size,
-            defaults.storage.buffer_pool_size
-        );
+        assert_eq!(cfg.storage.cache_bytes, defaults.storage.cache_bytes);
         assert_eq!(cfg.index.hnsw_m, defaults.index.hnsw_m);
         assert_eq!(cfg.server.port, defaults.server.port);
 

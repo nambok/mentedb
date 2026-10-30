@@ -64,7 +64,7 @@ fn test_persist_across_reopen() {
         AgentId::new(),
         MemoryType::Procedural,
         "persisted memory".to_string(),
-        vec![1.5, 2.5],
+        vec![1.25, 2.5],
     );
     let id = node.id;
 

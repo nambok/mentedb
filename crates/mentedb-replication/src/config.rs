@@ -130,7 +130,7 @@ mod tests {
     fn test_validate_empty_cluster_id() {
         let config = ReplicationConfig {
             cluster_id: String::new(),
-            ..ReplicationConfig::default()
+            ..Default::default()
         };
         assert!(config.validate().is_err());
     }
@@ -139,7 +139,7 @@ mod tests {
     fn test_validate_zero_heartbeat() {
         let config = ReplicationConfig {
             heartbeat_interval_ms: 0,
-            ..ReplicationConfig::default()
+            ..Default::default()
         };
         assert!(config.validate().is_err());
     }
@@ -149,7 +149,7 @@ mod tests {
         let config = ReplicationConfig {
             election_timeout_min_ms: 100,
             election_timeout_max_ms: 50,
-            ..ReplicationConfig::default()
+            ..Default::default()
         };
         assert!(config.validate().is_err());
     }
@@ -159,7 +159,7 @@ mod tests {
         let config = ReplicationConfig {
             heartbeat_interval_ms: 500,
             election_timeout_min_ms: 200,
-            ..ReplicationConfig::default()
+            ..Default::default()
         };
         assert!(config.validate().is_err());
     }
@@ -168,7 +168,7 @@ mod tests {
     fn test_validate_zero_snapshot_threshold() {
         let config = ReplicationConfig {
             snapshot_threshold: 0,
-            ..ReplicationConfig::default()
+            ..Default::default()
         };
         assert!(config.validate().is_err());
     }

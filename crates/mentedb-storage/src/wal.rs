@@ -29,6 +29,10 @@ pub enum WalEntryType {
     Checkpoint = 3,
     /// The page was returned to the free list (memory deleted).
     PageFree = 4,
+    /// A memory record was written into an extent of the record file.
+    RecordWrite = 5,
+    /// A memory record was deleted and its extent freed.
+    RecordFree = 6,
 }
 
 impl TryFrom<u8> for WalEntryType {
@@ -39,6 +43,8 @@ impl TryFrom<u8> for WalEntryType {
             2 => Ok(Self::Commit),
             3 => Ok(Self::Checkpoint),
             4 => Ok(Self::PageFree),
+            5 => Ok(Self::RecordWrite),
+            6 => Ok(Self::RecordFree),
             _ => Err(MenteError::Storage(format!("invalid WAL entry type: {v}"))),
         }
     }
@@ -62,19 +68,42 @@ pub struct WalEntry {
 /// Append-only write-ahead log.
 pub struct Wal {
     file: File,
-    dir_path: std::path::PathBuf,
+    path: std::path::PathBuf,
     next_lsn: u64,
+    /// Bytes past the last valid entry seen by the last full read: a torn or
+    /// corrupt tail. Entries appended after it would be unreachable, so the
+    /// owner must rewrite the log before appending.
+    torn_tail: bool,
 }
 
 /// Minimum payload size: lsn(8) + type(1) + page_id(8).
 const MIN_PAYLOAD: usize = 17;
 
+/// The on-disk bytes of one entry: length, payload, CRC.
+fn encode_entry(lsn: Lsn, entry_type: WalEntryType, page_id: u64, data: &[u8]) -> Vec<u8> {
+    let compressed = lz4_flex::compress_prepend_size(data);
+    let payload_len = 8 + 1 + 8 + compressed.len();
+    let mut buf = Vec::with_capacity(4 + payload_len + 4);
+    buf.extend_from_slice(&(payload_len as u32).to_le_bytes());
+    buf.extend_from_slice(&lsn.to_le_bytes());
+    buf.push(entry_type as u8);
+    buf.extend_from_slice(&page_id.to_le_bytes());
+    buf.extend_from_slice(&compressed);
+    let crc = crc32fast::hash(&buf[4..]);
+    buf.extend_from_slice(&crc.to_le_bytes());
+    buf
+}
+
 impl Wal {
     /// Open or create a WAL file at `dir_path/wal.log`.
     pub fn open(dir_path: &Path) -> MenteResult<Self> {
-        let wal_path = dir_path.join("wal.log");
+        Self::open_file(&dir_path.join("wal.log"))
+    }
+
+    /// Open or create a WAL file at `wal_path`.
+    pub fn open_file(wal_path: &Path) -> MenteResult<Self> {
         let exists = wal_path.exists()
-            && std::fs::metadata(&wal_path)
+            && std::fs::metadata(wal_path)
                 .map(|m| m.len() > 0)
                 .unwrap_or(false);
 
@@ -83,12 +112,13 @@ impl Wal {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(&wal_path)?;
+            .open(wal_path)?;
 
         let mut wal = Self {
             file,
-            dir_path: dir_path.to_path_buf(),
+            path: wal_path.to_path_buf(),
             next_lsn: 1,
+            torn_tail: false,
         };
 
         if exists {
@@ -195,26 +225,12 @@ impl Wal {
         let lsn = self.next_lsn;
         self.next_lsn += 1;
 
-        let compressed = lz4_flex::compress_prepend_size(data);
-
-        // Build the payload: lsn + type + page_id + compressed_data
-        let payload_len = 8 + 1 + 8 + compressed.len();
-        let mut payload = Vec::with_capacity(payload_len);
-        payload.extend_from_slice(&lsn.to_le_bytes());
-        payload.push(entry_type as u8);
-        payload.extend_from_slice(&page_id.to_le_bytes());
-        payload.extend_from_slice(&compressed);
-
-        let crc = {
-            let mut h = crc32fast::Hasher::new();
-            h.update(&payload);
-            h.finalize()
-        };
-
+        // One write per entry: a single buffer keeps a crash from leaving a
+        // length prefix without its payload more often than necessary, and
+        // costs one syscall instead of three.
+        let entry = encode_entry(lsn, entry_type, page_id, data);
         self.file.seek(SeekFrom::End(0))?;
-        self.file.write_all(&(payload_len as u32).to_le_bytes())?;
-        self.file.write_all(&payload)?;
-        self.file.write_all(&crc.to_le_bytes())?;
+        self.file.write_all(&entry)?;
 
         trace!(lsn, page_id, "appended WAL entry");
         Ok(lsn)
@@ -239,8 +255,8 @@ impl Wal {
         let entries = self.read_all_entries()?;
         let to_keep: Vec<&WalEntry> = entries.iter().filter(|e| e.lsn >= before_lsn).collect();
 
-        let wal_path = self.dir_path.join("wal.log");
-        let tmp_path = self.dir_path.join("wal.log.tmp");
+        let wal_path = self.path.clone();
+        let tmp_path = self.tmp_path();
 
         {
             let mut tmp_file = OpenOptions::new()
@@ -286,6 +302,64 @@ impl Wal {
         Ok(())
     }
 
+    /// Replace the whole log with the single entry `(lsn, entry_type, page_id,
+    /// data)`, which must be the last entry appended. Equivalent to
+    /// `truncate(lsn)` right after appending that entry, without reading the
+    /// log back: a checkpoint never has to re-read megabytes of WAL. Atomic
+    /// (temp file, fsync, rename), so a crash leaves the old or the new log.
+    pub fn reset_to(
+        &mut self,
+        lsn: Lsn,
+        entry_type: WalEntryType,
+        page_id: u64,
+        data: &[u8],
+    ) -> MenteResult<()> {
+        let tmp_path = self.tmp_path();
+        {
+            let mut tmp_file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&tmp_path)?;
+            tmp_file.write_all(&encode_entry(lsn, entry_type, page_id, data))?;
+            tmp_file.sync_data()?;
+        }
+        std::fs::rename(&tmp_path, &self.path)?;
+        self.file = OpenOptions::new().read(true).write(true).open(&self.path)?;
+        self.next_lsn = self.next_lsn.max(lsn + 1);
+        self.torn_tail = false;
+        debug!(lsn, "WAL reset to a single entry");
+        Ok(())
+    }
+
+    /// Read every valid entry of the WAL at `path` without opening it for
+    /// writing or creating it. A missing file reads as empty.
+    pub fn read_entries(path: &Path) -> MenteResult<Vec<WalEntry>> {
+        let file = match File::open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut wal = Self {
+            file,
+            path: path.to_path_buf(),
+            next_lsn: 1,
+            torn_tail: false,
+        };
+        wal.read_all_entries()
+    }
+
+    fn tmp_path(&self) -> std::path::PathBuf {
+        let mut name = self.path.file_name().unwrap_or_default().to_os_string();
+        name.push(".tmp");
+        self.path.with_file_name(name)
+    }
+
+    /// Whether the last full read found bytes after the last valid entry.
+    pub fn has_torn_tail(&self) -> bool {
+        self.torn_tail
+    }
+
     /// Current next LSN (useful for external callers).
     pub fn next_lsn(&self) -> Lsn {
         self.next_lsn
@@ -302,6 +376,7 @@ impl Wal {
         self.file.seek(SeekFrom::Start(0))?;
         let file_len = self.file.metadata()?.len();
         let mut offset: u64 = 0;
+        let mut good_end: u64 = 0;
         let mut entries = Vec::new();
 
         while offset + 4 <= file_len {
@@ -361,8 +436,10 @@ impl Wal {
                 data,
                 checksum: stored_crc,
             });
+            good_end = offset;
         }
 
+        self.torn_tail = good_end < file_len;
         Ok(entries)
     }
 }
