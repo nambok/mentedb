@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.45.0](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.44.1...mentedb-consolidation-v0.45.0) - 2026-10-30
+
+### Other
+
+- *(storage)* store memories as compact records in 512 byte blocks instead of one 64 KB page each ([#514](https://github.com/nambok/mentedb/pull/514))
+
 ## [0.43.0](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.42.1...mentedb-consolidation-v0.43.0) - 2026-10-19
 
 ### Added
