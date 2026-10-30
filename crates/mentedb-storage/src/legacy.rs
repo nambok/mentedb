@@ -18,12 +18,16 @@
 //! 4. Rename `records.db.tmp` to `records.db` and fsync the directory. This
 //!    is the commit point: the new database exists exactly when `records.db`
 //!    does.
-//! 5. Remove the old files.
+//! 5. Move the old files aside (`pages.db.v1`, `wal.log.v1`,
+//!    `memory_map.bin.v1`), kept as a copy of the database as it was before
+//!    migration until an operator deletes them.
 //!
 //! A crash before step 4 leaves the old database untouched (open migrates it
 //! again from scratch, discarding the partial new files); a crash after it
 //! leaves a complete new database whose leftover old files are removed on the
-//! next open. Locators and stamps are preserved, so every snapshot keyed by
+//! next open. Engines older than this layout refuse a directory holding
+//! `records.db`, so they never open the moved files as a fresh database.
+//! Locators and stamps are preserved, so every snapshot keyed by
 //! page and stamp (salience bounds, mode probes) stays valid.
 
 use std::fs::File;
@@ -71,7 +75,7 @@ pub enum MigrationFault {
     AfterWal,
     /// After the new record map snapshot is written, right before commit.
     BeforeCommit,
-    /// After the commit rename, before the old files are removed.
+    /// After the commit rename, before the old files are moved aside.
     AfterCommit,
 }
 
@@ -105,27 +109,39 @@ pub(crate) fn is_legacy(dir: &Path) -> bool {
     !dir.join(DATA_FILE).exists() && file_len(&dir.join(LEGACY_PAGE_FILE)) > 0
 }
 
-/// Remove format 1 files left behind by a migration that crashed after its
-/// commit. Only called when `records.db` exists.
+/// Suffix of the format 1 files kept after a migration.
+pub const LEGACY_KEPT_SUFFIX: &str = ".v1";
+
+/// Settle format 1 files after a committed migration (also run on every open
+/// while `records.db` exists, which finishes a migration that crashed after
+/// its commit). The old page file, WAL and snapshot are moved aside with the
+/// `.v1` suffix rather than deleted, so the pre-migration database survives
+/// a migration bug until an operator removes it; temporary files are removed.
 pub(crate) fn remove_leftovers(dir: &Path) -> MenteResult<()> {
+    let mut kept = Vec::new();
+    for name in [LEGACY_PAGE_FILE, LEGACY_WAL_FILE, LEGACY_MAP_FILE] {
+        let p = dir.join(name);
+        if p.exists() {
+            std::fs::rename(&p, dir.join(format!("{name}{LEGACY_KEPT_SUFFIX}")))?;
+            kept.push(name);
+        }
+    }
     let mut removed = Vec::new();
-    for name in [
-        LEGACY_PAGE_FILE,
-        LEGACY_WAL_FILE,
-        LEGACY_MAP_FILE,
-        "wal.log.tmp",
-        "memory_map.bin.tmp",
-        "records.db.tmp",
-    ] {
+    for name in ["wal.log.tmp", "memory_map.bin.tmp", "records.db.tmp"] {
         let p = dir.join(name);
         if p.exists() {
             std::fs::remove_file(&p)?;
             removed.push(name);
         }
     }
-    if !removed.is_empty() {
+    if !kept.is_empty() || !removed.is_empty() {
         record::sync_dir(dir)?;
-        info!(?removed, "removed files left by a completed migration");
+        info!(
+            ?kept,
+            ?removed,
+            suffix = LEGACY_KEPT_SUFFIX,
+            "settled format 1 files after migration"
+        );
     }
     Ok(())
 }

@@ -232,8 +232,12 @@ fn a_crash_at_any_migration_step_leaves_a_whole_database() {
         let engine = StorageEngine::open(dir.path()).unwrap();
         assert_migrated(&engine, &expected, true);
         for n in [LEGACY_PAGE_FILE, LEGACY_WAL_FILE, LEGACY_MAP_FILE] {
-            assert!(!dir.path().join(n).exists(), "{fault:?}: {n} removed");
+            assert!(!dir.path().join(n).exists(), "{fault:?}: {n} moved aside");
         }
+        assert!(
+            dir.path().join(format!("{LEGACY_PAGE_FILE}.v1")).exists(),
+            "{fault:?}: the pre-migration page file is kept"
+        );
         assert!(!dir.path().join(format!("{DATA_FILE}.tmp")).exists());
         engine.close().unwrap();
     }
