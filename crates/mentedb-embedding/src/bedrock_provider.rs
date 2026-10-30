@@ -20,7 +20,7 @@
 //! # Ok::<(), mentedb_core::error::MenteError>(())
 //! ```
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
 use mentedb_core::error::{MenteError, MenteResult};
