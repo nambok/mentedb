@@ -10,7 +10,7 @@ use crate::error::ExtractionError;
 /// feature.
 #[cfg(feature = "bedrock")]
 mod bedrock_sig {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use mentedb_embedding::AwsCredentials;
     use sha2::{Digest, Sha256};
 

@@ -678,9 +678,9 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lz4_flex"
-version = "0.11.6"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "373f5eceeeab7925e0c1098212f2fbc4d416adec9d35051a6ab251e824c1854a"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 dependencies = [
  "twox-hash",
 ]
@@ -693,7 +693,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "mentedb"
-version = "0.43.1"
+version = "0.44.1"
 dependencies = [
  "crc32fast",
  "mentedb-cognitive",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-cognitive"
-version = "0.43.1"
+version = "0.44.1"
 dependencies = [
  "ahash",
  "crossbeam",
@@ -730,7 +730,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-consolidation"
-version = "0.43.1"
+version = "0.44.1"
 dependencies = [
  "ahash",
  "mentedb-core",
@@ -741,7 +741,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-context"
-version = "0.43.1"
+version = "0.44.1"
 dependencies = [
  "ahash",
  "mentedb-core",
@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-core"
-version = "0.43.1"
+version = "0.44.1"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -768,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-embedding"
-version = "0.43.1"
+version = "0.44.1"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -780,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-extraction"
-version = "0.43.1"
+version = "0.44.1"
 dependencies = [
  "mentedb-cognitive",
  "mentedb-core",
@@ -796,7 +796,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-graph"
-version = "0.43.1"
+version = "0.44.1"
 dependencies = [
  "ahash",
  "bincode",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-index"
-version = "0.43.1"
+version = "0.44.1"
 dependencies = [
  "ahash",
  "bincode",
@@ -849,7 +849,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-query"
-version = "0.43.1"
+version = "0.44.1"
 dependencies = [
  "mentedb-core",
  "serde",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "mentedb-storage"
-version = "0.43.1"
+version = "0.44.1"
 dependencies = [
  "ahash",
  "bincode",
