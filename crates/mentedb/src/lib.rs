@@ -277,18 +277,24 @@ pub struct DbMetrics {
     /// EMA of recent hybrid-search op latency, microseconds. 0 until the first
     /// search.
     pub avg_search_latency_us: u64,
-    /// Buffer-pool page cache hits.
+    /// Record cache hits.
     pub buffer_pool_hits: u64,
-    /// Buffer-pool page cache misses (disk reads).
+    /// Record cache misses (reads from the record file).
     pub buffer_pool_misses: u64,
-    /// Buffer-pool CLOCK evictions.
+    /// Record cache CLOCK evictions.
     pub buffer_pool_evictions: u64,
-    /// Frames currently holding a page.
+    /// Records currently cached.
     pub buffer_pool_pages: u64,
-    /// On-disk data size in bytes (page_count * page size).
+    /// Bytes charged by the cached records.
+    pub cache_bytes: u64,
+    /// Record cache capacity in bytes.
+    pub cache_capacity_bytes: u64,
+    /// On-disk size of the record file in bytes.
     pub storage_bytes: u64,
-    /// Pages in the store.
+    /// Blocks in the record file (`mentedb_storage::BLOCK_SIZE` bytes each).
     pub page_count: u64,
+    /// Bytes read from the record file since open.
+    pub storage_bytes_read: u64,
     /// Vectors in the HNSW index.
     pub vector_index_size: u64,
     /// Nodes in the memory graph.
@@ -510,6 +516,11 @@ pub struct CognitiveConfig {
     /// top k) instead of loading every candidate. Results are identical
     /// either way. Default on.
     pub mql_salience_top_k: bool,
+    /// Storage engine settings: record cache budget in bytes, WAL checkpoint
+    /// threshold, largest record. A host with spare memory raises
+    /// `storage.cache_bytes` toward the database size so maintenance sweeps,
+    /// salience warms and MQL scans read each memory from disk once.
+    pub storage: mentedb_core::config::StorageConfig,
 }
 
 impl Default for CognitiveConfig {
@@ -563,6 +574,7 @@ impl Default for CognitiveConfig {
             decay_exempt_attribute: Some("decay_exempt".to_string()),
             refresh_access_on_search: false,
             mql_salience_top_k: true,
+            storage: mentedb_core::config::StorageConfig::default(),
         }
     }
 }
@@ -859,7 +871,7 @@ impl MenteDb {
     /// Opens a MenteDB instance with custom cognitive configuration.
     pub fn open_with_config(path: &Path, cognitive_config: CognitiveConfig) -> MenteResult<Self> {
         info!("Opening MenteDB at {}", path.display());
-        let storage = StorageEngine::open(path)?;
+        let storage = StorageEngine::open_with_config(path, &cognitive_config.storage)?;
 
         let index_dir = path.join("indexes");
         let graph_dir = path.join("graph");
@@ -2281,7 +2293,13 @@ impl MenteDb {
         self.storage.memory_loads()
     }
 
-    /// Pages read from disk since open.
+    /// Change the storage record cache budget in bytes at runtime, evicting
+    /// as needed when it shrinks. Set at open with `CognitiveConfig::storage`.
+    pub fn set_storage_cache_bytes(&self, bytes: u64) {
+        self.storage.set_cache_capacity(bytes);
+    }
+
+    /// Reads issued to the record file since open (cache misses and scans).
     pub fn storage_page_reads(&self) -> u64 {
         self.storage.page_reads()
     }
@@ -2708,8 +2726,11 @@ impl MenteDb {
             buffer_pool_misses: bp.misses,
             buffer_pool_evictions: bp.evictions,
             buffer_pool_pages: bp.resident_pages,
-            storage_bytes: page_count * mentedb_storage::PAGE_SIZE as u64,
+            cache_bytes: bp.resident_bytes,
+            cache_capacity_bytes: bp.capacity_bytes,
+            storage_bytes: page_count * mentedb_storage::BLOCK_SIZE as u64,
             page_count,
+            storage_bytes_read: self.storage.bytes_read(),
             vector_index_size: self.index.hnsw.len() as u64,
             graph_nodes: self.graph.graph().node_count() as u64,
             standing_rules: self.count_standing_rules() as u64,

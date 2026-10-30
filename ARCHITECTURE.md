@@ -19,7 +19,7 @@ one call turn pipeline `process_turn`.
 mentedb (workspace root)
  |
  +-- mentedb-core            Fundamental types shared by every crate
- +-- mentedb-storage          Page manager, WAL, buffer pool, single-writer lock, backup
+ +-- mentedb-storage          Record file, WAL, record cache, single-writer lock, migration, backup
  +-- mentedb-index            HNSW vectors, BM25 keyword, bitmap tags, temporal, salience
  +-- mentedb-graph            CSR/CSC knowledge graph, traversal, belief propagation
  +-- mentedb-query            MQL lexer, parser, query planner
@@ -112,71 +112,101 @@ pub type Confidence = f32;       // 0.0 .. 1.0
 
 ### mentedb-storage
 
-Owns all durable state. Implements a page oriented storage engine with
-write ahead logging and a buffer pool.
+Owns all durable state. Implements a record storage engine with write ahead
+logging and a byte bounded record cache. On-disk size is proportional to the
+data: a memory with a 1024 dimension embedding and a few hundred characters
+of text takes about 5 KB.
 
-**Page Manager** (`page.rs`):
-Pages are 64 KB, sized to fit large embedding vectors and long content in a single page. Each page carries a header
-with its ID, LSN (log sequence number), checksum, free space counter, slot count,
-and page type (Free, Data, Index, Overflow). The page manager maps a directory
-to a single data file, maintains a free list for page allocation, and provides
-`allocate_page`, `read_page`, `write_page`, `free_page`.
+**Record file** (`record.rs`, `records.db`):
+Block 0 is a header written once at creation. Every other block belongs to an
+extent, a run of contiguous 512 byte blocks that starts with a 48 byte header
+(magic, live or free, payload length, block count, locator, memory id, payload
+CRC, header CRC). A live extent holds one memory record padded to whole
+blocks; a free extent holds only its header. Extents tile the file exactly, so
+the chain from block 1 can always be walked without looking inside free space.
+Any record size is supported (the limit is `StorageConfig::max_record_bytes`,
+16 MB by default). The payload stores the embedding as raw little endian f32
+values (exact, 4 bytes per dimension instead of about 12 as JSON text) and the
+rest of the node as JSON, so new fields keep round tripping.
 
-**Write Ahead Log** (`wal.rs`):
-Every mutation goes to the WAL before touching data pages. Each entry is
+Free space is kept in memory, coalesced, indexed by start and by size, and
+derived on open from the live extents: every gap between them is free. A new
+record takes the smallest free extent that fits (writing a free header for the
+remainder) or grows the file. An update that still fits its extent rewrites it
+in place; one that outgrew it moves to a larger extent and frees the old one in
+the same logged operation.
+
+**Locators**: a record is addressed by a stable locator (`PageId`), resolved
+through an in memory table of locator to extent, so a record that moves keeps
+its locator and every cache keyed by it stays valid. Databases migrated from
+the page layout keep their page numbers as locators.
+
+**Write Ahead Log** (`wal.rs`, `records.wal`):
+Every mutation goes to the WAL before touching the record file. Each entry is
 serialized as:
 
 ```
 [length: u32][lsn: u64][type: u8][page_id: u64][LZ4-compressed data][CRC32: u32]
 ```
 
-LZ4 compression reduces I/O for large payloads. CRC32 checksums catch torn writes
-on recovery. The WAL supports `append`, `sync`, `iterate` (for crash recovery),
-and `truncate` (after checkpoint).
+Entry types: `RecordWrite` (record payload, its extent, the free remainder it
+was carved from, and the extent it vacated when it moved), `RecordFree` (a
+deleted record's extent), `Checkpoint` (safe truncation point; its payload is
+the token of the record map persisted with it). The page file types
+`PageWrite`, `PageFree` and the reserved `Commit` remain for reading old
+databases.
 
-Entry types: `PageWrite` (data mutation), `PageFree` (a deleted memory's page
-returned to the free list), `Commit` (reserved, not emitted), `Checkpoint`
-(safe truncation point; its payload is the token of the memory map persisted
-with it).
+Each entry carries exactly the bytes its operation writes, so replay redoes
+every entry in log order without reading the record file: replaying an entry
+whose bytes already reached the disk is harmless, and a torn record write is
+rewritten whole. Durability is the WAL fsync on every write. A checkpoint
+fsyncs the record file, appends a `Checkpoint` entry, persists the record map,
+and replaces the WAL with that one entry (no read back of the log). The engine
+checkpoints on its own when the WAL passes `StorageConfig::wal_checkpoint_bytes`
+(8 MB by default); `MenteDb::flush` checkpoints on every call. A WAL whose tail
+was torn by a crash is rewritten on open, so later entries are never appended
+after unreadable bytes.
 
-Durability is the WAL fsync on every write, not the flush. A checkpoint
-flushes cached pages, fsyncs the data file, appends a `Checkpoint` entry, and
-truncates the WAL to it, so after a checkpoint the WAL holds exactly the
-changes since. The engine checkpoints on its own when the WAL passes 8 MB
-after a store; `MenteDb::flush` checkpoints on every call and saves the index,
-graph, and cognitive snapshots every `flush_snapshot_interval` flushes.
+**Record map** (`memory_map.rs`, `records_map.bin`):
+The locator table (locator to memory id, write stamp and extent), persisted at
+every checkpoint that changed it (temp file, fsync, rename) with a random
+token that is also the payload of the checkpoint's WAL entry. On open the
+engine finds the entry carrying that token and applies every later entry to
+the table, so a cold open reads no records. When no entry carries the token
+(the snapshot is missing, damaged, or older than the WAL), open walks the
+extent chain instead, reading only extent headers, and persists a fresh map.
+Each record also carries a write stamp derived from the token and the entry's
+LSN, identical whether computed live or by replay after a crash; derived
+caches (mode probes, salience bounds) use it to tell, without loading a
+record, that a memory has not changed.
 
-**Memory Map** (`memory_map.rs`):
-Which page holds which memory, persisted as `memory_map.bin` at every
-checkpoint that changed it (written to a temp file, fsynced, renamed). The
-snapshot carries a random token that is also the payload of the checkpoint's
-WAL entry. On open the engine finds the checkpoint entry carrying that token
-and applies every later entry to the map: a `PageWrite` maps its page to the
-memory its data decodes to (or to nothing), a `PageFree` unmaps the page and
-marks it free. That is the same rule a full page scan applies, so a reused
-page never keeps a stale id. When no entry carries the token (the WAL was
-truncated without a map, the map write failed, or the file is damaged or from
-an older version), open reads every page once instead and persists a fresh
-map. Each mapped page also carries a write stamp derived from the token and
-the entry's LSN, identical whether computed live, at checkpoint, or by replay
-after a crash; derived caches (mode probes) use it to tell, without loading a
-page, that a memory has not changed. After crash recovery the free list is
-rebuilt from the map's free pages (each verified to be a free page before the
-list is written) instead of from a scan of every page.
-
-**Buffer Pool** (`buffer.rs`):
-Sits between the page manager and the rest of the system. Uses CLOCK eviction
-(an approximation of LRU that avoids the overhead of maintaining a linked list
-on every access). Pages can be pinned to prevent eviction during active use.
-The pool is wrapped in a `parking_lot::Mutex` for thread safety. Default capacity is 1024 pages
-(64 MB of buffered data at 64 KB per page); frames are allocated on demand up to
-that cap.
+**Record cache** (`cache.rs`):
+Decoded memory records keyed by locator, bounded by bytes (each record is
+charged its encoded size), CLOCK eviction. A hit costs neither a read nor a
+decode. The budget is `StorageConfig::cache_bytes` (64 MB by default), set at
+open through `CognitiveConfig::storage` or at runtime with
+`MenteDb::set_storage_cache_bytes`; a host with spare memory sizes it to the
+database so every scan after the first is served from memory. The cache only
+holds clean records: writes reach the WAL and the file first.
 
 **Storage Engine** (`engine.rs`):
-Wires page manager, WAL, and buffer pool together. Provides `store_memory`
-(serializes a `MemoryNode` to JSON, writes to an allocated page via WAL) and
-`load_memory` (reads a page, deserializes). Memory layout per page:
-`[length: u32 LE][JSON bytes]`.
+Wires the record file, WAL, locator table, allocator and cache together.
+Writers hold the state lock exclusively for the whole transaction (append,
+fsync, record write, table update); readers hold it shared while they read an
+extent with a positional read, so reads run concurrently and never see a
+record mid write.
+
+**Migration** (`legacy.rs`): a directory holding the old page file layout
+(`pages.db`, `wal.log`, `memory_map.bin`, one 64 KB page per memory) is
+migrated on open. The old state is read without being modified (the page file
+plus the old WAL replayed in memory, plus the old map's write stamps when it
+is still anchored); every memory is written to `records.db.tmp` under its old
+page number; the new WAL and record map are written and fsynced; then the
+rename of `records.db.tmp` to `records.db` commits, and the old files are
+removed. A crash before the rename leaves the old database untouched and the
+next open migrates again from scratch; a crash after it leaves a complete new
+database whose leftover old files the next open removes. The migration logs
+memories, skipped pages, bytes before and after, and elapsed time.
 
 **Single writer** (`lock.rs`): opening a directory takes an exclusive lock on a
 `LOCK` file in it, held until close or process exit. A second open, from
@@ -186,7 +216,8 @@ another process or another handle in the same process, fails fast with a
 manager enforces across hosts, so the rule holds when the directory sits on
 NFS or EFS mounted by several machines; a crashed holder frees it once the NFS
 lease expires. On macOS and Windows it is a `flock`, which covers one host.
-Each write transaction additionally runs under a `flock` on the WAL file.
+Because the lock guarantees one writer, the engine keeps its state in memory
+and never re-reads file headers or the WAL on a write.
 
 **Backup** (`backup.rs`): backup and restore to a single file, a JSON manifest
 followed by length prefixed file entries.
@@ -954,7 +985,7 @@ every later reader too.
 
 **Lock ordering** (prevents deadlocks):
 1. `page_map` → `StorageEngine` (never reverse)
-2. WAL lock → PageManager lock (released before buffer pool)
+2. Storage state lock → record cache lock (never reverse)
 3. Graph lock is independent (never held with page_map or storage)
 
 **Concurrency benefits:**

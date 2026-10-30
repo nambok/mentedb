@@ -2,14 +2,14 @@
 
 ## Project overview
 
-MenteDB is a purpose built Rust database engine for AI agent memory. It includes custom storage (WAL, buffer pool, pages), HNSW vector indexing, CSR/CSC graph, a custom query language (MQL), context assembly with U curve attention layout, and 7 unique cognitive features (stream cognition, write time inference, trajectory tracking, phantom memories, interference detection, pain signals, speculative pre assembly).
+MenteDB is a purpose built Rust database engine for AI agent memory. It includes custom storage (WAL, record cache, compact record file), HNSW vector indexing, CSR/CSC graph, a custom query language (MQL), context assembly with U curve attention layout, and 7 unique cognitive features (stream cognition, write time inference, trajectory tracking, phantom memories, interference detection, pain signals, speculative pre assembly).
 
 ## Workspace structure
 
 ```
 crates/
   mentedb-core/       Core types, config, error, MVCC, multi agent
-  mentedb-storage/    Page manager, WAL, buffer pool, backup/restore
+  mentedb-storage/    Record file, WAL, record cache, migration, backup/restore
   mentedb-index/      HNSW vector index, bitmap, temporal, salience
   mentedb-graph/      CSR/CSC graph, traversal, belief propagation
   mentedb-query/      MQL lexer, parser, planner
@@ -50,7 +50,7 @@ The server binary is `mentedb-server` and runs on axum with JWT auth, rate limit
 
 ## Architecture notes
 
-- Storage uses 64KB pages with CLOCK eviction buffer pool and WAL with LZ4 + CRC32
+- Storage packs records into 512 byte blocks (about 5 KB per memory), with a byte bounded CLOCK record cache and a WAL with LZ4 + CRC32
 - HNSW index is built from scratch (not a binding), configurable M and ef parameters
 - Graph uses CSR/CSC hybrid with delta log and compact() to merge
 - MQL is a custom query language parsed by hand written recursive descent parser

@@ -1,336 +1,358 @@
-//! Storage Engine: facade that ties the page manager, WAL, and buffer pool together.
+//! Storage Engine: facade over the record file, the WAL, the locator table
+//! and the record cache.
 
 use std::fs::File;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use mentedb_core::MemoryNode;
+use mentedb_core::config::StorageConfig;
 use mentedb_core::error::{MenteError, MenteResult};
+use mentedb_core::types::MemoryId;
 
-use parking_lot::Mutex;
-use tracing::info;
+use parking_lot::{Mutex, RwLock};
+use tracing::{info, warn};
 
-use crate::buffer::BufferPool;
-use crate::memory_map::{self, MapAnchor, MappedMemory, MemoryTable};
-use crate::page::{PAGE_DATA_SIZE, Page, PageId, PageManager, PageType};
-use crate::wal::{Wal, WalEntryType};
-/// Default number of page frames in the buffer pool.
-const DEFAULT_BUFFER_POOL_SIZE: usize = 1024;
+use crate::cache::{BufferStats, RecordCache};
+use crate::legacy::{self, MigrationFault};
+use crate::memory_map::{
+    self, MappedMemory, RecordEntry, RecordTable, Token, entry_stamp, new_token,
+};
+use crate::record::{
+    self, BLOCK_SIZE, DATA_FILE, EXTENT_HEADER_SIZE, ExtentHeader, ExtentKind, FreeSpace, PageId,
+    RecordOp, WAL_FILE,
+};
+use crate::wal::{Wal, WalEntry, WalEntryType};
 
-/// Auto-checkpoint when WAL file exceeds this size (8 MB).
-const WAL_AUTO_CHECKPOINT_BYTES: u64 = 8 * 1024 * 1024;
+/// Mutable engine state, guarded by one lock. Writers hold it exclusively for
+/// the whole transaction (WAL append, fsync, file write, table update);
+/// readers hold it shared while they read a record, so they never see an
+/// extent mid write.
+struct State {
+    wal: Wal,
+    table: RecordTable,
+    free: FreeSpace,
+    /// File length in blocks.
+    end: u64,
+    /// Token of the last checkpoint; stamps of later writes derive from it.
+    token: Token,
+    /// Whether the record map snapshot on disk is anchored on `token`.
+    anchored: bool,
+    /// Whether the table changed since the last checkpoint.
+    dirty: bool,
+}
 
 /// The unified storage engine for MenteDB.
 ///
-/// Coordinates page allocation, caching, and write-ahead logging to provide
-/// crash-safe, page-oriented storage for memory nodes.
+/// Memories are stored as variable length records packed into 512 byte
+/// blocks of one file (see [`crate::record`]), so the file is about the size
+/// of the data. Every record is addressed by a stable locator ([`PageId`])
+/// resolved through an in memory table that is persisted at checkpoints and
+/// replayed forward from the WAL on open.
 ///
-/// Concurrency model (inspired by WAL-mode databases):
-/// - **Reads are lock-free**: `read_page` only touches the buffer pool and page
-///   manager — no file locks, no WAL access.
-/// - **Writes are fully serialized** via a blocking `flock(2)` on the WAL file.
-///   The entire write transaction (page allocation + WAL append + page write +
-///   fsync) executes under a single flock, ensuring correctness across multiple
-///   processes sharing the same data directory.
-/// - **State is refreshed from disk** under the flock: page count is re-read
-///   from the file header and LSN is re-read from the WAL tail, so no process
-///   can act on stale in-memory state.
-/// - **One process per database.** Open acquires an exclusive lock on a LOCK
-///   file in the data directory and holds it for the engine's lifetime. The
-///   per operation flock protects individual write transactions, but layers
-///   above the storage engine cache state across operations (buffer pool,
-///   page map, index snapshots), and a second concurrent process flushing
-///   those caches rolls the database back to its own open time snapshot.
-///   A second open therefore fails fast with a "locked" error instead of
-///   silently corrupting state; callers retry until the owner exits.
+/// Concurrency model:
+/// - **One process per database.** Open takes an exclusive lock on a LOCK
+///   file in the data directory (fcntl OFD lock, enforced across hosts on
+///   NFSv4) and holds it for the engine's lifetime, so in memory state never
+///   goes stale and needs no reload from disk on each write.
+/// - **Writes are serialized** by the state lock: WAL append and fsync, then
+///   the record write, then the table update.
+/// - **Reads run concurrently** with each other: a cache hit takes only the
+///   cache lock; a miss reads its extent with a positional read under the
+///   shared state lock.
 pub struct StorageEngine {
-    page_manager: Mutex<PageManager>,
-    buffer_pool: BufferPool,
-    wal: Mutex<Wal>,
-    /// Held exclusively for the lifetime of this engine; released on close
-    /// or process exit. Guards against concurrent multi process opens.
-    process_lock: Mutex<Option<File>>,
-    /// Database directory (holds the memory map snapshot).
     dir: PathBuf,
-    /// The memory map as of the checkpoint entry carrying its token, when
-    /// known. None until a valid snapshot is loaded or a full scan builds one;
-    /// every checkpoint rolls it forward and persists it. Lock order: after
-    /// the WAL and page manager mutexes.
-    map_anchor: Mutex<Option<MapAnchor>>,
+    file: File,
+    state: RwLock<State>,
+    cache: RecordCache,
+    /// Held exclusively for the lifetime of this engine; released on close
+    /// or process exit.
+    process_lock: Mutex<Option<File>>,
+    wal_checkpoint_bytes: u64,
+    max_record_bytes: u64,
     /// Memory loads served since open, cached or not (metrics and tests).
-    memory_loads: std::sync::atomic::AtomicU64,
+    memory_loads: AtomicU64,
+    /// Reads issued to the record file since open (cache misses and scans).
+    disk_reads: AtomicU64,
+    /// Bytes read from the record file since open.
+    bytes_read: AtomicU64,
+}
+
+fn lock_dir(path: &Path) -> MenteResult<File> {
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path.join("LOCK"))?;
+    match crate::lock::try_lock_exclusive(&lock_file) {
+        Ok(true) => Ok(lock_file),
+        Ok(false) => Err(MenteError::Storage(format!(
+            "database directory {} is locked by another process",
+            path.display()
+        ))),
+        Err(e) => Err(MenteError::Storage(format!(
+            "failed to lock database directory {}: {e}",
+            path.display()
+        ))),
+    }
+}
+
+/// Create an empty record file atomically (temp file, fsync, rename).
+fn create_data_file(dir: &Path) -> MenteResult<()> {
+    for stale in [WAL_FILE, memory_map::MEMORY_MAP_FILE] {
+        let p = dir.join(stale);
+        if p.exists() {
+            std::fs::remove_file(&p)?;
+        }
+    }
+    let tmp = dir.join(format!("{DATA_FILE}.tmp"));
+    {
+        let f = File::create(&tmp)?;
+        record::write_at(&f, &record::file_header(), 0)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, dir.join(DATA_FILE))?;
+    record::sync_dir(dir)?;
+    info!(dir = %dir.display(), "created record file");
+    Ok(())
 }
 
 impl StorageEngine {
-    /// Open (or create) a storage engine rooted at `path`.
-    ///
-    /// `path` must be a directory; it will be created if it does not exist.
-    /// After opening, any uncommitted WAL entries are replayed for crash recovery.
-    ///
-    /// # Example
+    /// Open (or create) a storage engine rooted at `path` with default
+    /// settings. See [`Self::open_with_config`].
     ///
     /// ```no_run
     /// use mentedb_storage::StorageEngine;
     ///
     /// let engine = StorageEngine::open("/tmp/mentedb".as_ref())?;
-    /// // engine is ready — WAL recovery already ran if needed
+    /// // engine is ready: WAL recovery already ran if needed
     /// # Ok::<(), mentedb_core::error::MenteError>(())
     /// ```
     pub fn open(path: &Path) -> MenteResult<Self> {
-        std::fs::create_dir_all(path)?;
+        Self::open_with_config(path, &StorageConfig::default())
+    }
 
-        // Exclusive process lock, held until close or process exit. A second
-        // process opening the same directory would interleave stale cached
-        // state with ours and roll the database back, so refuse it up front.
-        let lock_path = path.join("LOCK");
-        let lock_file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)?;
-        // Cross-host lock: fcntl OFD lock on Linux (enforced across hosts by the
-        // NFSv4 lock manager), flock elsewhere. This makes single-writer safe
-        // when the directory lives on a network filesystem mounted by more than
-        // one host.
-        match crate::lock::try_lock_exclusive(&lock_file) {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(MenteError::Storage(format!(
-                    "database directory {} is locked by another process",
-                    path.display()
-                )));
-            }
-            Err(e) => {
-                return Err(MenteError::Storage(format!(
-                    "failed to lock database directory {}: {e}",
-                    path.display()
-                )));
-            }
+    /// Open (or create) a storage engine rooted at `path`.
+    ///
+    /// `path` must be a directory; it is created if missing. A database in the
+    /// old page file layout is migrated first (see [`crate::legacy`]); then
+    /// any WAL entries are replayed. `config.cache_bytes` bounds the record
+    /// cache; size it to the database to serve every scan from memory.
+    pub fn open_with_config(path: &Path, config: &StorageConfig) -> MenteResult<Self> {
+        Self::open_inner(path, config, None)
+    }
+
+    /// Open with a migration fault injected, to test crash safety. The
+    /// migration stops at `fault` with an error, as a crash there would.
+    #[doc(hidden)]
+    pub fn open_with_migration_fault(
+        path: &Path,
+        config: &StorageConfig,
+        fault: MigrationFault,
+    ) -> MenteResult<Self> {
+        Self::open_inner(path, config, Some(fault))
+    }
+
+    fn open_inner(
+        path: &Path,
+        config: &StorageConfig,
+        fault: Option<MigrationFault>,
+    ) -> MenteResult<Self> {
+        std::fs::create_dir_all(path)?;
+        let lock_file = lock_dir(path)?;
+
+        if path.join(DATA_FILE).exists() {
+            legacy::remove_leftovers(path)?;
+        } else if legacy::is_legacy(path) {
+            legacy::migrate(path, fault)?;
+        } else {
+            create_data_file(path)?;
         }
 
-        let page_manager = PageManager::open(path)?;
-        let buffer_pool = BufferPool::new(DEFAULT_BUFFER_POOL_SIZE);
-        let wal = Wal::open(path)?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path.join(DATA_FILE))?;
+        let mut header = [0u8; BLOCK_SIZE];
+        record::read_at(&file, &mut header, 0)?;
+        record::check_file_header(&header)?;
+        let wal = Wal::open_file(&path.join(WAL_FILE))?;
 
         let engine = Self {
-            page_manager: Mutex::new(page_manager),
-            buffer_pool,
-            wal: Mutex::new(wal),
-            process_lock: Mutex::new(Some(lock_file)),
             dir: path.to_path_buf(),
-            map_anchor: Mutex::new(None),
-            memory_loads: std::sync::atomic::AtomicU64::new(0),
+            file,
+            state: RwLock::new(State {
+                wal,
+                table: RecordTable::default(),
+                free: FreeSpace::default(),
+                end: 1,
+                token: new_token(),
+                anchored: false,
+                dirty: false,
+            }),
+            cache: RecordCache::new(config.cache_bytes),
+            process_lock: Mutex::new(Some(lock_file)),
+            wal_checkpoint_bytes: config.wal_checkpoint_bytes,
+            max_record_bytes: config.max_record_bytes,
+            memory_loads: AtomicU64::new(0),
+            disk_reads: AtomicU64::new(0),
+            bytes_read: AtomicU64::new(0),
         };
 
-        let recovered = engine.recover()?;
-        if recovered > 0 {
-            info!(recovered, ?path, "storage engine opened with WAL recovery");
-        } else {
-            info!(?path, "storage engine opened");
-        }
-
+        let replayed = engine.recover()?;
+        let st = engine.state.read();
+        info!(
+            ?path,
+            replayed,
+            records = st.table.records.len(),
+            bytes = st.end * BLOCK_SIZE as u64,
+            "storage engine opened"
+        );
+        drop(st);
         Ok(engine)
     }
 
-    /// Replay WAL entries to recover writes that were not checkpointed.
-    ///
-    /// For each `PageWrite` entry the serialized data is written back to its page.
-    /// After replay the WAL is truncated. Returns the number of entries replayed.
-    pub fn recover(&self) -> MenteResult<usize> {
-        let mut wal = self.wal.lock();
-        wal.lock_exclusive()?;
-        let result = self.recover_locked(&mut wal);
-        let unlocked = wal.unlock();
-        let count = result?;
-        unlocked?;
-        Ok(count)
+    /// Replay the WAL into the record file, then load the locator table from
+    /// the snapshot rolled forward over the WAL, or by scanning the record
+    /// chain when there is no usable snapshot. Returns the operations replayed.
+    fn recover(&self) -> MenteResult<usize> {
+        let mut st = self.state.write();
+        let entries = st.wal.iterate()?;
+
+        // Redo every logged operation in log order. Each one rewrites the
+        // exact bytes it wrote, so redoing operations already on disk is
+        // harmless and the file ends in the logged state.
+        let mut ops: Vec<(u64, RecordOp)> = Vec::new();
+        for e in &entries {
+            let op = match e.entry_type {
+                WalEntryType::RecordWrite => RecordOp::decode(true, e.page_id, &e.data)?,
+                WalEntryType::RecordFree => RecordOp::decode(false, e.page_id, &e.data)?,
+                WalEntryType::Checkpoint | WalEntryType::Commit => continue,
+                WalEntryType::PageWrite | WalEntryType::PageFree => {
+                    return Err(MenteError::Storage(
+                        "record WAL holds a page file entry".into(),
+                    ));
+                }
+            };
+            op.redo(&self.file)?;
+            ops.push((e.lsn, op));
+        }
+        if !ops.is_empty() {
+            self.file.sync_data()?;
+        }
+        let file_end = self
+            .file
+            .metadata()?
+            .len()
+            .div_ceil(BLOCK_SIZE as u64)
+            .max(1);
+
+        let (table, token, anchored) = match self.load_snapshot(&entries, file_end) {
+            Some((table, token)) => (table, token, true),
+            None => (self.scan_chain(file_end)?, new_token(), false),
+        };
+        st.end = file_end.max(table.max_end());
+        st.free = table.free_space(st.end)?;
+        st.table = table;
+        st.token = token;
+        st.anchored = anchored;
+        st.dirty = !ops.is_empty();
+
+        if !anchored || !ops.is_empty() || st.wal.has_torn_tail() {
+            self.checkpoint_locked(&mut st, true)?;
+        }
+        if !ops.is_empty() {
+            info!(count = ops.len(), "WAL recovery replayed entries");
+        }
+        Ok(ops.len())
     }
 
-    /// Load the persisted memory map and roll it forward over `entries`, or
-    /// None when it is missing, unreadable, or does not belong to this WAL
-    /// and page file. Never an error: the fallback is a full scan.
-    fn load_anchor(&self, entries: &[crate::wal::WalEntry], page_count: u64) -> Option<MapAnchor> {
-        let mut anchor = match memory_map::read_snapshot(&self.dir) {
-            Ok(Some(a)) => a,
+    /// The persisted table rolled forward over `entries`, or None when it is
+    /// missing, unreadable, not anchored in this WAL, or inconsistent with a
+    /// file of `file_end` blocks. Never an error: the fallback is a scan.
+    fn load_snapshot(&self, entries: &[WalEntry], file_end: u64) -> Option<(RecordTable, Token)> {
+        let snap = match memory_map::read_snapshot(&self.dir) {
+            Ok(Some(s)) => s,
             Ok(None) => return None,
             Err(e) => {
-                tracing::warn!(error = %e, "memory map snapshot unreadable, open will scan pages");
+                warn!(error = %e, "record map snapshot unreadable, open will scan the record file");
                 return None;
             }
         };
-        if !anchor.fits(page_count) {
-            tracing::warn!(
-                snapshot_pages = anchor.page_count,
-                page_count,
-                "memory map snapshot does not fit the page file, open will scan pages"
-            );
+        let Some(at) = entries
+            .iter()
+            .rposition(|e| e.entry_type == WalEntryType::Checkpoint && e.data == snap.token)
+        else {
+            info!("record map snapshot predates the WAL, open will scan the record file");
             return None;
-        }
-        if anchor.advance(entries).is_none() {
-            info!("memory map snapshot predates the WAL, open will scan pages");
-            return None;
-        }
-        Some(anchor)
-    }
-
-    fn recover_locked(&self, wal: &mut Wal) -> MenteResult<usize> {
-        let entries = wal.iterate()?;
-        let mut count = 0usize;
-        let mut pm = self.page_manager.lock();
-
-        // Refresh page count from disk — another process may have written pages.
-        pm.reload_header()?;
-
-        // Roll the persisted memory map forward before replay may truncate
-        // the WAL entries it is anchored on.
-        let anchor = self.load_anchor(&entries, pm.page_count());
-
-        // Replay with last-op-wins per page: every PageWrite carries a full page
-        // image and PageFree discards the page, so only the final entry for each
-        // page matters. This is what makes free-then-reuse sequences safe: a
-        // PageFree followed by a later PageWrite for the same page must not
-        // leave the page on the free list.
-        let mut last_op: std::collections::HashMap<u64, &crate::wal::WalEntry> = Default::default();
-        let mut order: Vec<u64> = Vec::new();
-        for entry in &entries {
-            match entry.entry_type {
-                WalEntryType::PageWrite | WalEntryType::PageFree => {
-                    if !last_op.contains_key(&entry.page_id) {
-                        order.push(entry.page_id);
-                    }
-                    last_op.insert(entry.page_id, entry);
-                }
-                WalEntryType::Checkpoint | WalEntryType::Commit => {}
-            }
-        }
-
-        for page_id_raw in order {
-            let entry = last_op[&page_id_raw];
-            let page_id = PageId(entry.page_id);
-            match entry.entry_type {
-                WalEntryType::PageWrite => {
-                    while pm.page_count() <= entry.page_id {
-                        pm.allocate_page()?;
-                    }
-
-                    let mut page = pm.read_page(page_id)?;
-                    let copy_len = entry.data.len().min(PAGE_DATA_SIZE);
-                    page.data[..copy_len].copy_from_slice(&entry.data[..copy_len]);
-                    if copy_len < PAGE_DATA_SIZE {
-                        page.data[copy_len..].fill(0);
-                    }
-                    page.header.page_id = entry.page_id;
-                    page.header.lsn = entry.lsn;
-                    page.header.page_type = PageType::Data as u8;
-                    page.header.free_space = (PAGE_DATA_SIZE - copy_len) as u16;
-                    page.header.checksum = page.compute_checksum();
-
-                    pm.write_page(page_id, &page)?;
-                    count += 1;
-                }
-                WalEntryType::PageFree => {
-                    // Mark the page Free without touching the free list; the
-                    // list is rebuilt from page types after replay so it stays
-                    // consistent with WAL-derived page states.
-                    if entry.page_id < pm.page_count() {
-                        let mut page = Page::zeroed();
-                        page.header.page_id = entry.page_id;
-                        page.header.page_type = PageType::Free as u8;
-                        pm.write_page(page_id, &page)?;
-                        self.buffer_pool.invalidate(page_id);
-                        count += 1;
-                    }
-                }
-                WalEntryType::Checkpoint | WalEntryType::Commit => {}
-            }
-        }
-
-        if count > 0 {
-            // Header updates (free list head, page count) are not fsynced on
-            // every write, so after a crash the free list can disagree with the
-            // replayed page states. Rebuild it from page types: the WAL is the
-            // sole source of truth for which pages are Free vs Data. With a
-            // memory map the free pages are known, so only those are read
-            // (and verified); otherwise every page is scanned.
-            let rebuilt = match &anchor {
-                Some(a) => pm.rebuild_free_list_from(a.table.free_pages())?,
-                None => false,
-            };
-            if !rebuilt {
-                pm.rebuild_free_list()?;
-            }
-            pm.sync()?;
-            match anchor {
-                // The replayed pages are now durable, which makes this a
-                // checkpoint: anchor the rolled forward map on a fresh entry
-                // before truncating the entries it was derived from.
-                Some(anchor) => {
-                    self.anchor_checkpoint(wal, &pm, anchor.table)?;
-                }
-                None => {
-                    let next_lsn = wal.next_lsn();
-                    wal.truncate(next_lsn)?;
-                }
-            }
-            info!(count, "WAL recovery replayed entries");
-        } else if let Some(anchor) = anchor {
-            // Nothing to replay, so no entry after the anchor changed the map.
-            *self.map_anchor.lock() = Some(anchor);
-        }
-
-        Ok(count)
-    }
-
-    /// Append a checkpoint entry with a fresh token, persist `table` as the map
-    /// as of that entry, and truncate the WAL to it. The page file must already
-    /// be durable. When the snapshot cannot be written the anchor is dropped
-    /// (the next open scans) but the checkpoint still completes.
-    fn anchor_checkpoint(
-        &self,
-        wal: &mut Wal,
-        pm: &PageManager,
-        table: MemoryTable,
-    ) -> MenteResult<u64> {
-        let token = memory_map::new_token();
-        let lsn = wal.append(WalEntryType::Checkpoint, 0, &token)?;
-        wal.sync()?;
-        let anchor = MapAnchor {
-            token,
-            page_count: pm.page_count(),
-            table,
-            pending: Default::default(),
         };
-        // The file is written before the slot is locked, so stamp lookups on
-        // the recall path never wait on snapshot I/O.
-        let written = memory_map::write_snapshot(&self.dir, &anchor);
-        match written {
-            Ok(()) => *self.map_anchor.lock() = Some(anchor),
-            Err(e) => {
-                tracing::warn!(error = %e, "memory map snapshot write failed, next open will scan pages");
-                memory_map::remove_snapshot(&self.dir);
-                *self.map_anchor.lock() = None;
-            }
+        let mut table = snap.table;
+        for e in &entries[at + 1..] {
+            let write = match e.entry_type {
+                WalEntryType::RecordWrite => true,
+                WalEntryType::RecordFree => false,
+                _ => continue,
+            };
+            let op = RecordOp::decode(write, e.page_id, &e.data).ok()?;
+            table.apply(&op, entry_stamp(&snap.token, e.lsn));
         }
-        wal.truncate(lsn)?;
-        Ok(lsn)
+        if let Err(e) = table.free_space(file_end) {
+            warn!(error = %e, "record map snapshot does not fit the record file, open will scan");
+            return None;
+        }
+        Some((table, snap.token))
     }
 
-    /// Gracefully shut down: flush dirty pages, sync files.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use mentedb_storage::StorageEngine;
-    /// # let engine = StorageEngine::open("/tmp/mentedb".as_ref())?;
-    /// engine.close()?;
-    /// # Ok::<(), mentedb_core::error::MenteError>(())
-    /// ```
+    /// Build the table by walking the extent chain from block 1. Reads only
+    /// extent headers; records get fresh stamps, since no log entry derives
+    /// them.
+    fn scan_chain(&self, file_end: u64) -> MenteResult<RecordTable> {
+        let mut table = RecordTable::default();
+        let mut reader = BufReader::with_capacity(1 << 20, self.file.try_clone()?);
+        reader.seek(SeekFrom::Start(BLOCK_SIZE as u64))?;
+        let mut at = 1u64;
+        let mut header = [0u8; EXTENT_HEADER_SIZE];
+        while at < file_end {
+            reader.read_exact(&mut header)?;
+            self.disk_reads.fetch_add(1, Ordering::Relaxed);
+            let h = ExtentHeader::decode(&header)
+                .ok_or_else(|| MenteError::Storage(format!("record chain broken at block {at}")))?;
+            let extent = record::Extent {
+                start: at,
+                blocks: h.blocks as u64,
+            };
+            if h.kind == ExtentKind::Live {
+                table.records.insert(
+                    h.locator,
+                    RecordEntry {
+                        id: h.id,
+                        stamp: memory_map::random_u64(),
+                        extent,
+                    },
+                );
+                table.next_locator = table.next_locator.max(h.locator + 1);
+            }
+            at = extent.end();
+            reader.seek_relative((extent.byte_len() - EXTENT_HEADER_SIZE) as i64)?;
+        }
+        self.bytes_read
+            .fetch_add(file_end * BLOCK_SIZE as u64, Ordering::Relaxed);
+        table.next_locator = table.next_locator.max(1);
+        info!(
+            records = table.records.len(),
+            "record map rebuilt by scanning the record file"
+        );
+        Ok(table)
+    }
+
+    /// Gracefully shut down: sync the record file and the WAL, release the
+    /// directory lock.
     pub fn close(&self) -> MenteResult<()> {
-        let mut pm = self.page_manager.lock();
-        self.buffer_pool.flush_all(&mut pm)?;
-        pm.sync()?;
-        self.wal.lock().sync()?;
-        // Release the process lock so the directory can be reopened, by this
-        // process or another, without waiting for us to exit.
+        let mut st = self.state.write();
+        self.file.sync_data()?;
+        st.wal.sync()?;
+        drop(st);
         if let Some(lock_file) = self.process_lock.lock().take() {
             let _ = crate::lock::unlock(&lock_file);
         }
@@ -349,94 +371,79 @@ impl StorageEngine {
         }
     }
 
-    // ---- low-level page operations ----
+    // ---- metrics and settings ----
 
-    /// Allocate a fresh page (for internal/test use).
-    ///
-    /// **WARNING**: In multi-process scenarios, prefer `store_memory` which
-    /// allocates under the WAL flock. This method does NOT acquire the flock.
-    pub fn allocate_page(&self) -> MenteResult<PageId> {
-        self.page_manager.lock().allocate_page()
+    /// Record cache activity, for metrics (hit ratio, evictions, residency).
+    pub fn buffer_stats(&self) -> BufferStats {
+        self.cache.stats()
     }
 
-    /// Read a page through the buffer pool (lock-free — no WAL access).
-    pub fn read_page(&self, page_id: PageId) -> MenteResult<Box<Page>> {
-        self.buffer_pool
-            .fetch_page(page_id, &mut self.page_manager.lock())
+    /// Change the record cache capacity in bytes. A host with spare memory
+    /// can raise it to the database size so every scan is served from memory.
+    pub fn set_cache_capacity(&self, bytes: u64) {
+        self.cache.set_capacity(bytes);
     }
 
-    /// Buffer-pool cache activity, for metrics (hit ratio, evictions, residency).
-    pub fn buffer_stats(&self) -> crate::buffer::BufferStats {
-        self.buffer_pool.stats()
+    /// Record cache capacity in bytes.
+    pub fn cache_capacity(&self) -> u64 {
+        self.cache.capacity()
     }
 
-    /// Total pages in the store; multiply by `PAGE_SIZE` for on-disk bytes.
+    /// Blocks in the record file ([`BLOCK_SIZE`] bytes each).
     pub fn page_count(&self) -> u64 {
-        self.page_manager.lock().page_count()
+        self.state.read().end
     }
 
-    /// Write data into an already-allocated page with WAL protection.
-    ///
-    /// Acquires the WAL flock for the duration of the write transaction.
-    /// For new pages, prefer `store_memory` which allocates + writes atomically.
-    pub fn write_page(&self, page_id: PageId, data: &[u8]) -> MenteResult<()> {
-        let id = memory_map::decode_memory(data).ok().map(|n| n.id);
-        self.write_page_as(page_id, data, id)
+    /// Bytes of the record file.
+    pub fn data_bytes(&self) -> u64 {
+        self.state.read().end * BLOCK_SIZE as u64
     }
 
-    /// `write_page` for data known to decode as memory `id` (or as none).
-    fn write_page_as(
-        &self,
-        page_id: PageId,
-        data: &[u8],
-        id: Option<mentedb_core::types::MemoryId>,
-    ) -> MenteResult<()> {
-        let lsn = {
-            let mut wal = self.wal.lock();
-            wal.lock_exclusive()?;
-            wal.reload_lsn()?;
-            let lsn = wal.append(WalEntryType::PageWrite, page_id.0, data)?;
-            wal.sync()?;
-            self.note_map_write(page_id, id, lsn);
-            wal.unlock()?;
-            lsn
-        };
-
-        self.apply_page_write(page_id, data, lsn)
+    /// Bytes of the record file not holding any record (reusable holes).
+    pub fn free_bytes(&self) -> u64 {
+        self.state.read().free.free_blocks() * BLOCK_SIZE as u64
     }
 
-    /// Apply a page write to the buffer pool and page manager (after WAL).
-    fn apply_page_write(&self, page_id: PageId, data: &[u8], lsn: u64) -> MenteResult<()> {
-        let mut pm = self.page_manager.lock();
-        let mut page = self.buffer_pool.fetch_page(page_id, &mut pm)?;
-        drop(pm);
+    /// Memory loads served since open, whether from the cache or from disk.
+    pub fn memory_loads(&self) -> u64 {
+        self.memory_loads.load(Ordering::Relaxed)
+    }
 
-        let copy_len = data.len().min(PAGE_DATA_SIZE);
-        page.data[..copy_len].copy_from_slice(&data[..copy_len]);
-        if copy_len < PAGE_DATA_SIZE {
-            page.data[copy_len..].fill(0);
+    /// Reads issued to the record file since open (cache misses, plus one per
+    /// extent header when open had to scan).
+    pub fn page_reads(&self) -> u64 {
+        self.disk_reads.load(Ordering::Relaxed)
+    }
+
+    /// Bytes read from the record file since open.
+    pub fn bytes_read(&self) -> u64 {
+        self.bytes_read.load(Ordering::Relaxed)
+    }
+
+    // ---- memory operations ----
+
+    fn encode(&self, node: &MemoryNode) -> MenteResult<Vec<u8>> {
+        let payload = record::encode_node(node)?;
+        if payload.len() as u64 > self.max_record_bytes {
+            return Err(MenteError::CapacityExceeded(format!(
+                "memory node encoded to {} bytes (max {})",
+                payload.len(),
+                self.max_record_bytes
+            )));
         }
-        page.header.lsn = lsn;
-        page.header.page_type = PageType::Data as u8;
-        page.header.free_space = (PAGE_DATA_SIZE - copy_len) as u16;
-        page.header.checksum = page.compute_checksum();
-
-        if self.buffer_pool.update_page(page_id, &page).is_err() {
-            self.page_manager.lock().write_page(page_id, &page)?;
-        }
-        self.buffer_pool.unpin_page(page_id, true).ok();
-
-        Ok(())
+        Ok(payload)
     }
 
-    // ---- high-level memory operations ----
+    /// Checkpoint when the WAL has grown past the configured size.
+    fn maybe_checkpoint(&self, wal_bytes: u64) {
+        if wal_bytes > self.wal_checkpoint_bytes
+            && let Err(e) = self.checkpoint()
+        {
+            warn!("auto-checkpoint failed: {e}");
+        }
+    }
 
-    /// Serialize and store a [`MemoryNode`] into a single page.
-    ///
-    /// The entire operation — page allocation, WAL append, page write — executes
-    /// under a single WAL flock, making it safe across multiple processes.
-    ///
-    /// # Example
+    /// Store a [`MemoryNode`] as a new record and return its locator.
     ///
     /// ```no_run
     /// use mentedb_storage::StorageEngine;
@@ -453,212 +460,138 @@ impl StorageEngine {
     /// # Ok::<(), mentedb_core::error::MenteError>(())
     /// ```
     pub fn store_memory(&self, node: &MemoryNode) -> MenteResult<PageId> {
-        let serialized =
-            serde_json::to_vec(node).map_err(|e| MenteError::Serialization(e.to_string()))?;
-
-        if serialized.len() + 4 > PAGE_DATA_SIZE {
-            return Err(MenteError::CapacityExceeded(format!(
-                "memory node serialized to {} bytes (max {})",
-                serialized.len(),
-                PAGE_DATA_SIZE - 4,
-            )));
-        }
-
-        let mut buf = Vec::with_capacity(4 + serialized.len());
-        buf.extend_from_slice(&(serialized.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&serialized);
-
-        // Atomic write transaction: allocate + WAL + page write under one flock
-        let (page_id, lsn) = {
-            let mut wal = self.wal.lock();
-            let mut pm = self.page_manager.lock();
-
-            // Acquire flock and refresh state from disk
-            wal.lock_exclusive()?;
-            pm.reload_header()?;
-            wal.reload_lsn()?;
-
-            // Allocate page (using fresh page_count from disk)
-            let page_id = pm.allocate_page()?;
-
-            // WAL append + sync (WAL fsync guarantees durability;
-            // page data is written but not fsynced — checkpoint handles that)
-            let lsn = wal.append(WalEntryType::PageWrite, page_id.0, &buf)?;
-            wal.sync()?;
-            self.note_map_write(page_id, Some(node.id), lsn);
-
-            // Write page data to disk (no fsync — recoverable from WAL)
-            let mut page = Page::zeroed();
-            page.header.page_id = page_id.0;
-            let copy_len = buf.len().min(PAGE_DATA_SIZE);
-            page.data[..copy_len].copy_from_slice(&buf[..copy_len]);
-            page.header.lsn = lsn;
-            page.header.page_type = PageType::Data as u8;
-            page.header.free_space = (PAGE_DATA_SIZE - copy_len) as u16;
-            page.header.checksum = page.compute_checksum();
-            pm.write_page(page_id, &page)?;
-
-            // Release flock — other processes can now write
-            wal.unlock()?;
-
-            (page_id, lsn)
-        };
-
-        // Drop any stale cached copy (the page may have been reused from the
-        // free list); the next read loads the fresh data from disk.
-        let _ = lsn;
-        self.buffer_pool.invalidate(page_id);
-
-        // Auto-checkpoint when WAL exceeds threshold to prevent unbounded growth.
-        // This keeps reload_lsn() fast for subsequent writes.
-        if self.wal.lock().file_size() > WAL_AUTO_CHECKPOINT_BYTES
-            && let Err(e) = self.checkpoint()
-        {
-            tracing::warn!("auto-checkpoint failed: {e}");
-        }
-
-        info!(
-            page_id = page_id.0,
-            bytes = serialized.len(),
-            "stored memory node"
-        );
-        Ok(page_id)
+        let ids = self.store_memory_batch(std::slice::from_ref(node))?;
+        Ok(ids[0])
     }
 
-    /// Store multiple [`MemoryNode`]s in a single locked transaction.
-    ///
-    /// Acquires the WAL flock once, writes all nodes, then releases. This avoids
-    /// the per-write overhead of `reload_header` / `reload_lsn` for bulk inserts.
-    /// Auto-checkpoints after the batch if the WAL exceeds the threshold.
+    /// Store several [`MemoryNode`]s with a single WAL fsync.
     pub fn store_memory_batch(&self, nodes: &[MemoryNode]) -> MenteResult<Vec<PageId>> {
-        // Phase 1: serialize all nodes upfront (no locks held)
-        let mut bufs = Vec::with_capacity(nodes.len());
-        for node in nodes {
-            let serialized =
-                serde_json::to_vec(node).map_err(|e| MenteError::Serialization(e.to_string()))?;
-            if serialized.len() + 4 > PAGE_DATA_SIZE {
-                return Err(MenteError::CapacityExceeded(format!(
-                    "memory node serialized to {} bytes (max {})",
-                    serialized.len(),
-                    PAGE_DATA_SIZE - 4,
-                )));
+        let payloads = nodes
+            .iter()
+            .map(|n| self.encode(n))
+            .collect::<MenteResult<Vec<_>>>()?;
+
+        let mut st = self.state.write();
+        // Plan on copies so a failed append leaves the allocator untouched.
+        let mut free = st.free.clone();
+        let mut end = st.end;
+        let first = st.table.next_locator;
+        let mut ops = Vec::with_capacity(nodes.len());
+        for (i, (node, payload)) in nodes.iter().zip(payloads).enumerate() {
+            let place = free.place(record::blocks_for(payload.len()), end);
+            end = free.commit(&place, end);
+            ops.push(RecordOp::Write {
+                locator: first + i as u64,
+                id: node.id,
+                extent: place.extent,
+                payload,
+                remainder: place.remainder,
+                freed: None,
+            });
+        }
+        let mut lsns = Vec::with_capacity(ops.len());
+        for op in &ops {
+            lsns.push(
+                st.wal
+                    .append(WalEntryType::RecordWrite, op.locator(), &op.encode())?,
+            );
+        }
+        st.wal.sync()?;
+        st.free = free;
+        st.end = end;
+
+        let mut ids = Vec::with_capacity(ops.len());
+        for ((op, lsn), node) in ops.iter().zip(lsns).zip(nodes) {
+            op.redo(&self.file)?;
+            let stamp = entry_stamp(&st.token, lsn);
+            st.table.apply(op, stamp);
+            if let RecordOp::Write { payload, .. } = op {
+                self.cache
+                    .insert(op.locator(), node.clone(), payload.len() as u64);
             }
-            let mut buf = Vec::with_capacity(4 + serialized.len());
-            buf.extend_from_slice(&(serialized.len() as u32).to_le_bytes());
-            buf.extend_from_slice(&serialized);
-            bufs.push(buf);
+            ids.push(PageId(op.locator()));
         }
+        st.dirty = true;
+        let wal_bytes = st.wal.file_size();
+        drop(st);
 
-        // Phase 2: single locked transaction for all writes
-        let page_ids = {
-            let mut wal = self.wal.lock();
-            let mut pm = self.page_manager.lock();
-
-            wal.lock_exclusive()?;
-            pm.reload_header()?;
-            wal.reload_lsn()?;
-
-            let mut ids = Vec::with_capacity(bufs.len());
-            for (buf, node) in bufs.iter().zip(nodes) {
-                let page_id = pm.allocate_page()?;
-                let lsn = wal.append(WalEntryType::PageWrite, page_id.0, buf)?;
-                self.note_map_write(page_id, Some(node.id), lsn);
-
-                let mut page = Page::zeroed();
-                page.header.page_id = page_id.0;
-                let copy_len = buf.len().min(PAGE_DATA_SIZE);
-                page.data[..copy_len].copy_from_slice(&buf[..copy_len]);
-                page.header.lsn = lsn;
-                page.header.page_type = PageType::Data as u8;
-                page.header.free_space = (PAGE_DATA_SIZE - copy_len) as u16;
-                page.header.checksum = page.compute_checksum();
-                pm.write_page(page_id, &page)?;
-
-                ids.push(page_id);
-            }
-
-            // WAL fsync only — page data is recoverable from WAL on crash.
-            // Checkpoint handles page file fsync.
-            wal.sync()?;
-            wal.unlock()?;
-
-            ids
-        };
-
-        // Drop stale cached copies for pages reused from the free list.
-        for page_id in &page_ids {
-            self.buffer_pool.invalidate(*page_id);
-        }
-
-        // Auto-checkpoint if WAL grew too large
-        if self.wal.lock().file_size() > WAL_AUTO_CHECKPOINT_BYTES
-            && let Err(e) = self.checkpoint()
-        {
-            tracing::warn!("auto-checkpoint failed: {e}");
-        }
-
-        info!(count = page_ids.len(), "stored memory batch");
-        Ok(page_ids)
+        self.maybe_checkpoint(wal_bytes);
+        Ok(ids)
     }
 
-    /// Update a [`MemoryNode`] in place on its existing page.
-    ///
-    /// The write goes through the WAL-protected `write_page` path, so it is
-    /// crash-durable and keeps the buffer pool coherent. Unlike storing to a
-    /// fresh page, this never orphans the old copy.
+    /// Rewrite the record at `page_id` with `node`. The locator never
+    /// changes: a record that still fits its extent is rewritten in place,
+    /// one that outgrew it moves to a larger extent and the old one is freed,
+    /// both in one logged operation.
     pub fn update_memory(&self, page_id: PageId, node: &MemoryNode) -> MenteResult<()> {
-        let serialized =
-            serde_json::to_vec(node).map_err(|e| MenteError::Serialization(e.to_string()))?;
+        let payload = self.encode(node)?;
+        let need = record::blocks_for(payload.len());
+        let len = payload.len() as u64;
 
-        if serialized.len() + 4 > PAGE_DATA_SIZE {
-            return Err(MenteError::CapacityExceeded(format!(
-                "memory node serialized to {} bytes (max {})",
-                serialized.len(),
-                PAGE_DATA_SIZE - 4,
-            )));
+        let mut st = self.state.write();
+        let entry =
+            *st.table.records.get(&page_id.0).ok_or_else(|| {
+                MenteError::Storage(format!("page {} holds no memory", page_id.0))
+            })?;
+        let place = (need > entry.extent.blocks).then(|| st.free.place(need, st.end));
+        let op = RecordOp::Write {
+            locator: page_id.0,
+            id: node.id,
+            extent: place.map_or(entry.extent, |p| p.extent),
+            payload,
+            remainder: place.and_then(|p| p.remainder),
+            freed: place.map(|_| entry.extent),
+        };
+        let lsn = st
+            .wal
+            .append(WalEntryType::RecordWrite, page_id.0, &op.encode())?;
+        st.wal.sync()?;
+        if let Some(p) = place {
+            let end = st.end;
+            st.end = st.free.commit(&p, end);
+            st.free.insert(entry.extent);
         }
+        op.redo(&self.file)?;
+        let stamp = entry_stamp(&st.token, lsn);
+        st.table.apply(&op, stamp);
+        st.dirty = true;
+        self.cache.insert(page_id.0, node.clone(), len);
+        let wal_bytes = st.wal.file_size();
+        drop(st);
 
-        let mut buf = Vec::with_capacity(4 + serialized.len());
-        buf.extend_from_slice(&(serialized.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&serialized);
-
-        self.write_page_as(page_id, &buf, Some(node.id))
-    }
-
-    /// Delete a memory by returning its page to the free list.
-    ///
-    /// The deletion is WAL-logged before the page is freed, so it survives a
-    /// crash: recovery replays the `PageFree` entry and the memory does not
-    /// resurrect on reopen. The freed page is reused by later allocations.
-    pub fn delete_memory(&self, page_id: PageId) -> MenteResult<()> {
-        {
-            let mut wal = self.wal.lock();
-            let mut pm = self.page_manager.lock();
-
-            wal.lock_exclusive()?;
-            pm.reload_header()?;
-            wal.reload_lsn()?;
-
-            // WAL fsync guarantees the deletion is durable before the page
-            // is touched; the free-list update itself is recoverable.
-            let lsn = wal.append(WalEntryType::PageFree, page_id.0, &[])?;
-            wal.sync()?;
-            self.note_map_write(page_id, None, lsn);
-
-            pm.free_page(page_id)?;
-            wal.unlock()?;
-        }
-
-        // A stale cached copy must never be served or flushed back.
-        self.buffer_pool.invalidate(page_id);
-
-        info!(page_id = page_id.0, "deleted memory node");
+        self.maybe_checkpoint(wal_bytes);
         Ok(())
     }
 
-    /// Load and deserialize a [`MemoryNode`] from the given page.
-    ///
-    /// # Example
+    /// Delete the record at `page_id`, freeing its extent for reuse. Logged
+    /// before it is applied, so the memory does not resurrect after a crash.
+    pub fn delete_memory(&self, page_id: PageId) -> MenteResult<()> {
+        let mut st = self.state.write();
+        let entry =
+            *st.table.records.get(&page_id.0).ok_or_else(|| {
+                MenteError::Storage(format!("page {} holds no memory", page_id.0))
+            })?;
+        let op = RecordOp::Free {
+            locator: page_id.0,
+            extent: entry.extent,
+        };
+        let _lsn = st
+            .wal
+            .append(WalEntryType::RecordFree, page_id.0, &op.encode())?;
+        st.wal.sync()?;
+        st.free.insert(entry.extent);
+        op.redo(&self.file)?;
+        st.table.apply(&op, 0);
+        st.dirty = true;
+        self.cache.invalidate(page_id.0);
+        let wal_bytes = st.wal.file_size();
+        drop(st);
+
+        self.maybe_checkpoint(wal_bytes);
+        Ok(())
+    }
+
+    /// Load the [`MemoryNode`] stored at `page_id`.
     ///
     /// ```no_run
     /// # use mentedb_storage::{StorageEngine, PageId};
@@ -668,967 +601,125 @@ impl StorageEngine {
     /// # Ok::<(), mentedb_core::error::MenteError>(())
     /// ```
     pub fn load_memory(&self, page_id: PageId) -> MenteResult<MemoryNode> {
-        self.memory_loads
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let page = self.read_page(page_id)?;
-        self.buffer_pool.unpin_page(page_id, false).ok();
-
-        if PageType::from(page.header.page_type) != PageType::Data {
-            return Err(MenteError::Storage(format!(
-                "page {} is not a data page",
-                page_id.0
-            )));
+        self.memory_loads.fetch_add(1, Ordering::Relaxed);
+        if let Some(node) = self.cache.get(page_id.0) {
+            return Ok(node);
         }
-
-        memory_map::decode_memory(&page.data)
+        // The shared lock keeps writers out while the extent is read and the
+        // result cached, so the cache never holds an older version.
+        let st = self.state.read();
+        let entry =
+            st.table.records.get(&page_id.0).ok_or_else(|| {
+                MenteError::Storage(format!("page {} holds no memory", page_id.0))
+            })?;
+        let mut buf = vec![0u8; entry.extent.byte_len()];
+        record::read_at(&self.file, &mut buf, entry.extent.offset())?;
+        self.disk_reads.fetch_add(1, Ordering::Relaxed);
+        self.bytes_read
+            .fetch_add(buf.len() as u64, Ordering::Relaxed);
+        let payload = record::live_payload(&buf, page_id.0)?;
+        let node = record::decode_node(payload)?;
+        self.cache
+            .insert(page_id.0, node.clone(), payload.len() as u64);
+        Ok(node)
     }
 
     // ---- durability ----
 
-    /// Checkpoint: flush all dirty pages, sync to disk, and truncate the WAL.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use mentedb_storage::StorageEngine;
-    /// # let engine = StorageEngine::open("/tmp/mentedb".as_ref())?;
-    /// // After a batch of writes, checkpoint to reclaim WAL space
-    /// engine.checkpoint()?;
-    /// # Ok::<(), mentedb_core::error::MenteError>(())
-    /// ```
+    /// Checkpoint: sync the record file, persist the record map, and truncate
+    /// the WAL. A no-op when nothing changed since the last checkpoint.
     pub fn checkpoint(&self) -> MenteResult<()> {
-        let mut wal = self.wal.lock();
-        let mut pm = self.page_manager.lock();
+        let mut st = self.state.write();
+        self.checkpoint_locked(&mut st, false)
+    }
 
-        wal.lock_exclusive()?;
-        let result = self.checkpoint_locked(&mut wal, &mut pm, None);
-        let unlocked = wal.unlock();
-        let lsn = result?;
-        unlocked?;
-
-        info!(lsn, "checkpoint complete");
+    fn checkpoint_locked(&self, st: &mut State, force: bool) -> MenteResult<()> {
+        if !force && !st.dirty && st.anchored {
+            return Ok(());
+        }
+        // Records must be durable before the WAL entries that redo them go.
+        self.file.sync_data()?;
+        let token = new_token();
+        let lsn = st.wal.append(WalEntryType::Checkpoint, 0, &token)?;
+        st.wal.sync()?;
+        // The snapshot is anchored on the entry just appended; a crash before
+        // the WAL is cut leaves that entry with the snapshot, a crash before
+        // the snapshot leaves the previous anchor and all entries after it.
+        match memory_map::write_snapshot(&self.dir, &token, &st.table) {
+            Ok(()) => st.anchored = true,
+            Err(e) => {
+                warn!(error = %e, "record map snapshot write failed, next open will scan");
+                memory_map::remove_snapshot(&self.dir);
+                st.anchored = false;
+            }
+        }
+        st.token = token;
+        st.dirty = false;
+        st.wal.reset_to(lsn, WalEntryType::Checkpoint, 0, &token)?;
+        info!(lsn, records = st.table.records.len(), "checkpoint complete");
         Ok(())
     }
 
-    /// Checkpoint under the WAL flock. `fresh` is a memory table known to be
-    /// current (a full scan just built it); otherwise the anchored table is
-    /// rolled forward over the WAL. The snapshot is rewritten only when the
-    /// map changed; an unchanged map keeps its token, so the new checkpoint
-    /// entry still anchors the existing snapshot.
-    fn checkpoint_locked(
-        &self,
-        wal: &mut Wal,
-        pm: &mut PageManager,
-        fresh: Option<MemoryTable>,
-    ) -> MenteResult<u64> {
-        wal.reload_lsn()?;
-
-        self.buffer_pool.flush_all(pm)?;
-        pm.sync()?;
-
-        let table = match fresh {
-            Some(t) => Some(t),
-            None => {
-                let current = self.map_anchor.lock().take();
-                match current {
-                    Some(mut anchor) => {
-                        let entries = wal.iterate()?;
-                        match anchor.advance(&entries) {
-                            Some(true) => Some(anchor.table),
-                            Some(false) => {
-                                // Unchanged: re-anchor on the same token, the
-                                // snapshot on disk already holds this map.
-                                let lsn = wal.append(WalEntryType::Checkpoint, 0, &anchor.token)?;
-                                wal.sync()?;
-                                *self.map_anchor.lock() = Some(anchor);
-                                wal.truncate(lsn)?;
-                                return Ok(lsn);
-                            }
-                            None => {
-                                tracing::warn!(
-                                    "memory map anchor left the WAL, next open will scan pages"
-                                );
-                                None
-                            }
-                        }
-                    }
-                    None => None,
-                }
-            }
-        };
-
-        match table {
-            Some(table) => self.anchor_checkpoint(wal, pm, table),
-            None => {
-                // No map to persist. A fresh token keeps any old snapshot from
-                // ever matching this WAL.
-                let lsn = wal.append(WalEntryType::Checkpoint, 0, &memory_map::new_token())?;
-                wal.sync()?;
-                wal.truncate(lsn)?;
-                Ok(lsn)
-            }
-        }
-    }
-
-    /// Every memory in storage with its page and write stamp, in page order:
-    /// the same memories, in the same order, as [`Self::scan_all_memories`].
-    ///
-    /// Served from the persisted memory map rolled forward over the WAL, which
-    /// reads no pages. When there is no usable map this falls back to a full
-    /// page scan and then checkpoints, persisting the map so the next call
-    /// (and the next open) is fast. Holds the WAL lock throughout, so writers
-    /// wait; it is meant for open, before the database serves traffic.
+    /// Every memory in storage with its locator and write stamp, in locator
+    /// order. Served from the in memory table; reads nothing.
     pub fn memory_map(&self) -> MenteResult<Vec<MappedMemory>> {
-        let mut wal = self.wal.lock();
-        wal.lock_exclusive()?;
-        let result = self.memory_map_locked(&mut wal);
-        let unlocked = wal.unlock();
-        let map = result?;
-        unlocked?;
-        Ok(map)
+        Ok(self.state.read().table.memories())
     }
 
-    fn memory_map_locked(&self, wal: &mut Wal) -> MenteResult<Vec<MappedMemory>> {
-        let entries = wal.iterate()?;
-        {
-            let mut slot = self.map_anchor.lock();
-            if let Some(anchor) = slot.as_ref() {
-                let mut current = anchor.clone();
-                if current.advance(&entries).is_some() {
-                    return Ok(current.table.memories());
-                }
-                *slot = None;
-            }
+    /// The memory and write stamp at `page`, or None when it holds no memory.
+    pub fn memory_stamp(&self, page: PageId) -> Option<(MemoryId, u64)> {
+        self.state
+            .read()
+            .table
+            .records
+            .get(&page.0)
+            .map(|e| (e.id, e.stamp))
+    }
+
+    /// Read and decode every record in the file, independent of the locator
+    /// table, and return (memory id, locator) pairs in locator order. The
+    /// ground truth of what is on disk; used by tests and diagnostics.
+    pub fn scan_all_memories(&self) -> Vec<(MemoryId, PageId)> {
+        let st = self.state.read();
+        let end = st.end;
+        let Ok(file) = self.file.try_clone() else {
+            return Vec::new();
+        };
+        let mut reader = BufReader::with_capacity(1 << 20, file);
+        if reader.seek(SeekFrom::Start(BLOCK_SIZE as u64)).is_err() {
+            return Vec::new();
         }
-
-        let mut pm = self.page_manager.lock();
-        let table = self.scan_table(&mut pm)?;
-        let memories = table.memories();
-        info!(
-            memories = memories.len(),
-            "memory map rebuilt by full page scan"
-        );
-        self.checkpoint_locked(wal, &mut pm, Some(table))?;
-        Ok(memories)
-    }
-
-    /// Build the memory table by reading every page.
-    fn scan_table(&self, pm: &mut PageManager) -> MenteResult<MemoryTable> {
-        pm.reload_header()?;
-        let count = pm.page_count();
-        let mut table = MemoryTable::default();
-        for i in 1..count {
-            let page_id = PageId(i);
-            let Ok(page) = self.buffer_pool.fetch_page(page_id, pm) else {
-                continue;
+        let mut out = Vec::new();
+        let mut at = 1u64;
+        let mut header = [0u8; EXTENT_HEADER_SIZE];
+        while at < end {
+            if reader.read_exact(&mut header).is_err() {
+                break;
+            }
+            self.disk_reads.fetch_add(1, Ordering::Relaxed);
+            let Some(h) = ExtentHeader::decode(&header) else {
+                break;
             };
-            self.buffer_pool.unpin_page(page_id, false).ok();
-            match PageType::from(page.header.page_type) {
-                PageType::Data => {
-                    if let Ok(node) = memory_map::decode_memory(&page.data) {
-                        table.set_scanned(i, node.id);
-                    }
+            let mut rest = vec![0u8; h.blocks as usize * BLOCK_SIZE - EXTENT_HEADER_SIZE];
+            if reader.read_exact(&mut rest).is_err() {
+                break;
+            }
+            if h.kind == ExtentKind::Live {
+                let mut buf = header.to_vec();
+                buf.extend_from_slice(&rest);
+                if let Ok(node) =
+                    record::live_payload(&buf, h.locator).and_then(record::decode_node)
+                {
+                    out.push((node.id, PageId(h.locator)));
                 }
-                PageType::Free => table.set_free(i),
-                _ => {}
             }
+            at += h.blocks as u64;
         }
-        Ok(table)
-    }
-
-    /// The memory and write stamp the persisted map records for `page`, as of
-    /// the last checkpoint. None when the map is not anchored or the page holds
-    /// no memory.
-    pub fn memory_stamp(&self, page: PageId) -> Option<(mentedb_core::types::MemoryId, u64)> {
-        self.map_anchor.lock().as_ref()?.current(page.0)
-    }
-
-    /// Record a logged write in the anchored map's pending set. Called with
-    /// the WAL lock held, right after the append, so it is ordered with the
-    /// checkpoint that later rolls the same entry into the table.
-    fn note_map_write(&self, page: PageId, id: Option<mentedb_core::types::MemoryId>, lsn: u64) {
-        if let Some(anchor) = self.map_anchor.lock().as_mut() {
-            anchor.note_write(page.0, id, lsn);
-        }
-    }
-
-    /// Memory loads served since open, whether the page came from the buffer
-    /// pool or from disk. Counts what a caller asked for, so a test can bound
-    /// the work of an operation independent of cache state.
-    pub fn memory_loads(&self) -> u64 {
-        self.memory_loads.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Pages read from disk since open (buffer pool misses and direct reads).
-    pub fn page_reads(&self) -> u64 {
-        self.page_manager.lock().reads()
-    }
-
-    /// Scan all pages and return (MemoryId, PageId) pairs for every valid memory node.
-    ///
-    /// Refreshes the page count from disk before scanning so pages written by
-    /// other processes are included. Used to rebuild the page map on startup.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use mentedb_storage::StorageEngine;
-    /// # let engine = StorageEngine::open("/tmp/mentedb".as_ref())?;
-    /// let memories = engine.scan_all_memories();
-    /// for (memory_id, page_id) in &memories {
-    ///     println!("{memory_id} -> page {}", page_id.0);
-    /// }
-    /// # Ok::<(), mentedb_core::error::MenteError>(())
-    /// ```
-    pub fn scan_all_memories(&self) -> Vec<(mentedb_core::types::MemoryId, PageId)> {
-        let mut pm = self.page_manager.lock();
-        // Refresh from disk to see pages written by other processes
-        let _ = pm.reload_header();
-        let count = pm.page_count();
-        drop(pm);
-
-        let mut results = Vec::new();
-        for i in 1..count {
-            let page_id = PageId(i);
-            if let Ok(node) = self.load_memory(page_id) {
-                results.push((node.id, page_id));
-            }
-        }
-        results
+        drop(st);
+        out.sort_by_key(|(_, p)| *p);
+        out
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::memory_map::MappedMemory;
-    use mentedb_core::memory::MemoryType;
-    use mentedb_core::types::AgentId;
-
-    fn setup() -> (tempfile::TempDir, StorageEngine) {
-        let dir = tempfile::tempdir().unwrap();
-        let engine = StorageEngine::open(dir.path()).unwrap();
-        (dir, engine)
-    }
-
-    #[test]
-    fn test_allocate_write_read() {
-        let (_dir, engine) = setup();
-
-        let pid = engine.allocate_page().unwrap();
-        engine.write_page(pid, b"hello storage engine").unwrap();
-
-        let page = engine.read_page(pid).unwrap();
-        assert_eq!(&page.data[..20], b"hello storage engine");
-        engine.buffer_pool.unpin_page(pid, false).ok();
-    }
-
-    #[test]
-    fn test_store_and_load_memory() {
-        let (_dir, engine) = setup();
-
-        let node = MemoryNode::new(
-            AgentId::new(),
-            MemoryType::Episodic,
-            "The user prefers Rust over Go".to_string(),
-            vec![0.1, 0.2, 0.3, 0.4],
-        );
-
-        let page_id = engine.store_memory(&node).unwrap();
-        let loaded = engine.load_memory(page_id).unwrap();
-
-        assert_eq!(node.id, loaded.id);
-        assert_eq!(node.content, loaded.content);
-        assert_eq!(node.embedding, loaded.embedding);
-        assert_eq!(node.memory_type, loaded.memory_type);
-    }
-
-    #[test]
-    fn test_checkpoint() {
-        let (_dir, engine) = setup();
-
-        let node = MemoryNode::new(
-            AgentId::new(),
-            MemoryType::Semantic,
-            "checkpoint test".to_string(),
-            vec![1.0, 2.0],
-        );
-
-        let pid = engine.store_memory(&node).unwrap();
-        engine.checkpoint().unwrap();
-
-        let loaded = engine.load_memory(pid).unwrap();
-        assert_eq!(loaded.content, "checkpoint test");
-    }
-
-    #[test]
-    fn test_close_and_reopen() {
-        let dir = tempfile::tempdir().unwrap();
-        let pid;
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let node = MemoryNode::new(
-                AgentId::new(),
-                MemoryType::Procedural,
-                "persist across close".to_string(),
-                vec![0.5],
-            );
-            pid = engine.store_memory(&node).unwrap();
-            engine.close().unwrap();
-        }
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let loaded = engine.load_memory(pid).unwrap();
-            assert_eq!(loaded.content, "persist across close");
-        }
-    }
-
-    #[test]
-    fn test_crash_recovery() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut ids = Vec::new();
-        let mut contents = Vec::new();
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            for i in 0..3 {
-                let content = format!("crash-recovery-{i}");
-                let node = MemoryNode::new(
-                    AgentId::new(),
-                    MemoryType::Episodic,
-                    content.clone(),
-                    vec![i as f32],
-                );
-                let pid = engine.store_memory(&node).unwrap();
-                ids.push(pid);
-                contents.push(content);
-            }
-            // Simulate crash: sync the WAL but do NOT call close/checkpoint.
-            engine.wal.lock().sync().unwrap();
-        }
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            for (pid, expected) in ids.iter().zip(contents.iter()) {
-                let loaded = engine.load_memory(*pid).unwrap();
-                assert_eq!(&loaded.content, expected);
-            }
-        }
-    }
-
-    #[test]
-    fn test_recovery_idempotent() {
-        let dir = tempfile::tempdir().unwrap();
-        let pid;
-        let content = "idempotent-check".to_string();
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let node = MemoryNode::new(
-                AgentId::new(),
-                MemoryType::Semantic,
-                content.clone(),
-                vec![1.0, 2.0],
-            );
-            pid = engine.store_memory(&node).unwrap();
-            engine.checkpoint().unwrap();
-            engine.close().unwrap();
-        }
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let loaded = engine.load_memory(pid).unwrap();
-            assert_eq!(loaded.content, content);
-        }
-    }
-
-    #[test]
-    fn test_partial_write_recovery() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut ids = Vec::new();
-        let mut contents = Vec::new();
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            for i in 0..3 {
-                let content = format!("checkpointed-{i}");
-                let node = MemoryNode::new(
-                    AgentId::new(),
-                    MemoryType::Semantic,
-                    content.clone(),
-                    vec![i as f32],
-                );
-                let pid = engine.store_memory(&node).unwrap();
-                ids.push(pid);
-                contents.push(content);
-            }
-            engine.checkpoint().unwrap();
-
-            for i in 3..5 {
-                let content = format!("unckeckpointed-{i}");
-                let node = MemoryNode::new(
-                    AgentId::new(),
-                    MemoryType::Episodic,
-                    content.clone(),
-                    vec![i as f32],
-                );
-                let pid = engine.store_memory(&node).unwrap();
-                ids.push(pid);
-                contents.push(content);
-            }
-            // Simulate crash — sync WAL but don't close.
-            engine.wal.lock().sync().unwrap();
-        }
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            for (pid, expected) in ids.iter().zip(contents.iter()) {
-                let loaded = engine.load_memory(*pid).unwrap();
-                assert_eq!(&loaded.content, expected);
-            }
-        }
-    }
-
-    #[test]
-    fn test_delete_memory_durable() {
-        let dir = tempfile::tempdir().unwrap();
-        let pid;
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let node = MemoryNode::new(
-                AgentId::new(),
-                MemoryType::Semantic,
-                "to be deleted".to_string(),
-                vec![1.0],
-            );
-            pid = engine.store_memory(&node).unwrap();
-            engine.delete_memory(pid).unwrap();
-            assert!(engine.load_memory(pid).is_err());
-            assert!(engine.scan_all_memories().is_empty());
-            engine.close().unwrap();
-        }
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            assert!(
-                engine.load_memory(pid).is_err(),
-                "deleted memory must not resurrect on reopen"
-            );
-            assert!(engine.scan_all_memories().is_empty());
-        }
-    }
-
-    #[test]
-    fn test_delete_survives_crash() {
-        let dir = tempfile::tempdir().unwrap();
-        let pid;
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let node = MemoryNode::new(
-                AgentId::new(),
-                MemoryType::Semantic,
-                "crash delete".to_string(),
-                vec![1.0],
-            );
-            pid = engine.store_memory(&node).unwrap();
-            engine.delete_memory(pid).unwrap();
-            // Simulate crash: no close, no checkpoint.
-        }
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            assert!(
-                engine.load_memory(pid).is_err(),
-                "deletion must survive a crash via WAL replay"
-            );
-            assert!(engine.scan_all_memories().is_empty());
-        }
-    }
-
-    #[test]
-    fn test_deleted_page_reused() {
-        let (_dir, engine) = setup();
-
-        let a = MemoryNode::new(AgentId::new(), MemoryType::Semantic, "a".into(), vec![1.0]);
-        let pid_a = engine.store_memory(&a).unwrap();
-        engine.delete_memory(pid_a).unwrap();
-
-        let b = MemoryNode::new(AgentId::new(), MemoryType::Semantic, "b".into(), vec![2.0]);
-        let pid_b = engine.store_memory(&b).unwrap();
-        assert_eq!(pid_a, pid_b, "freed page should be reused");
-
-        let loaded = engine.load_memory(pid_b).unwrap();
-        assert_eq!(loaded.content, "b");
-    }
-
-    #[test]
-    fn test_delete_reuse_crash_recovery() {
-        let dir = tempfile::tempdir().unwrap();
-        let pid;
-        let b_id;
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let a = MemoryNode::new(AgentId::new(), MemoryType::Semantic, "a".into(), vec![1.0]);
-            pid = engine.store_memory(&a).unwrap();
-            engine.delete_memory(pid).unwrap();
-            let b = MemoryNode::new(AgentId::new(), MemoryType::Semantic, "b".into(), vec![2.0]);
-            let pid_b = engine.store_memory(&b).unwrap();
-            assert_eq!(pid, pid_b);
-            b_id = b.id;
-            // Simulate crash: the WAL now holds PageFree(p) then PageWrite(p).
-        }
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let loaded = engine.load_memory(pid).unwrap();
-            assert_eq!(loaded.content, "b", "later write must win over the free");
-            assert_eq!(loaded.id, b_id);
-            // The page must NOT be on the free list: a fresh allocation must
-            // not clobber b.
-            let c = MemoryNode::new(AgentId::new(), MemoryType::Semantic, "c".into(), vec![3.0]);
-            let pid_c = engine.store_memory(&c).unwrap();
-            assert_ne!(pid_c, pid, "recovered free list must exclude reused page");
-            assert_eq!(engine.load_memory(pid).unwrap().content, "b");
-        }
-    }
-
-    #[test]
-    fn test_update_memory_in_place() {
-        let dir = tempfile::tempdir().unwrap();
-        let pid;
-        let id;
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let mut node = MemoryNode::new(
-                AgentId::new(),
-                MemoryType::Semantic,
-                "original".to_string(),
-                vec![1.0],
-            );
-            pid = engine.store_memory(&node).unwrap();
-            id = node.id;
-
-            node.content = "updated".to_string();
-            engine.update_memory(pid, &node).unwrap();
-
-            let loaded = engine.load_memory(pid).unwrap();
-            assert_eq!(loaded.content, "updated");
-            // No orphan copy: exactly one entry in a full scan.
-            let scanned = engine.scan_all_memories();
-            assert_eq!(scanned.len(), 1);
-            engine.close().unwrap();
-        }
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let loaded = engine.load_memory(pid).unwrap();
-            assert_eq!(loaded.content, "updated");
-            assert_eq!(loaded.id, id);
-            assert_eq!(engine.scan_all_memories().len(), 1);
-        }
-    }
-
-    #[test]
-    fn test_concurrent_open_is_rejected() {
-        let dir = tempfile::tempdir().unwrap();
-
-        // The per operation flock serializes individual write transactions,
-        // but layers above the storage engine cache state across operations,
-        // so a second concurrent engine rolls the database back to its own
-        // open time snapshot. The process lock must refuse it.
-        let engine1 = StorageEngine::open(dir.path()).unwrap();
-        let second = StorageEngine::open(dir.path());
-        assert!(second.is_err(), "second concurrent open must fail");
-        let msg = second.err().unwrap().to_string();
-        assert!(msg.contains("locked"), "error names the lock: {msg}");
-
-        // Close releases the lock; the directory can be opened again.
-        engine1.close().unwrap();
-        let engine2 = StorageEngine::open(dir.path()).unwrap();
-        engine2.close().unwrap();
-    }
-
-    #[test]
-    fn test_concurrent_writes_from_threads() {
-        use std::sync::Arc;
-        let dir = tempfile::tempdir().unwrap();
-        let engine = Arc::new(StorageEngine::open(dir.path()).unwrap());
-
-        let handles: Vec<_> = (0..10)
-            .map(|i| {
-                let eng = Arc::clone(&engine);
-                std::thread::spawn(move || {
-                    let node = MemoryNode::new(
-                        AgentId::new(),
-                        MemoryType::Episodic,
-                        format!("thread-{i}"),
-                        vec![i as f32],
-                    );
-                    eng.store_memory(&node).unwrap()
-                })
-            })
-            .collect();
-
-        let pids: Vec<PageId> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-
-        // All 10 writes succeeded and are readable
-        for (i, pid) in pids.iter().enumerate() {
-            let loaded = engine.load_memory(*pid).unwrap();
-            assert_eq!(loaded.content, format!("thread-{i}"));
-        }
-    }
-
-    // ---- persisted memory map ----
-
-    fn node(content: &str) -> MemoryNode {
-        MemoryNode::new(
-            AgentId::new(),
-            MemoryType::Semantic,
-            content.to_string(),
-            vec![1.0, 2.0],
-        )
-    }
-
-    /// (memory id, page) pairs, the part of the map a full scan can confirm.
-    fn ids(map: &[MappedMemory]) -> Vec<(mentedb_core::types::MemoryId, PageId)> {
-        map.iter().map(|m| (m.id, m.page)).collect()
-    }
-
-    /// Open a second, independent engine over the same files after `engine`
-    /// crashed, and return what a full page scan sees there.
-    fn scan_truth(dir: &Path) -> Vec<(mentedb_core::types::MemoryId, PageId)> {
-        let engine = StorageEngine::open(dir).unwrap();
-        let scanned = engine.scan_all_memories();
-        engine.release_process_lock();
-        scanned
-    }
-
-    #[test]
-    fn open_after_checkpoint_reads_no_pages() {
-        let dir = tempfile::tempdir().unwrap();
-        let n = 300;
-        let mut stored = Vec::new();
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            for i in 0..n {
-                let m = node(&format!("m{i}"));
-                let pid = engine.store_memory(&m).unwrap();
-                stored.push((m.id, pid));
-            }
-            // First map request scans once and persists the map.
-            assert_eq!(ids(&engine.memory_map().unwrap()), stored);
-            engine.checkpoint().unwrap();
-            engine.close().unwrap();
-        }
-        let engine = StorageEngine::open(dir.path()).unwrap();
-        let map = engine.memory_map().unwrap();
-        assert_eq!(ids(&map), stored);
-        assert_eq!(
-            engine.page_reads(),
-            0,
-            "open must serve the map from the snapshot, not by reading {n} pages"
-        );
-    }
-
-    #[test]
-    fn open_replays_only_wal_pages_after_crash() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut stored = Vec::new();
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            for i in 0..200 {
-                let m = node(&format!("base{i}"));
-                stored.push((m.id, engine.store_memory(&m).unwrap()));
-            }
-            engine.memory_map().unwrap();
-            engine.checkpoint().unwrap();
-            for i in 0..5 {
-                let m = node(&format!("after{i}"));
-                stored.push((m.id, engine.store_memory(&m).unwrap()));
-            }
-            // Crash: nothing flushed or checkpointed beyond the WAL fsync.
-            engine.release_process_lock();
-        }
-        let engine = StorageEngine::open(dir.path()).unwrap();
-        let map = engine.memory_map().unwrap();
-        assert_eq!(ids(&map), stored, "uncheckpointed stores survive the crash");
-        assert_eq!(
-            engine.page_reads(),
-            5,
-            "replay reads the 5 WAL pages only, not the 200 checkpointed ones"
-        );
-        engine.release_process_lock();
-        assert_eq!(scan_truth(dir.path()), stored);
-    }
-
-    #[test]
-    fn deletes_and_updates_after_checkpoint_are_replayed() {
-        let dir = tempfile::tempdir().unwrap();
-        let (keep, gone, updated);
-        let updated_pid;
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let k = node("keep");
-            let g = node("gone");
-            let mut u = node("old");
-            let kp = engine.store_memory(&k).unwrap();
-            let gp = engine.store_memory(&g).unwrap();
-            updated_pid = engine.store_memory(&u).unwrap();
-            engine.memory_map().unwrap();
-            engine.checkpoint().unwrap();
-            engine.delete_memory(gp).unwrap();
-            u.content = "new".into();
-            engine.update_memory(updated_pid, &u).unwrap();
-            keep = (k.id, kp);
-            gone = g.id;
-            updated = u.id;
-            engine.release_process_lock();
-        }
-        let engine = StorageEngine::open(dir.path()).unwrap();
-        let map = engine.memory_map().unwrap();
-        assert!(
-            map.iter().all(|m| m.id != gone),
-            "deleted memory stays deleted"
-        );
-        assert!(ids(&map).contains(&keep));
-        assert!(ids(&map).contains(&(updated, updated_pid)));
-        assert_eq!(engine.load_memory(updated_pid).unwrap().content, "new");
-        assert_eq!(map.len(), 2);
-        engine.release_process_lock();
-        assert_eq!(scan_truth(dir.path()), ids(&map));
-    }
-
-    #[test]
-    fn free_list_reuse_after_checkpoint_maps_the_new_memory() {
-        let dir = tempfile::tempdir().unwrap();
-        let (a_id, b_id, pid);
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let a = node("a");
-            pid = engine.store_memory(&a).unwrap();
-            engine.store_memory(&node("other")).unwrap();
-            engine.memory_map().unwrap();
-            engine.checkpoint().unwrap();
-            engine.delete_memory(pid).unwrap();
-            let b = node("b");
-            assert_eq!(engine.store_memory(&b).unwrap(), pid, "freed page reused");
-            a_id = a.id;
-            b_id = b.id;
-            engine.release_process_lock();
-        }
-        let engine = StorageEngine::open(dir.path()).unwrap();
-        let map = engine.memory_map().unwrap();
-        assert!(
-            map.iter().all(|m| m.id != a_id),
-            "no stale id for the reused page"
-        );
-        assert!(ids(&map).contains(&(b_id, pid)));
-        // The reused page is not on the rebuilt free list.
-        let c = node("c");
-        assert_ne!(engine.store_memory(&c).unwrap(), pid);
-        assert_eq!(engine.load_memory(pid).unwrap().id, b_id);
-        engine.release_process_lock();
-        let truth = scan_truth(dir.path());
-        assert!(truth.contains(&(b_id, pid)));
-        assert!(truth.iter().all(|(id, _)| *id != a_id));
-    }
-
-    #[test]
-    fn free_list_rebuilt_from_map_after_crash() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut freed = Vec::new();
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let mut pids = Vec::new();
-            for i in 0..50 {
-                pids.push(engine.store_memory(&node(&format!("m{i}"))).unwrap());
-            }
-            engine.delete_memory(pids[3]).unwrap();
-            freed.push(pids[3]);
-            engine.memory_map().unwrap();
-            engine.checkpoint().unwrap();
-            engine.delete_memory(pids[7]).unwrap();
-            freed.push(pids[7]);
-            engine.release_process_lock();
-        }
-        let engine = StorageEngine::open(dir.path()).unwrap();
-        // One replayed free plus verification reads of the two free pages,
-        // not a scan of all 50.
-        assert!(engine.page_reads() <= 3, "reads {}", engine.page_reads());
-        let a = engine.store_memory(&node("x")).unwrap();
-        let b = engine.store_memory(&node("y")).unwrap();
-        let mut got = vec![a, b];
-        got.sort_by_key(|p| p.0);
-        assert_eq!(got, freed, "both freed pages are reusable after recovery");
-        let c = engine.store_memory(&node("z")).unwrap();
-        assert_eq!(c, PageId(51), "then allocation grows the file");
-    }
-
-    #[test]
-    fn missing_corrupt_or_stale_snapshot_falls_back_to_scan() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut stored = Vec::new();
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            for i in 0..40 {
-                let m = node(&format!("m{i}"));
-                stored.push((m.id, engine.store_memory(&m).unwrap()));
-            }
-            engine.memory_map().unwrap();
-            engine.checkpoint().unwrap();
-            engine.close().unwrap();
-        }
-        let snap = dir.path().join(memory_map::MEMORY_MAP_FILE);
-        let good = std::fs::read(&snap).unwrap();
-
-        let check = |label: &str| {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let map = engine.memory_map().unwrap();
-            assert_eq!(ids(&map), stored, "{label}: same result as a scan");
-            assert!(
-                engine.page_reads() >= 40,
-                "{label}: must have scanned, read {}",
-                engine.page_reads()
-            );
-            engine.close().unwrap();
-            // The scan re-persisted a valid map.
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            assert_eq!(ids(&engine.memory_map().unwrap()), stored);
-            assert_eq!(engine.page_reads(), 0, "{label}: next open is fast again");
-            engine.close().unwrap();
-        };
-
-        std::fs::remove_file(&snap).unwrap();
-        check("missing");
-
-        let mut bad = std::fs::read(&snap).unwrap();
-        let mid = bad.len() / 2;
-        bad[mid] ^= 0x55;
-        std::fs::write(&snap, &bad).unwrap();
-        check("corrupt");
-
-        // Stale: a snapshot from an earlier checkpoint whose token has left
-        // the WAL, even though the file itself is intact.
-        std::fs::write(&snap, &good).unwrap();
-        check("stale");
-    }
-
-    #[test]
-    fn stale_snapshot_with_unchanged_token_reuse_is_never_matched() {
-        // A checkpoint whose snapshot write is skipped (no map) must not let an
-        // older snapshot match afterwards: deletes after it would resurrect.
-        let dir = tempfile::tempdir().unwrap();
-        let (a, b);
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            let na = node("a");
-            let nb = node("b");
-            a = engine.store_memory(&na).unwrap();
-            b = (nb.id, engine.store_memory(&nb).unwrap());
-            engine.memory_map().unwrap();
-            engine.checkpoint().unwrap();
-            // Drop the anchor as if the map were never loaded, then change the
-            // map and checkpoint without persisting it.
-            *engine.map_anchor.lock() = None;
-            engine.delete_memory(a).unwrap();
-            engine.checkpoint().unwrap();
-            engine.close().unwrap();
-        }
-        let engine = StorageEngine::open(dir.path()).unwrap();
-        assert_eq!(ids(&engine.memory_map().unwrap()), vec![b]);
-    }
-
-    #[test]
-    fn handoff_between_handles_sees_writes_and_checkpoints() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut stored = Vec::new();
-        // Handle 1 builds the map and exits cleanly.
-        {
-            let e1 = StorageEngine::open(dir.path()).unwrap();
-            for i in 0..20 {
-                let m = node(&format!("h1-{i}"));
-                stored.push((m.id, e1.store_memory(&m).unwrap()));
-            }
-            e1.memory_map().unwrap();
-            e1.checkpoint().unwrap();
-            e1.close().unwrap();
-        }
-        // Handle 2 (another process taking over) writes, checkpoints, writes
-        // more, then dies.
-        {
-            let e2 = StorageEngine::open(dir.path()).unwrap();
-            e2.memory_map().unwrap();
-            for i in 0..10 {
-                let m = node(&format!("h2-{i}"));
-                stored.push((m.id, e2.store_memory(&m).unwrap()));
-            }
-            e2.checkpoint().unwrap();
-            e2.delete_memory(stored[0].1).unwrap();
-            stored.remove(0);
-            let m = node("h2-last");
-            stored.push((m.id, e2.store_memory(&m).unwrap()));
-            e2.release_process_lock();
-        }
-        // Handle 3 reopens and sees all of it.
-        let e3 = StorageEngine::open(dir.path()).unwrap();
-        let mut got = ids(&e3.memory_map().unwrap());
-        got.sort_by_key(|(_, p)| p.0);
-        stored.sort_by_key(|(_, p)| p.0);
-        assert_eq!(got, stored);
-        assert!(e3.page_reads() < 10, "reads {}", e3.page_reads());
-        e3.release_process_lock();
-        assert_eq!(scan_truth(dir.path()), stored);
-    }
-
-    #[test]
-    fn live_stamps_survive_checkpoint_and_crash_replay() {
-        let dir = tempfile::tempdir().unwrap();
-        let (b_page, b_live);
-        {
-            let engine = StorageEngine::open(dir.path()).unwrap();
-            engine.store_memory(&node("a")).unwrap();
-            engine.memory_map().unwrap();
-            engine.checkpoint().unwrap();
-            // A write after the checkpoint has its stamp before any checkpoint.
-            let c = engine.store_memory(&node("c")).unwrap();
-            let c_live = engine.memory_stamp(c).unwrap();
-            engine.checkpoint().unwrap();
-            assert_eq!(
-                engine.memory_stamp(c).unwrap(),
-                c_live,
-                "checkpoint keeps it"
-            );
-            b_page = engine.store_memory(&node("b")).unwrap();
-            b_live = engine.memory_stamp(b_page).unwrap();
-            engine.release_process_lock();
-        }
-        let engine = StorageEngine::open(dir.path()).unwrap();
-        let map = engine.memory_map().unwrap();
-        let b = map.iter().find(|m| m.page == b_page).unwrap();
-        assert_eq!(
-            (b.id, b.stamp),
-            b_live,
-            "WAL replay reproduces the live stamp"
-        );
-    }
-
-    #[test]
-    fn unchanged_checkpoints_keep_the_snapshot_and_stamps() {
-        let dir = tempfile::tempdir().unwrap();
-        let engine = StorageEngine::open(dir.path()).unwrap();
-        let pid = engine.store_memory(&node("a")).unwrap();
-        engine.memory_map().unwrap();
-        engine.checkpoint().unwrap();
-        let snap = dir.path().join(memory_map::MEMORY_MAP_FILE);
-        let before = std::fs::metadata(&snap).unwrap().modified().unwrap();
-        let stamp = engine.memory_stamp(pid).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        engine.checkpoint().unwrap();
-        engine.checkpoint().unwrap();
-        assert_eq!(
-            std::fs::metadata(&snap).unwrap().modified().unwrap(),
-            before
-        );
-        assert_eq!(engine.memory_stamp(pid).unwrap(), stamp);
-        // A write to the page changes its stamp at the next checkpoint.
-        let mut n = engine.load_memory(pid).unwrap();
-        n.content = "b".into();
-        engine.update_memory(pid, &n).unwrap();
-        engine.checkpoint().unwrap();
-        assert_ne!(engine.memory_stamp(pid).unwrap().1, stamp.1);
-        engine.close().unwrap();
-        let engine = StorageEngine::open(dir.path()).unwrap();
-        let map = engine.memory_map().unwrap();
-        assert_eq!(map[0].stamp, engine.memory_stamp(pid).unwrap().1);
-    }
-}
+mod tests;

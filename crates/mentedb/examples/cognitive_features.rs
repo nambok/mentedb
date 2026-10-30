@@ -154,10 +154,8 @@ fn demonstrate_phantom_detection() {
     println!("Detected {} phantom memories:", phantoms.len());
     for phantom in &phantoms {
         println!(
-            "  [{}] gap: '{}', source: '{}'",
-            format!("{:?}", phantom.priority),
-            phantom.gap_description,
-            phantom.source_reference
+            "  [{:?}] gap: '{}', source: '{}'",
+            phantom.priority, phantom.gap_description, phantom.source_reference
         );
     }
 
