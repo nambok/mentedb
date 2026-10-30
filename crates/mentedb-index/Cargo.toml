@@ -20,11 +20,11 @@ tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
-rand = "0.9"
+rand = "0.10"
 bincode = "1"
 
 [dev-dependencies]
-rand = "0.9"
+rand = "0.10"
 tempfile = { workspace = true }
 uuid = { workspace = true }
 

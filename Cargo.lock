@@ -2521,7 +2521,7 @@ dependencies = [
  "bytemuck",
  "mentedb-core",
  "parking_lot",
- "rand 0.9.5",
+ "rand 0.10.3",
  "roaring",
  "serde",
  "serde_json",
