@@ -15,6 +15,9 @@ use crate::page::{PAGE_DATA_SIZE, Page, PageId, PageManager, PageType};
 use crate::wal::{Wal, WalEntryType};
 /// Default number of page frames in the buffer pool.
 const DEFAULT_BUFFER_POOL_SIZE: usize = 1024;
+/// Data file of the record storage format that replaces the page file. Its
+/// presence means the directory was migrated by a newer engine.
+const NEWER_FORMAT_FILE: &str = "records.db";
 
 /// Auto-checkpoint when WAL file exceeds this size (8 MB).
 const WAL_AUTO_CHECKPOINT_BYTES: u64 = 8 * 1024 * 1024;
@@ -105,6 +108,19 @@ impl StorageEngine {
                     path.display()
                 )));
             }
+        }
+
+        // A newer engine migrates this layout into a record file and moves the
+        // page file aside. Opening such a directory here would find no page
+        // file and create an empty database, silently hiding every memory and
+        // taking writes that the newer engine never sees. Refuse instead, so a
+        // rollback or a mixed version fleet fails loudly and loses nothing.
+        if path.join(NEWER_FORMAT_FILE).exists() {
+            return Err(MenteError::Storage(format!(
+                "database directory {} uses a newer storage format ({NEWER_FORMAT_FILE}); \
+                 open it with a newer version of mentedb",
+                path.display()
+            )));
         }
 
         let page_manager = PageManager::open(path)?;
@@ -900,6 +916,22 @@ impl StorageEngine {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn refuses_a_directory_migrated_to_the_newer_format() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(NEWER_FORMAT_FILE), b"record database").unwrap();
+        let err = match StorageEngine::open(dir.path()) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("a migrated directory must not open as an empty page database"),
+        };
+        assert!(err.contains("newer storage format"), "{err}");
+        assert!(
+            !dir.path().join("pages.db").exists(),
+            "no empty page file may be created beside the record database"
+        );
+    }
+
     use super::*;
     use crate::memory_map::MappedMemory;
     use mentedb_core::memory::MemoryType;
