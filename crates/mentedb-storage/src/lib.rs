@@ -1,17 +1,21 @@
-//! MenteDB Storage Engine: page-based storage with WAL and buffer pool.
+//! MenteDB Storage Engine: compact record storage with WAL and record cache.
 //!
 //! This crate implements the low-level storage engine:
-//! - **Page manager**: file-backed 64KB pages with free-list allocation
-//! - **Write-ahead log (WAL)**: append-only, CRC-checked, LZ4-compressed entries
-//! - **Buffer pool**: fixed-capacity page cache with CLOCK eviction
-//! - **Storage engine**: unified facade for memory node persistence
+//! - **Record file**: variable length memory records packed into 512 byte
+//!   blocks, so the file is about the size of the data
+//! - **Locator table**: stable record ids resolved in memory, persisted at
+//!   checkpoints and replayed forward from the WAL on open
+//! - **Write-ahead log (WAL)**: append-only, CRC-checked, LZ4-compressed
+//!   entries that redo every record write byte for byte
+//! - **Record cache**: decoded records bounded by a configurable byte budget
+//! - **Migration**: databases in the old 64 KB page layout are compacted into
+//!   the record layout on open, atomically
 //!
 //! # Concurrency
 //!
-//! Multiple processes can open the same database directory simultaneously.
-//! Writes are serialized via `flock(2)` on the WAL file; reads are lock-free.
-//! In-memory state (page count, LSN counter) is refreshed from disk under the
-//! flock so no process acts on stale data.
+//! One process per database directory, enforced by an exclusive lock on a
+//! LOCK file (fcntl OFD lock, honored across hosts on NFSv4). Writes are
+//! serialized inside the process; reads run concurrently.
 //!
 //! # Example
 //!
@@ -39,22 +43,25 @@
 
 /// Snapshot backup utilities.
 pub mod backup;
-/// Fixed capacity page cache with CLOCK eviction.
-pub mod buffer;
+/// Byte bounded cache of decoded records with CLOCK eviction.
+pub mod cache;
 /// Unified storage facade for memory persistence.
 pub mod engine;
+/// Migration from the 64 KB page file layout.
+pub mod legacy;
 /// Cross-host single-writer lock (fcntl OFD locks on Linux/EFS).
 mod lock;
-/// Persisted memory id to page id map, replayed forward from the WAL on open.
+/// Persisted locator table, replayed forward from the WAL on open.
 pub mod memory_map;
-/// File backed 64KB page manager with free list allocation.
-pub mod page;
+/// Record file format: extents of 512 byte blocks, payload codec, allocator.
+pub mod record;
 /// Append only write ahead log with CRC checks and LZ4 compression.
 pub mod wal;
 
 // Re-export key types at crate root for convenience.
-pub use buffer::{BufferPool, BufferStats};
+pub use cache::{BufferStats, RecordCache};
 pub use engine::StorageEngine;
+pub use legacy::MigrationReport;
 pub use memory_map::MappedMemory;
-pub use page::{PAGE_DATA_SIZE, PAGE_SIZE, Page, PageHeader, PageId, PageType};
+pub use record::{BLOCK_SIZE, PageId};
 pub use wal::{Lsn, Wal, WalEntry, WalEntryType};

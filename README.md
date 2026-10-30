@@ -443,9 +443,9 @@ graph TD
     end
 
     subgraph Storage["Storage Engine"]
-        BUF["Buffer Pool<br/>CLOCK eviction"]
+        BUF["Record Cache<br/>byte bounded, CLOCK"]
         WAL["Write Ahead Log<br/>LZ4, crash safe"]
-        PAGE["Page Manager<br/>64KB pages"]
+        PAGE["Record File<br/>512 byte blocks"]
     end
 
     GRPC --> ROUTE
@@ -707,7 +707,7 @@ MenteDB is organized as a Cargo workspace with 14 crates:
 |-------|-------------|
 | `mentedb` | Facade crate with full cognitive engine (12 subsystems wired in) |
 | `mentedb-core` | Types (MemoryNode, MemoryEdge), newtype IDs, errors, config |
-| `mentedb-storage` | Page based storage engine with crash safe WAL, buffer pool, LZ4 |
+| `mentedb-storage` | Compact record storage engine with crash safe WAL, record cache, LZ4 |
 | `mentedb-index` | HNSW vector index (bounded, concurrent), roaring bitmaps, temporal index |
 | `mentedb-graph` | CSR/CSC knowledge graph with BFS/DFS and contradiction detection |
 | `mentedb-query` | MQL parser with AND/OR/NOT, grouping, and ORDER BY |

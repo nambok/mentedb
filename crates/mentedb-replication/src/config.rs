@@ -128,38 +128,48 @@ mod tests {
 
     #[test]
     fn test_validate_empty_cluster_id() {
-        let mut config = ReplicationConfig::default();
-        config.cluster_id = String::new();
+        let config = ReplicationConfig {
+            cluster_id: String::new(),
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_validate_zero_heartbeat() {
-        let mut config = ReplicationConfig::default();
-        config.heartbeat_interval_ms = 0;
+        let config = ReplicationConfig {
+            heartbeat_interval_ms: 0,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_validate_election_timeout_order() {
-        let mut config = ReplicationConfig::default();
-        config.election_timeout_min_ms = 100;
-        config.election_timeout_max_ms = 50;
+        let config = ReplicationConfig {
+            election_timeout_min_ms: 100,
+            election_timeout_max_ms: 50,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_validate_election_less_than_heartbeat() {
-        let mut config = ReplicationConfig::default();
-        config.heartbeat_interval_ms = 500;
-        config.election_timeout_min_ms = 200;
+        let config = ReplicationConfig {
+            heartbeat_interval_ms: 500,
+            election_timeout_min_ms: 200,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_validate_zero_snapshot_threshold() {
-        let mut config = ReplicationConfig::default();
-        config.snapshot_threshold = 0;
+        let config = ReplicationConfig {
+            snapshot_threshold: 0,
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 

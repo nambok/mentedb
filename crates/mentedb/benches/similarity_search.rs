@@ -25,7 +25,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 /// Pre-populate a database with `count` memories and return (db, tmpdir, embeddings).
 fn setup_db(count: usize) -> (MenteDb, TempDir, Vec<Vec<f32>>) {
     let tmp = TempDir::new().unwrap();
-    let mut db = MenteDb::open(tmp.path()).unwrap();
+    let db = MenteDb::open(tmp.path()).unwrap();
     let mut embeddings = Vec::with_capacity(count);
     for i in 0..count {
         let emb = generate_embedding(128, i as u64);
@@ -45,7 +45,7 @@ fn bench_similarity_search(c: &mut Criterion) {
     let mut group = c.benchmark_group("similarity_search");
 
     for count in [100, 1_000, 10_000] {
-        let (mut db, _tmp, embeddings) = setup_db(count);
+        let (db, _tmp, embeddings) = setup_db(count);
         let query = generate_embedding(128, 999_999);
 
         group.bench_with_input(

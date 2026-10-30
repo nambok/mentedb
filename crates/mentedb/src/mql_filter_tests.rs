@@ -553,7 +553,7 @@ fn temporal_scan_honors_order_by() {
     );
     assert_eq!(ids(db, &q), want, "{q}");
 
-    nodes.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    nodes.sort_by_key(|n| std::cmp::Reverse(n.created_at));
     let want: Vec<MemoryId> = nodes.iter().take(5).map(|n| n.id).collect();
     let q = format!(
         "RECALL memories WHERE created >= {t} AND type != correction ORDER BY created DESC LIMIT 5"

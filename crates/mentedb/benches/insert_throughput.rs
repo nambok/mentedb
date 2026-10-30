@@ -21,7 +21,7 @@ fn bench_insert(c: &mut Criterion) {
                     let db = MenteDb::open(tmp.path()).unwrap();
                     (db, tmp)
                 },
-                |(mut db, _tmp)| {
+                |(db, _tmp)| {
                     for i in 0..count {
                         let emb = generate_embedding(128, i as u64);
                         let node = MemoryNode::new(

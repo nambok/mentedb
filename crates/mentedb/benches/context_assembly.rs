@@ -16,7 +16,7 @@ fn generate_embedding(dim: usize, seed: u64) -> Vec<f32> {
 /// Returns the db, tmpdir, and a query embedding for searching.
 fn setup_db(count: usize) -> (MenteDb, TempDir) {
     let tmp = TempDir::new().unwrap();
-    let mut db = MenteDb::open(tmp.path()).unwrap();
+    let db = MenteDb::open(tmp.path()).unwrap();
     for i in 0..count {
         let emb = generate_embedding(128, i as u64);
         let node = MemoryNode::new(
@@ -39,7 +39,7 @@ fn bench_context_assembly(c: &mut Criterion) {
     };
 
     for count in [100, 1_000, 10_000] {
-        let (mut db, _tmp) = setup_db(count);
+        let (db, _tmp) = setup_db(count);
         let query = generate_embedding(128, 999_999);
 
         group.bench_with_input(

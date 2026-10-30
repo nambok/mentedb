@@ -46,7 +46,7 @@ fn mixed_node(i: usize) -> MemoryNode {
     );
     node.created_at = BASE_TS + i as u64;
     node.tags = vec![format!("g{}", i % 5)];
-    if i % 2 == 0 {
+    if i.is_multiple_of(2) {
         node.tags.push("even".into());
     }
     let spread = (i as f32 + 1.0) / 1000.0;

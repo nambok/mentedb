@@ -51,7 +51,7 @@ fn bench_storage_write(c: &mut Criterion) {
                 let memories: Vec<MemoryNode> = (0..1000).map(make_memory).collect();
                 (dir, engine, memories)
             },
-            |(_dir, mut engine, memories)| {
+            |(_dir, engine, memories)| {
                 for mem in &memories {
                     black_box(engine.store_memory(mem).unwrap());
                 }
