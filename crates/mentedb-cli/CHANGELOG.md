@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.0](https://github.com/nambok/mentedb/compare/mentedb-cli-v0.46.0...mentedb-cli-v0.47.0) - 2026-11-05
+
+### Other
+
+- update Cargo.lock dependencies
+
 ## [0.45.0](https://github.com/nambok/mentedb/compare/mentedb-cli-v0.44.1...mentedb-cli-v0.45.0) - 2026-10-30
 
 ### Other
