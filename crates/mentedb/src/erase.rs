@@ -273,6 +273,7 @@ impl MenteDb {
         };
         finish.write(&self.path)?;
 
+        let erasing: HashSet<MemoryId> = plan.order.iter().map(|(m, _)| *m).collect();
         let mut erased = Vec::with_capacity(plan.order.len());
         let mut owners = HashSet::new();
         // Derived memories first, the requested one last: a crash part way
@@ -284,7 +285,7 @@ impl MenteDb {
                 self.graph.remove_memory(*mid);
                 continue;
             };
-            steps.index_vectors_scrubbed += self.erase_one(node)?;
+            steps.index_vectors_scrubbed += self.erase_one(node, &erasing)?;
             steps.records_zeroed += 1;
             owners.insert((node.user_id, node.agent_id));
             erased.push(ErasedMemory {
@@ -466,9 +467,9 @@ impl MenteDb {
     /// Remove one memory everywhere [`Self::forget`] does, zeroing its
     /// record and its index vectors. Returns the HNSW nodes scrubbed. Same
     /// lock order as forget: each subsystem's lock is taken alone.
-    fn erase_one(&self, node: &MemoryNode) -> MenteResult<usize> {
+    fn erase_one(&self, node: &MemoryNode, erasing: &HashSet<MemoryId>) -> MenteResult<usize> {
         let id = node.id;
-        let scrubbed = self.index.erase_memory(id, node);
+        let scrubbed = self.index.erase_memory(id, node, erasing);
         if self
             .scope_counts_ready
             .load(std::sync::atomic::Ordering::Relaxed)

@@ -536,6 +536,60 @@ fn plant_legacy_copies(dir: &Path, content: &str) {
     }
 }
 
+/// The whole database is the cascade: no vector survives for the index to
+/// fill the erased nodes from.
+#[test]
+fn a_cascade_that_is_the_whole_database_leaves_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let source = store(&db, "only-source-marker-5f1c lives on Elm Street", 1);
+    let fact = store(&db, "only-fact-marker-8a2d lives on Elm Street", 2);
+    derive(&db, fact, source);
+
+    let receipt = db.erase(source, EraseOptions::default()).unwrap();
+    assert_eq!(ids(&receipt), HashSet::from([source, fact]));
+    let v = receipt.verification.expect("verified");
+    assert!(!v.residual_found, "residual: {:?}", v.hits);
+    db.close().unwrap();
+    for seed in [1, 2] {
+        assert_eq!(
+            files_with(dir.path(), &f32_bytes(&embedding(seed, 32))),
+            Vec::<String>::new()
+        );
+    }
+}
+
+/// Separate erases of the last two memories: the first must not leave a copy
+/// of the second behind for the second to be restored from.
+#[test]
+fn erasing_the_last_memories_one_by_one_leaves_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let a = store(&db, "lone-a-marker-77b1 first lonely memory", 3);
+    let b = store(&db, "lone-b-marker-19c4 second lonely memory", 4);
+
+    assert!(
+        !db.erase(a, EraseOptions::default())
+            .unwrap()
+            .verification
+            .unwrap()
+            .residual_found
+    );
+    let v = db
+        .erase(b, EraseOptions::default())
+        .unwrap()
+        .verification
+        .unwrap();
+    assert!(!v.residual_found, "residual: {:?}", v.hits);
+    db.close().unwrap();
+    for seed in [3, 4] {
+        assert_eq!(
+            files_with(dir.path(), &f32_bytes(&embedding(seed, 32))),
+            Vec::<String>::new()
+        );
+    }
+}
+
 #[test]
 fn erase_removes_legacy_copies() {
     let dir = tempfile::tempdir().unwrap();

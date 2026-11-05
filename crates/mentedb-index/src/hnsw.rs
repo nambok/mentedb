@@ -843,11 +843,20 @@ impl HnswIndex {
     /// The mean sits where the node sat in the graph, so greedy routing
     /// through the hop keeps working (measured by
     /// `erase_keeps_recall_of_the_remaining_vectors`), while the stored bytes
-    /// come only from vectors that remain in the index. A node with no
-    /// layer 0 neighbour of its dimension takes the mean of its links at the
-    /// other layers; with none at all it is zeroed (it was not a useful hop
-    /// for vectors of its dimension anyway).
+    /// come only from vectors that remain in the index: tombstones hold
+    /// removed vectors and are never used. A node with no such layer 0
+    /// neighbour of its dimension takes the mean of its links at the other
+    /// layers. With none at all, or when the mean would be an exact copy of a
+    /// neighbour (one survivor, or identical survivors), it is zeroed: a copy
+    /// would outlive that neighbour's own erase and be mistaken for it.
     pub fn erase(&self, id: MemoryId) -> usize {
+        self.erase_among(id, &HashSet::new())
+    }
+
+    /// [`Self::erase`] as one step of erasing all of `erasing`, whose vectors
+    /// are not used for the replacement even while they are still live, so a
+    /// tombstone never carries a blend of what the same erase removes.
+    pub fn erase_among(&self, id: MemoryId, erasing: &HashSet<MemoryId>) -> usize {
         let mut inner = self.inner.write();
         let held: Vec<usize> = inner
             .nodes
@@ -857,7 +866,7 @@ impl HnswIndex {
             .map(|(i, _)| i)
             .collect();
         for &idx in &held {
-            let replacement = neighbour_mean(&inner.nodes, idx);
+            let replacement = neighbour_mean(&inner.nodes, &inner.deleted, idx, id, erasing);
             inner.deleted.insert(idx);
             let node = &mut inner.nodes[idx];
             node.vector = replacement;
@@ -936,22 +945,43 @@ impl HnswInner {
 // ---------------------------------------------------------------------------
 
 /// Mean of the vectors linked from `idx`, preferring layer 0, counting only
-/// neighbours of the node's own dimension. See [`HnswIndex::erase`].
-fn neighbour_mean(nodes: &[HnswNode], idx: usize) -> Vec<f32> {
+/// live neighbours of the node's own dimension outside `erasing`. Zeros when
+/// no neighbour counts or the mean equals one of them bit for bit. See
+/// [`HnswIndex::erase`].
+fn neighbour_mean(
+    nodes: &[HnswNode],
+    deleted: &HashSet<usize>,
+    idx: usize,
+    id: MemoryId,
+    erasing: &HashSet<MemoryId>,
+) -> Vec<f32> {
     let dim = nodes[idx].vector.len();
     let mean_of = |links: &mut dyn Iterator<Item = usize>| -> Option<Vec<f32>> {
         let mut sum = vec![0f32; dim];
-        let mut count = 0usize;
+        let mut used: Vec<usize> = Vec::new();
         for n in links {
-            if n == idx || nodes[n].vector.len() != dim {
+            if n == idx
+                || used.contains(&n)
+                || deleted.contains(&n)
+                || nodes[n].id == id
+                || erasing.contains(&nodes[n].id)
+                || nodes[n].vector.len() != dim
+            {
                 continue;
             }
             for (s, v) in sum.iter_mut().zip(&nodes[n].vector) {
                 *s += v;
             }
-            count += 1;
+            used.push(n);
         }
-        (count > 0).then(|| sum.into_iter().map(|s| s / count as f32).collect())
+        if used.is_empty() {
+            return None;
+        }
+        let mean: Vec<f32> = sum.into_iter().map(|s| s / used.len() as f32).collect();
+        let bits = |v: &[f32]| v.iter().map(|f| f.to_bits()).collect::<Vec<u32>>();
+        let is_copy = used.iter().any(|&n| bits(&nodes[n].vector) == bits(&mean))
+            || bits(&nodes[idx].vector) == bits(&mean);
+        Some(if is_copy { vec![0f32; dim] } else { mean })
     };
     let layers = &nodes[idx].layers;
     layers
@@ -1685,6 +1715,94 @@ mod tests {
             seed: Some(seed),
             ..Default::default()
         }
+    }
+
+    /// Whether the snapshot of `idx` still holds the bytes of `v`.
+    fn snapshot_holds(idx: &HnswIndex, v: &[f32]) -> bool {
+        let needle: Vec<u8> = v.iter().flat_map(|f| f.to_le_bytes()).collect();
+        idx.serialize()
+            .unwrap()
+            .windows(needle.len())
+            .any(|w| w == needle)
+    }
+
+    #[test]
+    fn erasing_two_lone_neighbours_one_at_a_time_leaves_neither() {
+        let idx = HnswIndex::new(cosine_seeded(9));
+        let mut rng = StdRng::seed_from_u64(9);
+        let (a, b) = (MemoryId::new(), MemoryId::new());
+        let (va, vb) = (seeded_vec(&mut rng, 16), seeded_vec(&mut rng, 16));
+        idx.insert(a, &va).unwrap();
+        idx.insert(b, &vb).unwrap();
+
+        // A's only neighbour is B: a mean of one would be a copy of B, and
+        // erasing B next would then copy that back over B.
+        idx.erase(a);
+        assert!(!snapshot_holds(&idx, &va));
+        idx.erase(b);
+        assert!(!snapshot_holds(&idx, &va));
+        assert!(!snapshot_holds(&idx, &vb));
+    }
+
+    #[test]
+    fn erase_among_never_blends_the_other_vectors_being_erased() {
+        let idx = HnswIndex::new(cosine_seeded(10));
+        let mut rng = StdRng::seed_from_u64(10);
+        let (a, b, c, d) = (
+            MemoryId::new(),
+            MemoryId::new(),
+            MemoryId::new(),
+            MemoryId::new(),
+        );
+        let (va, vb) = (seeded_vec(&mut rng, 16), seeded_vec(&mut rng, 16));
+        let (vc, vd) = (seeded_vec(&mut rng, 16), seeded_vec(&mut rng, 16));
+        for (id, v) in [(a, &va), (b, &vb), (c, &vc), (d, &vd)] {
+            idx.insert(id, v).unwrap();
+        }
+        let erasing = HashSet::from([a, b]);
+        idx.erase_among(a, &erasing);
+        idx.erase_among(b, &erasing);
+
+        // Each tombstone is the mean of the two survivors, whatever links it
+        // also had to the other erased vector.
+        let mean: Vec<f32> = vc.iter().zip(&vd).map(|(x, y)| (x + y) / 2.0).collect();
+        assert!(snapshot_holds(&idx, &mean));
+        assert!(snapshot_holds(&idx, &vc) && snapshot_holds(&idx, &vd));
+        assert!(!snapshot_holds(&idx, &va) && !snapshot_holds(&idx, &vb));
+    }
+
+    #[test]
+    fn erase_never_copies_a_forgotten_tombstone_or_a_duplicate() {
+        let idx = HnswIndex::new(cosine_seeded(11));
+        let mut rng = StdRng::seed_from_u64(11);
+        let (a, forgotten, live) = (MemoryId::new(), MemoryId::new(), MemoryId::new());
+        let (va, vf, vl) = (
+            seeded_vec(&mut rng, 16),
+            seeded_vec(&mut rng, 16),
+            seeded_vec(&mut rng, 16),
+        );
+        idx.insert(a, &va).unwrap();
+        idx.insert(forgotten, &vf).unwrap();
+        idx.insert(live, &vl).unwrap();
+        idx.remove(forgotten).unwrap();
+        idx.erase(a);
+        // Only one neighbour counts, so the tombstone is zeroed, not a copy.
+        let inner = idx.inner.read();
+        let tomb = inner.nodes.iter().find(|n| n.id.is_nil()).unwrap();
+        assert!(tomb.vector.iter().all(|x| *x == 0.0));
+        drop(inner);
+
+        // Two identical survivors have a mean equal to both: also a copy.
+        let idx = HnswIndex::new(cosine_seeded(12));
+        let (x, y, z) = (MemoryId::new(), MemoryId::new(), MemoryId::new());
+        let same = seeded_vec(&mut rng, 16);
+        idx.insert(x, &seeded_vec(&mut rng, 16)).unwrap();
+        idx.insert(y, &same).unwrap();
+        idx.insert(z, &same).unwrap();
+        idx.erase(x);
+        let inner = idx.inner.read();
+        let tomb = inner.nodes.iter().find(|n| n.id.is_nil()).unwrap();
+        assert!(tomb.vector.iter().all(|v| *v == 0.0));
     }
 
     #[test]

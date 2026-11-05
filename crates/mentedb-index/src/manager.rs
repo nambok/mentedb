@@ -253,8 +253,8 @@ impl IndexManager {
     /// [`Self::erase_memory`] for an id whose memory is no longer stored, so
     /// its creation time and salience are unknown: every entry for the id
     /// goes, found by id.
-    pub fn erase_orphan(&self, id: MemoryId) -> usize {
-        let scrubbed = self.hnsw.erase(id);
+    pub fn erase_orphan(&self, id: MemoryId, erasing: &HashSet<MemoryId>) -> usize {
+        let scrubbed = self.hnsw.erase_among(id, erasing);
         self.bm25.remove(id);
         self.bitmap.erase(id);
         self.temporal.remove_by_id(id);
@@ -266,10 +266,16 @@ impl IndexManager {
 
     /// Remove a memory from all indexes and overwrite what they kept of it:
     /// every HNSW vector stored for the id (see [`HnswIndex::erase`]), its
-    /// BM25 postings, and tags no other memory carries. Returns the HNSW
-    /// nodes whose vector was overwritten.
-    pub fn erase_memory(&self, id: MemoryId, node: &MemoryNode) -> usize {
-        let scrubbed = self.hnsw.erase(id);
+    /// BM25 postings, and tags no other memory carries. `erasing` is everything
+    /// the same erase removes (see [`HnswIndex::erase_among`]). Returns the
+    /// HNSW nodes whose vector was overwritten.
+    pub fn erase_memory(
+        &self,
+        id: MemoryId,
+        node: &MemoryNode,
+        erasing: &HashSet<MemoryId>,
+    ) -> usize {
+        let scrubbed = self.hnsw.erase_among(id, erasing);
         self.bm25.remove(id);
         self.bitmap.erase(id);
         self.temporal.remove(id, node.created_at);
