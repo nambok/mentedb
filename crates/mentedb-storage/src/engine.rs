@@ -260,7 +260,7 @@ impl StorageEngine {
         st.dirty = !ops.is_empty();
 
         if !anchored || !ops.is_empty() || st.wal.has_torn_tail() {
-            self.checkpoint_locked(&mut st, true)?;
+            self.checkpoint_locked(&mut st, true, false)?;
         }
         if !ops.is_empty() {
             info!(count = ops.len(), "WAL recovery replayed entries");
@@ -565,7 +565,30 @@ impl StorageEngine {
 
     /// Delete the record at `page_id`, freeing its extent for reuse. Logged
     /// before it is applied, so the memory does not resurrect after a crash.
+    /// The record's bytes stay in the freed extent until it is reused; see
+    /// [`Self::erase_memory`] for a delete that removes them.
     pub fn delete_memory(&self, page_id: PageId) -> MenteResult<()> {
+        self.free_record(page_id, false)?;
+        Ok(())
+    }
+
+    /// Delete the record at `page_id` and overwrite its extent with zeros.
+    ///
+    /// The free and the zeroing are one logged operation, fsynced before the
+    /// file is touched: a crash before the WAL fsync leaves the record intact
+    /// and live, a crash after it replays the zeroing on open, so the memory
+    /// can never come back and a neighbour's extent is never written. The WAL
+    /// still holds the record's earlier writes until the next checkpoint; call
+    /// [`Self::checkpoint_scrubbed`] (or [`Self::scrub_free_space`]) after the
+    /// last erase to remove those too. No automatic checkpoint runs here, so
+    /// the log is never cut by a plain checkpoint mid erase.
+    pub fn erase_memory(&self, page_id: PageId) -> MenteResult<()> {
+        self.free_record(page_id, true)
+    }
+
+    /// Log and apply the free of `page_id`. `scrub` zeroes the extent and
+    /// skips the automatic checkpoint.
+    fn free_record(&self, page_id: PageId, scrub: bool) -> MenteResult<()> {
         let mut st = self.state.write();
         let entry =
             *st.table.records.get(&page_id.0).ok_or_else(|| {
@@ -574,6 +597,7 @@ impl StorageEngine {
         let op = RecordOp::Free {
             locator: page_id.0,
             extent: entry.extent,
+            scrub,
         };
         let _lsn = st
             .wal
@@ -581,14 +605,61 @@ impl StorageEngine {
         st.wal.sync()?;
         st.free.insert(entry.extent);
         op.redo(&self.file)?;
+        if scrub {
+            self.file.sync_data()?;
+        }
         st.table.apply(&op, 0);
         st.dirty = true;
         self.cache.invalidate(page_id.0);
         let wal_bytes = st.wal.file_size();
         drop(st);
 
-        self.maybe_checkpoint(wal_bytes);
+        if !scrub {
+            self.maybe_checkpoint(wal_bytes);
+        }
         Ok(())
+    }
+
+    /// Overwrite every free extent of the record file with zeros and return
+    /// the bytes zeroed.
+    ///
+    /// Free space holds the bytes of records deleted with
+    /// [`Self::delete_memory`] and the old copies of records that moved to a
+    /// larger extent when they were updated, so an erase also clears it. The
+    /// state lock is held for the whole pass, which takes time proportional to
+    /// the free space; writers wait for it, readers too.
+    ///
+    /// Crash safety: the pass starts with a forced checkpoint, so the WAL holds
+    /// no operation older than the pass for replay to redo over zeroed bytes.
+    /// It then writes one free header per coalesced free extent and fsyncs,
+    /// so the extent chain skips every byte about to be zeroed, and only then
+    /// zeroes. These writes are not logged: they change nothing a later read
+    /// or replay looks at, only bytes that no header points into.
+    pub fn scrub_free_space(&self) -> MenteResult<u64> {
+        let mut st = self.state.write();
+        self.checkpoint_locked(&mut st, true, true)?;
+        let regions = st.free.regions();
+        for r in &regions {
+            record::write_at(
+                &self.file,
+                &ExtentHeader::free(r.blocks).encode(),
+                r.offset(),
+            )?;
+        }
+        self.file.sync_data()?;
+        let mut zeroed = 0u64;
+        for r in &regions {
+            let len = (r.byte_len() - EXTENT_HEADER_SIZE) as u64;
+            record::zero_range(&self.file, r.offset() + EXTENT_HEADER_SIZE as u64, len)?;
+            zeroed += len;
+        }
+        self.file.sync_data()?;
+        info!(
+            regions = regions.len(),
+            bytes = zeroed,
+            "zeroed record file free space"
+        );
+        Ok(zeroed)
     }
 
     /// Load the [`MemoryNode`] stored at `page_id`.
@@ -630,10 +701,18 @@ impl StorageEngine {
     /// the WAL. A no-op when nothing changed since the last checkpoint.
     pub fn checkpoint(&self) -> MenteResult<()> {
         let mut st = self.state.write();
-        self.checkpoint_locked(&mut st, false)
+        self.checkpoint_locked(&mut st, false, false)
     }
 
-    fn checkpoint_locked(&self, st: &mut State, force: bool) -> MenteResult<()> {
+    /// A forced checkpoint that also overwrites the replaced WAL with zeros,
+    /// so record bytes written since the last checkpoint (including those of
+    /// erased records) leave the log. See [`Wal::reset_to_scrubbed`].
+    pub fn checkpoint_scrubbed(&self) -> MenteResult<()> {
+        let mut st = self.state.write();
+        self.checkpoint_locked(&mut st, true, true)
+    }
+
+    fn checkpoint_locked(&self, st: &mut State, force: bool, scrub_wal: bool) -> MenteResult<()> {
         if !force && !st.dirty && st.anchored {
             return Ok(());
         }
@@ -655,7 +734,12 @@ impl StorageEngine {
         }
         st.token = token;
         st.dirty = false;
-        st.wal.reset_to(lsn, WalEntryType::Checkpoint, 0, &token)?;
+        if scrub_wal {
+            st.wal
+                .reset_to_scrubbed(lsn, WalEntryType::Checkpoint, 0, &token)?;
+        } else {
+            st.wal.reset_to(lsn, WalEntryType::Checkpoint, 0, &token)?;
+        }
         info!(lsn, records = st.table.records.len(), "checkpoint complete");
         Ok(())
     }

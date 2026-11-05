@@ -830,6 +830,43 @@ impl HnswIndex {
         Ok(())
     }
 
+    /// Remove `id` and overwrite every vector stored for it, returning how
+    /// many nodes were scrubbed.
+    ///
+    /// [`Self::remove`] only tombstones a node: its vector stays in memory and
+    /// in every snapshot, because search still routes through it. Old vectors
+    /// of an id that was updated with [`Self::upsert`] stay the same way. This
+    /// tombstones every node that ever held `id`, replaces each one's vector
+    /// with the mean of its layer 0 neighbours' vectors, clears its id and
+    /// drops the id from the lookup table.
+    ///
+    /// The mean sits where the node sat in the graph, so greedy routing
+    /// through the hop keeps working (measured by
+    /// `erase_keeps_recall_of_the_remaining_vectors`), while the stored bytes
+    /// come only from vectors that remain in the index. A node with no
+    /// layer 0 neighbour of its dimension takes the mean of its links at the
+    /// other layers; with none at all it is zeroed (it was not a useful hop
+    /// for vectors of its dimension anyway).
+    pub fn erase(&self, id: MemoryId) -> usize {
+        let mut inner = self.inner.write();
+        let held: Vec<usize> = inner
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.id == id)
+            .map(|(i, _)| i)
+            .collect();
+        for &idx in &held {
+            let replacement = neighbour_mean(&inner.nodes, idx);
+            inner.deleted.insert(idx);
+            let node = &mut inner.nodes[idx];
+            node.vector = replacement;
+            node.id = MemoryId::nil();
+        }
+        inner.id_to_idx.remove(&id);
+        held.len()
+    }
+
     /// Number of active (non-deleted) vectors in the index.
     pub fn len(&self) -> usize {
         let inner = self.inner.read();
@@ -897,6 +934,32 @@ impl HnswInner {
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
+
+/// Mean of the vectors linked from `idx`, preferring layer 0, counting only
+/// neighbours of the node's own dimension. See [`HnswIndex::erase`].
+fn neighbour_mean(nodes: &[HnswNode], idx: usize) -> Vec<f32> {
+    let dim = nodes[idx].vector.len();
+    let mean_of = |links: &mut dyn Iterator<Item = usize>| -> Option<Vec<f32>> {
+        let mut sum = vec![0f32; dim];
+        let mut count = 0usize;
+        for n in links {
+            if n == idx || nodes[n].vector.len() != dim {
+                continue;
+            }
+            for (s, v) in sum.iter_mut().zip(&nodes[n].vector) {
+                *s += v;
+            }
+            count += 1;
+        }
+        (count > 0).then(|| sum.into_iter().map(|s| s / count as f32).collect())
+    };
+    let layers = &nodes[idx].layers;
+    layers
+        .first()
+        .and_then(|l0| mean_of(&mut l0.iter().copied()))
+        .or_else(|| mean_of(&mut layers.iter().flatten().copied()))
+        .unwrap_or_else(|| vec![0f32; dim])
+}
 
 /// Random level assignment: floor(-ln(uniform) * level_mult).
 fn random_level(rng: &mut StdRng, level_mult: f64) -> usize {
@@ -1587,5 +1650,152 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(build(), build());
+    }
+
+    /// Recall at `k` of `idx` against an exact scan of `live`, over `queries`.
+    fn recall_at(
+        idx: &HnswIndex,
+        live: &[(MemoryId, Vec<f32>)],
+        queries: &[Vec<f32>],
+        k: usize,
+    ) -> f64 {
+        let mut found = 0usize;
+        for q in queries {
+            let mut exact: Vec<(MemoryId, f32)> = live
+                .iter()
+                .map(|(id, v)| (*id, compute_distance(q, v, DistanceMetric::Cosine)))
+                .collect();
+            exact.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            let truth: HashSet<MemoryId> = exact.iter().take(k).map(|(id, _)| *id).collect();
+            found += idx
+                .search(q, k)
+                .iter()
+                .filter(|(id, _)| truth.contains(id))
+                .count();
+        }
+        found as f64 / (queries.len() * k) as f64
+    }
+
+    fn cosine_seeded(seed: u64) -> HnswConfig {
+        HnswConfig {
+            m: 8,
+            ef_construction: 100,
+            ef_search: 32,
+            metric: DistanceMetric::Cosine,
+            seed: Some(seed),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn erase_overwrites_every_vector_of_the_id() {
+        let idx = HnswIndex::new(cosine_seeded(5));
+        let mut rng = StdRng::seed_from_u64(5);
+        for _ in 0..50 {
+            idx.insert(MemoryId::new(), &seeded_vec(&mut rng, 16))
+                .unwrap();
+        }
+        let id = MemoryId::new();
+        let first = seeded_vec(&mut rng, 16);
+        let second = seeded_vec(&mut rng, 16);
+        idx.insert(id, &first).unwrap();
+        // An update leaves the first vector behind as a tombstone.
+        idx.upsert(id, &second);
+        let bytes = |v: &[f32]| v.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>();
+        let has = |hay: &[u8], v: &[f32]| hay.windows(v.len() * 4).any(|w| w == bytes(v));
+        let before = idx.serialize().unwrap();
+        assert!(has(&before, &first) && has(&before, &second));
+
+        idx.remove(id).unwrap();
+        // A plain remove keeps both vectors in the snapshot.
+        assert!(has(&idx.serialize().unwrap(), &second));
+
+        assert_eq!(idx.erase(id), 2);
+        let after = idx.serialize().unwrap();
+        assert!(!has(&after, &first));
+        assert!(!has(&after, &second));
+        assert!(!after.windows(16).any(|w| w == id.0.as_bytes()));
+        assert!(!idx.contains(id));
+        assert_eq!(idx.len(), 50);
+        assert!(idx.search(&second, 60).iter().all(|(m, _)| *m != id));
+        // The id can be stored again.
+        idx.insert(id, &second).unwrap();
+        assert_eq!(idx.search(&second, 1)[0].0, id);
+        assert_eq!(unreachable_at_layer_zero(&idx), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn erase_keeps_recall_of_the_remaining_vectors() {
+        // Erasing replaces a tombstone's vector with its neighbours' mean.
+        // Search must route through those hops as well as it did through the
+        // original vectors: recall of the vectors left must match what a
+        // plain tombstone gives, and stay high.
+        let dim = 32;
+        let n = 2_000;
+        let k = 10;
+        let mut rng = StdRng::seed_from_u64(77);
+        let items: Vec<(MemoryId, Vec<f32>)> = (0..n)
+            .map(|_| {
+                let v: Vec<f32> = (0..dim).map(|_| rng.random::<f32>() - 0.5).collect();
+                (MemoryId::new(), v)
+            })
+            .collect();
+        let queries: Vec<Vec<f32>> = (0..200)
+            .map(|_| (0..dim).map(|_| rng.random::<f32>() - 0.5).collect())
+            .collect();
+        let build = || {
+            let idx = HnswIndex::new(cosine_seeded(77));
+            for (id, v) in &items {
+                idx.insert(*id, v).unwrap();
+            }
+            idx
+        };
+        // A fifth of the vectors go, spread across the graph.
+        let removed: HashSet<MemoryId> = items.iter().step_by(5).map(|(id, _)| *id).collect();
+        let live: Vec<(MemoryId, Vec<f32>)> = items
+            .iter()
+            .filter(|(id, _)| !removed.contains(id))
+            .cloned()
+            .collect();
+
+        let full = build();
+        let recall_full = recall_at(&full, &items, &queries, k);
+
+        let tombstoned = build();
+        for id in &removed {
+            tombstoned.remove(*id).unwrap();
+        }
+        let recall_tombstoned = recall_at(&tombstoned, &live, &queries, k);
+
+        let erased = build();
+        for id in &removed {
+            assert_eq!(erased.erase(*id), 1);
+        }
+        let recall_erased = recall_at(&erased, &live, &queries, k);
+
+        // Zeroed vectors are the naive alternative: measured to show the
+        // mean is the choice that keeps routing.
+        let zeroed = build();
+        {
+            let mut inner = zeroed.inner.write();
+            for id in &removed {
+                let idx = inner.id_to_idx[id];
+                inner.deleted.insert(idx);
+                inner.nodes[idx].vector = vec![0.0; dim];
+            }
+        }
+        let recall_zeroed = recall_at(&zeroed, &live, &queries, k);
+
+        eprintln!(
+            "recall@{k}: full {recall_full:.4}, tombstoned {recall_tombstoned:.4}, \
+             erased {recall_erased:.4}, zeroed {recall_zeroed:.4}"
+        );
+        assert!(recall_full > 0.9, "{recall_full}");
+        assert!(
+            recall_erased >= recall_tombstoned - 0.01,
+            "erased {recall_erased} vs tombstoned {recall_tombstoned}"
+        );
+        assert!(recall_erased > 0.9, "{recall_erased}");
+        assert_eq!(unreachable_at_layer_zero(&erased), Vec::<usize>::new());
     }
 }

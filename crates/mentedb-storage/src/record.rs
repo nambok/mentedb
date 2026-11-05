@@ -374,6 +374,22 @@ pub(crate) fn sync_dir(dir: &std::path::Path) -> MenteResult<()> {
     Ok(())
 }
 
+/// Largest zero buffer [`zero_range`] writes at once, so zeroing a large
+/// free region does not allocate its whole size.
+const ZERO_CHUNK_BYTES: usize = 1 << 20;
+
+/// Overwrite `len` bytes at `offset` with zeros.
+pub(crate) fn zero_range(file: &File, offset: u64, len: u64) -> std::io::Result<()> {
+    let chunk = vec![0u8; (len as usize).min(ZERO_CHUNK_BYTES)];
+    let mut done = 0u64;
+    while done < len {
+        let n = ((len - done) as usize).min(chunk.len());
+        write_at(file, &chunk[..n], offset + done)?;
+        done += n as u64;
+    }
+    Ok(())
+}
+
 // ---- logged operations ----
 
 /// One logged change to the record file. The WAL entry carries everything
@@ -391,8 +407,16 @@ pub(crate) enum RecordOp {
         remainder: Option<Extent>,
         freed: Option<Extent>,
     },
-    /// Delete record `locator`, freeing `extent`.
-    Free { locator: u64, extent: Extent },
+    /// Delete record `locator`, freeing `extent`. With `scrub`, the whole
+    /// extent is overwritten with zeros (behind its free header) instead of
+    /// only having its header rewritten, so the record's bytes leave the file.
+    /// The flag travels in the WAL entry, so replay after a crash zeroes the
+    /// extent again and an erase is never half done on disk.
+    Free {
+        locator: u64,
+        extent: Extent,
+        scrub: bool,
+    },
 }
 
 const OP_VERSION: u8 = 1;
@@ -468,8 +492,13 @@ impl RecordOp {
                 buf.extend_from_slice(&(payload.len() as u64).to_le_bytes());
                 buf.extend_from_slice(payload);
             }
-            RecordOp::Free { extent, .. } => {
+            RecordOp::Free { extent, scrub, .. } => {
                 put_extent(&mut buf, Some(*extent));
+                // Appended only when set, so a plain free encodes exactly as
+                // before and an older reader of a scrub entry still frees.
+                if *scrub {
+                    buf.push(1);
+                }
             }
         }
         buf
@@ -502,7 +531,12 @@ impl RecordOp {
             })
         } else {
             let extent = r.extent()?.ok_or_else(missing)?;
-            Ok(RecordOp::Free { locator, extent })
+            let scrub = r.pos < r.b.len() && r.take(1)?[0] == 1;
+            Ok(RecordOp::Free {
+                locator,
+                extent,
+                scrub,
+            })
         }
     }
 
@@ -527,12 +561,19 @@ impl RecordOp {
                     write_at(file, &ExtentHeader::free(f.blocks).encode(), f.offset())?;
                 }
             }
-            RecordOp::Free { extent, .. } => {
+            RecordOp::Free { extent, scrub, .. } => {
                 write_at(
                     file,
                     &ExtentHeader::free(extent.blocks).encode(),
                     extent.offset(),
                 )?;
+                if *scrub {
+                    zero_range(
+                        file,
+                        extent.offset() + EXTENT_HEADER_SIZE as u64,
+                        (extent.byte_len() - EXTENT_HEADER_SIZE) as u64,
+                    )?;
+                }
             }
         }
         Ok(())
@@ -561,6 +602,14 @@ pub(crate) struct Placement {
 }
 
 impl FreeSpace {
+    /// Every free extent, coalesced, in file order.
+    pub(crate) fn regions(&self) -> Vec<Extent> {
+        self.by_start
+            .iter()
+            .map(|(&start, &blocks)| Extent { start, blocks })
+            .collect()
+    }
+
     /// Free blocks in total.
     pub(crate) fn free_blocks(&self) -> u64 {
         self.by_start.values().sum()
@@ -741,8 +790,20 @@ mod tests {
                 start: 10,
                 blocks: 3,
             },
+            scrub: false,
         };
         assert_eq!(RecordOp::decode(false, 5, &free.encode()).unwrap(), free);
+        let scrub = RecordOp::Free {
+            locator: 5,
+            extent: Extent {
+                start: 10,
+                blocks: 3,
+            },
+            scrub: true,
+        };
+        assert_eq!(RecordOp::decode(false, 5, &scrub.encode()).unwrap(), scrub);
+        // A plain free keeps its old encoding byte for byte.
+        assert_eq!(free.encode().len() + 1, scrub.encode().len());
     }
 
     #[test]

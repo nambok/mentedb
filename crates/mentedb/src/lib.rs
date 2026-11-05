@@ -136,6 +136,12 @@ pub mod export;
 /// Agent file ingestion: instruction files become on demand memories.
 pub mod agent_file;
 
+/// Verified erase: cascade over derived memories, on disk scrub, receipt.
+pub mod erase;
+pub use erase::{
+    EraseOptions, EraseReason, ErasedMemory, ErasureReceipt, ScrubSteps, Verification,
+};
+
 /// Lease-based elastic sharding: places each account on exactly one node and
 /// coordinates ownership so a fleet can scale horizontally. The engine owns the
 /// placement and coordination logic; the embedder supplies the lease and
@@ -799,6 +805,9 @@ pub struct MenteDb {
     /// Search hits waiting to have their access statistics written:
     /// id to (latest access time, hits). Applied at the next flush.
     pending_access: parking_lot::Mutex<HashMap<MemoryId, (Timestamp, u32)>>,
+    /// Serializes [`Self::erase`] calls, which share snapshot temp files and
+    /// the free space scrub.
+    erase_serial: parking_lot::Mutex<()>,
 }
 
 /// Agent visibility rule for scoped retrieval: a node is visible to an agent
@@ -944,10 +953,17 @@ impl MenteDb {
                 reindexed += 1;
             }
         }
+        // After an erase a crash interrupted, the vectors are scrubbed too,
+        // not only tombstoned (see `erase::finish_pending_erase`).
+        let erase_pending = erase::pending(path);
         let mut retired = 0usize;
         for id in index.vector_ids() {
             if !page_map.contains_key(&id) {
-                index.remove_vector_only(id);
+                if erase_pending {
+                    index.erase_orphan(id);
+                } else {
+                    index.remove_vector_only(id);
+                }
                 retired += 1;
             }
         }
@@ -1033,7 +1049,7 @@ impl MenteDb {
             .map(|(count, c)| (c, count == current_count))
             .unwrap_or_else(|| (ScopeCounts::default(), false));
 
-        Ok(Self {
+        let db = Self {
             storage,
             index,
             graph,
@@ -1071,7 +1087,12 @@ impl MenteDb {
             last_enrichment_turn: RwLock::new(hosting::read_enrichment_watermark(path)),
             enrichment_pending: RwLock::new(false),
             pending_access: parking_lot::Mutex::new(HashMap::new()),
-        })
+            erase_serial: parking_lot::Mutex::new(()),
+        };
+        if erase_pending {
+            db.finish_pending_erase()?;
+        }
+        Ok(db)
     }
 
     /// Opens a MenteDB instance with a configured embedding provider.
@@ -3671,7 +3692,14 @@ impl MenteDb {
             }
         }
 
-        // Persist cognitive subsystem state.
+        self.save_cognitive_snapshots();
+        self.flushes_since_snapshot
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Persist cognitive subsystem state (best effort: derived caches).
+    fn save_cognitive_snapshots(&self) {
         let cognitive_dir = self.path.join("cognitive");
         if std::fs::create_dir_all(&cognitive_dir).is_ok() {
             let _ = self
@@ -3688,9 +3716,6 @@ impl MenteDb {
                 .read()
                 .save(&cognitive_dir.join("entities.json"));
         }
-        self.flushes_since_snapshot
-            .store(0, std::sync::atomic::Ordering::Relaxed);
-        Ok(())
     }
 
     /// Executes a query plan against the indexes and graph, returning scored memories.

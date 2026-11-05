@@ -131,6 +131,19 @@ impl GraphManager {
 
     /// Save a graph snapshot to the given directory and truncate the edge log.
     pub fn save(&self, dir: &Path) -> MenteResult<()> {
+        self.save_inner(dir, false)
+    }
+
+    /// [`Self::save`], overwriting the edge log with zeros in place before it
+    /// is truncated, so the records of removed nodes and edges do not stay in
+    /// the file's freed blocks. The snapshot is durable before the zeroing
+    /// starts; a crash after it leaves a log of zeros, which open reads as one
+    /// torn line and drops.
+    pub fn save_scrubbed(&self, dir: &Path) -> MenteResult<()> {
+        self.save_inner(dir, true)
+    }
+
+    fn save_inner(&self, dir: &Path, scrub_log: bool) -> MenteResult<()> {
         std::fs::create_dir_all(dir)?;
         self.graph.read().save(&dir.join("graph.json"))?;
 
@@ -138,6 +151,12 @@ impl GraphManager {
         let mut log = self.log.lock();
         if log.is_some() && self.dir.as_deref() == Some(dir) {
             let log_path = dir.join(EDGE_LOG_FILE);
+            if scrub_log {
+                let mut file = std::fs::OpenOptions::new().write(true).open(&log_path)?;
+                let len = file.metadata()?.len() as usize;
+                file.write_all(&vec![0u8; len])?;
+                file.sync_data()?;
+            }
             let file = std::fs::OpenOptions::new()
                 .create(true)
                 .write(true)

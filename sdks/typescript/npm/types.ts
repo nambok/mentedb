@@ -97,3 +97,47 @@ export interface IngestResult {
   contradictions: number;
   storedIds: string[];
 }
+
+/** One erased memory: its id, why it went, and hashes of what it held. */
+export interface ErasedMemory {
+  id: string;
+  reason: 'requested' | 'derived' | 'source' | 'identical';
+  /** SHA-256 of the content, lowercase hex. */
+  content_sha256: string;
+  /** SHA-256 of the embedding as little endian f32 bytes, when it had one. */
+  embedding_sha256: string | null;
+}
+
+/** A file in which the verification scan found erased bytes. */
+export interface ResidualHit {
+  file: string;
+  memory: string;
+  kind: 'content' | 'embedding';
+}
+
+/** Result of `MenteDB.erase`. Carries ids and hashes, never content. */
+export interface ErasureReceipt {
+  requested: string;
+  erased: ErasedMemory[];
+  ancestors_kept: string[];
+  profiles_to_review: string[];
+  erased_at_us: number;
+  steps: {
+    records_zeroed: number;
+    index_vectors_scrubbed: number;
+    free_space_bytes_zeroed: number | null;
+    wal_scrubbed: boolean;
+    snapshots_rewritten: boolean;
+    replaced_files_zeroed: number;
+    legacy_files_removed: string[];
+    cache_entries_dropped: number;
+  };
+  verification: {
+    files_scanned: number;
+    bytes_scanned: number;
+    residual_found: boolean;
+    hits: ResidualHit[];
+    unreadable: string[];
+    content_not_checked: string[];
+  } | null;
+}

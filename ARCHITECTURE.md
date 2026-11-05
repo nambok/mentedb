@@ -151,7 +151,8 @@ serialized as:
 
 Entry types: `RecordWrite` (record payload, its extent, the free remainder it
 was carved from, and the extent it vacated when it moved), `RecordFree` (a
-deleted record's extent), `Checkpoint` (safe truncation point; its payload is
+deleted record's extent, and for an erase a flag that zeroes it, so replay
+zeroes it again), `Checkpoint` (safe truncation point; its payload is
 the token of the record map persisted with it). The page file types
 `PageWrite`, `PageFree` and the reserved `Commit` remain for reading old
 databases.
@@ -692,6 +693,7 @@ maintenance, and the cognitive features):
 | `recall_similar(embedding, k)` | Vector similarity search returning top-k matches |
 | `relate(edge)` | Adds a typed, weighted edge between two memories |
 | `forget(id)` | Removes a memory from storage, indexes, and graph |
+| `erase(id, opts)` | Removes a memory and everything derived from it, overwrites every copy of their bytes, returns a checkable receipt (see [docs/FORGETTING.md](docs/FORGETTING.md)) |
 | `close()` | Checkpoints and closes the database |
 
 ## Data Flow

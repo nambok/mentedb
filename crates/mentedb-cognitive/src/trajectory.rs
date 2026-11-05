@@ -62,6 +62,27 @@ struct TransitionSnapshot {
 const TRANSITION_SNAPSHOT_VERSION: u32 = 2;
 
 impl TransitionMap {
+    /// Drop every transition and learned label whose topic text `drop`
+    /// selects (as either end of a transition, or as the raw or canonical
+    /// side of a label); returns how many entries went.
+    pub fn remove_topics(&mut self, drop: impl Fn(&str) -> bool) -> usize {
+        let mut removed = 0usize;
+        self.transitions.retain(|from, tos| {
+            if drop(from) {
+                removed += tos.len();
+                return false;
+            }
+            let before = tos.len();
+            tos.retain(|to, _| !drop(to));
+            removed += before - tos.len();
+            !tos.is_empty()
+        });
+        let before = self.topic_cache.len();
+        self.topic_cache
+            .retain(|raw, canonical| !drop(raw) && !drop(canonical));
+        removed + before - self.topic_cache.len()
+    }
+
     /// Record a transition, applying the topic cache if available.
     /// If a canonical label exists for a raw topic, uses that instead.
     pub fn record(&mut self, from: &str, to: &str) {
@@ -250,6 +271,13 @@ impl TrajectoryTracker {
             max_turns,
             transitions: TransitionMap::default(),
         }
+    }
+
+    /// Drop every recorded turn `drop` selects and return how many went.
+    pub fn remove_turns_where(&mut self, drop: impl Fn(&TrajectoryNode) -> bool) -> usize {
+        let before = self.trajectory.len();
+        self.trajectory.retain(|t| !drop(t));
+        before - self.trajectory.len()
     }
 
     pub fn record_turn(&mut self, mut turn: TrajectoryNode) {

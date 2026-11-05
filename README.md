@@ -732,6 +732,7 @@ MenteDB includes production security features:
 - **HTTPS** the server terminates TLS for REST and gRPC itself (`--tls-cert`, `--tls-key`)
 - **Rate Limiting** per client IP token bucket on every request
 - **Embedding Validation** dimension mismatch returns errors, not panics
+- **Verified Erase** `erase` removes a memory and every memory derived from it (facts, consolidations, entity and community nodes), overwrites every copy of their bytes in the database directory, and returns a receipt; see [Verified erase](#verified-erase)
 
 ```bash
 # Production deployment
@@ -742,6 +743,35 @@ export MENTEDB_LLM_API_KEY="sk-..."
 
 mentedb-server --require-auth --data-dir /var/mentedb/data
 ```
+
+### Verified erase
+
+`forget` takes a memory out of recall. `erase` is for when a person asks for
+their data to be deleted: it also removes every memory derived from it, and
+leaves no copy of the bytes in the database directory.
+
+```rust
+let receipt = db.erase(id, EraseOptions::default())?;
+assert!(!receipt.verification.unwrap().residual_found);
+```
+
+```bash
+curl -X POST localhost:6677/v1/db/alice/memories/$ID/erase -H "Authorization: Bearer $TOKEN"
+```
+
+It follows `Derived` links to the facts, consolidations, dedup keepers,
+entity and community nodes made from the memory, and erases them too (with
+`include_sources`, also what the memory was made from). It zeroes the
+records and the record file's free space, checkpoints the WAL and zeroes the
+old log, overwrites the vectors kept for search routing, rewrites every
+snapshot, clears the caches built from the memory, and removes the `.v1`
+copy a format migration keeps. A crash part way is finished on the next
+open. The receipt lists each erased id with a SHA-256 of its content (never
+the content), the steps that ran, and a scan of every file in the directory
+for the erased content and embedding bytes. It is also on gRPC and in the
+Python and TypeScript SDKs. [docs/FORGETTING.md](docs/FORGETTING.md) covers
+what it removes, what it cannot reach (backups, copies outside the
+directory, file system snapshots), and how to verify it.
 
 ## LLM Extraction Configuration
 

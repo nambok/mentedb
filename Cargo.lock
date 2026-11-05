@@ -2367,6 +2367,7 @@ version = "0.45.0"
 dependencies = [
  "crc32fast",
  "criterion",
+ "memchr",
  "mentedb-cognitive",
  "mentedb-consolidation",
  "mentedb-context",
@@ -2380,6 +2381,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",

@@ -29,6 +29,13 @@ impl PainRegistry {
         self.signals.push(signal);
     }
 
+    /// Drop every signal `drop` selects and return how many went.
+    pub fn remove_where(&mut self, drop: impl Fn(&PainSignal) -> bool) -> usize {
+        let before = self.signals.len();
+        self.signals.retain(|s| !drop(s));
+        before - self.signals.len()
+    }
+
     /// Returns all recorded pain signals.
     pub fn all_signals(&self) -> &[PainSignal] {
         &self.signals

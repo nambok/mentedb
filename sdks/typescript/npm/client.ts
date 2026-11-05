@@ -6,6 +6,7 @@ import {
   type SearchResult,
   type ProcessTurnResult,
   type IngestResult,
+  type ErasureReceipt,
 } from './types';
 
 import * as os from 'os';
@@ -133,6 +134,21 @@ export class MenteDB {
   /** Remove a memory by ID. */
   forget(memoryId: string): void {
     this.native.forget(memoryId);
+  }
+
+  /**
+   * Verified erase: remove the memory, everything derived from it, and every
+   * copy of their bytes in the database directory. `includeSources` also
+   * erases what the memory was derived from; `verify` scans every file
+   * afterwards. Returns the erasure receipt (ids, SHA-256 hashes, the scrub
+   * steps, and the scan result), never the content. See docs/FORGETTING.md.
+   */
+  erase(
+    memoryId: string,
+    options: { includeSources?: boolean; verify?: boolean } = {},
+  ): ErasureReceipt {
+    const json = this.native.erase(memoryId, options.includeSources, options.verify);
+    return JSON.parse(json) as ErasureReceipt;
   }
 
   /** Flush all data and close the database. */

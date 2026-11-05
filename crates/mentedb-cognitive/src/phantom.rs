@@ -374,6 +374,13 @@ impl PhantomTracker {
         }
     }
 
+    /// Drop every phantom `drop` selects and return how many went.
+    pub fn remove_where(&mut self, drop: impl Fn(&PhantomMemory) -> bool) -> usize {
+        let before = self.phantoms.len();
+        self.phantoms.retain(|p| !drop(p));
+        before - self.phantoms.len()
+    }
+
     pub fn get_active_phantoms(&self) -> Vec<&PhantomMemory> {
         let mut active: Vec<&PhantomMemory> =
             self.phantoms.iter().filter(|p| !p.resolved).collect();

@@ -58,4 +58,24 @@ describe('MenteDB TypeScript SDK', () => {
 
     db.close();
   });
+
+  it('should erase a memory and return a receipt', () => {
+    const db = new MenteDB(TEST_DIR);
+
+    const id = db.store({
+      content: 'A thought that must leave no trace',
+      memoryType: MemoryType.Semantic,
+      embedding: Array.from({ length: 128 }, () => Math.random()),
+    });
+
+    const receipt = db.erase(id);
+    expect(receipt.requested).toBe(id);
+    expect(receipt.erased.map((e) => e.id)).toEqual([id]);
+    expect(receipt.erased[0].content_sha256).toHaveLength(64);
+    expect(receipt.verification?.residual_found).toBe(false);
+    expect(JSON.stringify(receipt)).not.toContain('leave no trace');
+    expect(() => db.erase(id)).toThrow();
+
+    db.close();
+  });
 });
