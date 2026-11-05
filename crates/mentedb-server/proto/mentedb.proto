@@ -78,6 +78,9 @@ service MemoryService {
     rpc Recall(RecallRequest) returns (RecallResponse);
     rpc Search(SearchRequest) returns (SearchResponse);
     rpc Forget(ForgetRequest) returns (ForgetResponse);
+    // Verified erase: the memory, everything derived from it, and every copy
+    // of their bytes; see docs/FORGETTING.md.
+    rpc Erase(EraseRequest) returns (EraseResponse);
     rpc Relate(RelateRequest) returns (RelateResponse);
 }
 
@@ -138,6 +141,25 @@ message ForgetRequest {
 
 message ForgetResponse {
     string status = 1;
+}
+
+// Erase
+
+message EraseRequest {
+    string id = 1;
+    // Also erase the memories this one was derived from.
+    bool include_sources = 2;
+    // Scan the database directory afterwards (default true).
+    optional bool verify = 3;
+}
+
+message EraseResponse {
+    repeated string erased_ids = 1;
+    repeated string ancestors_kept = 2;
+    // Set only when the erase verified.
+    bool residual_found = 3;
+    // The full receipt as JSON (hashes and ids, never content).
+    string receipt_json = 4;
 }
 
 // Relate (create edge)

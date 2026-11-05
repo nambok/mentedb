@@ -154,6 +154,25 @@ impl BitmapIndex {
             }
         }
     }
+
+    /// [`Self::remove_all`], then forget the id and every tag left with no
+    /// memory. Tags can carry text (entity names, project names), so a tag
+    /// only the erased memory had must not stay in the snapshot as a name
+    /// with an empty bitmap. The id's offset is retired, never reused; its
+    /// slot keeps the nil id so later offsets stay valid.
+    pub fn erase(&self, id: MemoryId) {
+        let mut inner = self.inner.write();
+        let Some(offset) = inner.id_to_offset.remove(&id) else {
+            return;
+        };
+        for bm in inner.tag_bitmaps.values_mut() {
+            bm.remove(offset);
+        }
+        inner.tag_bitmaps.retain(|_, bm| !bm.is_empty());
+        if let Some(slot) = inner.offset_to_id.get_mut(offset as usize) {
+            *slot = MemoryId::nil();
+        }
+    }
 }
 
 /// Serializable snapshot of the bitmap index data.

@@ -314,6 +314,32 @@ impl Wal {
         page_id: u64,
         data: &[u8],
     ) -> MenteResult<()> {
+        self.reset_to_inner(lsn, entry_type, page_id, data, false)
+    }
+
+    /// [`Self::reset_to`], then overwrite the replaced log with zeros through
+    /// the handle still open on it, so the record bytes it carried do not stay
+    /// behind in the unlinked file's blocks. The zeroing runs only after the
+    /// rename, on a file no path names any more, so a crash at any point
+    /// leaves the new log in place and costs nothing.
+    pub fn reset_to_scrubbed(
+        &mut self,
+        lsn: Lsn,
+        entry_type: WalEntryType,
+        page_id: u64,
+        data: &[u8],
+    ) -> MenteResult<()> {
+        self.reset_to_inner(lsn, entry_type, page_id, data, true)
+    }
+
+    fn reset_to_inner(
+        &mut self,
+        lsn: Lsn,
+        entry_type: WalEntryType,
+        page_id: u64,
+        data: &[u8],
+        scrub_old: bool,
+    ) -> MenteResult<()> {
         let tmp_path = self.tmp_path();
         {
             let mut tmp_file = OpenOptions::new()
@@ -325,10 +351,25 @@ impl Wal {
             tmp_file.sync_data()?;
         }
         std::fs::rename(&tmp_path, &self.path)?;
-        self.file = OpenOptions::new().read(true).write(true).open(&self.path)?;
+        let old = std::mem::replace(
+            &mut self.file,
+            OpenOptions::new().read(true).write(true).open(&self.path)?,
+        );
+        if scrub_old {
+            let meta = old.metadata()?;
+            // Another hard link would still name the old log: leave it.
+            #[cfg(unix)]
+            let shared = std::os::unix::fs::MetadataExt::nlink(&meta) > 0;
+            #[cfg(not(unix))]
+            let shared = false;
+            if !shared {
+                crate::record::zero_range(&old, 0, meta.len())?;
+                old.sync_data()?;
+            }
+        }
         self.next_lsn = self.next_lsn.max(lsn + 1);
         self.torn_tail = false;
-        debug!(lsn, "WAL reset to a single entry");
+        debug!(lsn, scrub_old, "WAL reset to a single entry");
         Ok(())
     }
 

@@ -96,6 +96,7 @@ pub fn routes_with_limits(limits: MemoryApiLimits) -> Router<Arc<AppState>> {
         .route("/context", post(context))
         .route("/memories/batch", post(store_batch))
         .route("/memories/{id}/history", get(history))
+        .route("/memories/{id}/erase", post(erase))
         .route("/memories/{id}/neighbors", get(neighbors))
         .route("/memories/{id}/pin", post(pin).delete(unpin))
         .route("/pins", get(list_pins))
@@ -280,6 +281,36 @@ async fn context(
         })
         .collect();
     Ok(Json(json!({ "database": db.name, "memories": memories })))
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1/memories/{id}/erase
+// ---------------------------------------------------------------------------
+
+/// Verified erase: the memory, everything derived from it, and every copy
+/// of their bytes in the database directory. The body is optional and holds
+/// [`mentedb::EraseOptions`] fields (`include_sources`, `verify`, ...); the
+/// response is the [`mentedb::ErasureReceipt`]. A write: read only tokens
+/// are refused before this runs.
+async fn erase(
+    agent: Caller,
+    db: Db,
+    Path(params): Path<HashMap<String, String>>,
+    body: Option<Json<mentedb::EraseOptions>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let id = memory_id_param(&params)?;
+    load_owned(&agent, &db, id)?;
+    let opts = body.map(|Json(o)| o).unwrap_or_default();
+    let handle = db.handle.clone();
+    let receipt = tokio::task::spawn_blocking(move || handle.erase(id, opts))
+        .await
+        .map_err(task_failed)?
+        .map_err(|e| match e {
+            MenteError::MemoryNotFound(_) => ApiError::NotFound(format!("memory {id} not found")),
+            MenteError::CapacityExceeded(msg) => ApiError::Conflict(msg),
+            e => engine_error("erase", e),
+        })?;
+    Ok(Json(receipt))
 }
 
 // ---------------------------------------------------------------------------

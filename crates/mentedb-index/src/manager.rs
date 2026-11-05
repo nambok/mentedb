@@ -250,6 +250,37 @@ impl IndexManager {
         self.salience.remove(id, node.salience);
     }
 
+    /// [`Self::erase_memory`] for an id whose memory is no longer stored, so
+    /// its creation time and salience are unknown: every entry for the id
+    /// goes, found by id.
+    pub fn erase_orphan(&self, id: MemoryId) -> usize {
+        let scrubbed = self.hnsw.erase(id);
+        self.bm25.remove(id);
+        self.bitmap.erase(id);
+        self.temporal.remove_by_id(id);
+        if let Some(s) = self.salience.get_salience(id) {
+            self.salience.remove(id, s);
+        }
+        scrubbed
+    }
+
+    /// Remove a memory from all indexes and overwrite what they kept of it:
+    /// every HNSW vector stored for the id (see [`HnswIndex::erase`]), its
+    /// BM25 postings, and tags no other memory carries. Returns the HNSW
+    /// nodes whose vector was overwritten.
+    pub fn erase_memory(&self, id: MemoryId, node: &MemoryNode) -> usize {
+        let scrubbed = self.hnsw.erase(id);
+        self.bm25.remove(id);
+        self.bitmap.erase(id);
+        self.temporal.remove(id, node.created_at);
+        self.temporal.remove_by_id(id);
+        // The indexed salience can trail the stored node's; remove by the
+        // indexed value so no entry is left behind.
+        let indexed = self.salience.get_salience(id).unwrap_or(node.salience);
+        self.salience.remove(id, indexed);
+        scrubbed
+    }
+
     /// Hybrid search combining vector similarity, BM25 keyword matching,
     /// tag filtering, time range, and salience.
     ///

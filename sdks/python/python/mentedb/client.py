@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Optional
 
@@ -230,6 +231,19 @@ class MenteDB:
     def forget(self, memory_id: str):
         """Remove a memory by its UUID."""
         self._db.forget(memory_id)
+
+    def erase(
+        self, memory_id: str, include_sources: bool = False, verify: bool = True
+    ) -> dict:
+        """Verified erase: remove the memory, everything derived from it, and
+        every copy of their bytes in the database directory.
+
+        ``include_sources`` also erases what the memory was derived from.
+        ``verify`` scans every file afterwards. Returns the erasure receipt
+        (ids, SHA-256 hashes, the scrub steps, and the scan result with
+        ``residual_found``), never the content. See docs/FORGETTING.md.
+        """
+        return json.loads(self._db.erase(memory_id, include_sources, verify))
 
     def ingest(
         self,

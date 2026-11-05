@@ -281,6 +281,26 @@ impl MenteDB {
         self.inner.forget(id).map_err(mente_err)
     }
 
+    /// Verified erase: remove the memory, everything derived from it, and
+    /// every copy of their bytes in the database directory. Returns the
+    /// erasure receipt as a JSON string (hashes and ids, never content).
+    #[napi]
+    pub fn erase(
+        &self,
+        memory_id: String,
+        include_sources: Option<bool>,
+        verify: Option<bool>,
+    ) -> Result<String> {
+        let id = MemoryId(parse_uuid(&memory_id)?);
+        let opts = mentedb::EraseOptions {
+            include_sources: include_sources.unwrap_or(false),
+            verify: verify.unwrap_or(true),
+            ..Default::default()
+        };
+        let receipt = self.inner.erase(id, opts).map_err(mente_err)?;
+        serde_json::to_string(&receipt).map_err(|e| Error::from_reason(e.to_string()))
+    }
+
     /// Extract memories from a conversation and store them.
     ///
     /// Requires `MENTEDB_LLM_PROVIDER` and `MENTEDB_LLM_API_KEY` env vars to be set,

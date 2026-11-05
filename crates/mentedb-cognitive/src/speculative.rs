@@ -186,6 +186,14 @@ impl SpeculativeCache {
         self.stats.evictions += evicted as u64;
     }
 
+    /// Drop every entry `drop` selects and return how many went. Used to
+    /// erase entries assembled from a memory that no longer exists.
+    pub fn remove_where(&mut self, drop: impl Fn(&CacheEntry) -> bool) -> usize {
+        let before = self.entries.len();
+        self.entries.retain(|e| !drop(e));
+        before - self.entries.len()
+    }
+
     pub fn stats(&self) -> CacheStats {
         CacheStats {
             cache_size: self.entries.len(),

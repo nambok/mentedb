@@ -646,6 +646,7 @@ enum Step {
     Store(MemoryNode),
     Update(usize, MemoryNode),
     Delete(usize),
+    Erase(usize),
 }
 
 #[test]
@@ -687,6 +688,9 @@ fn wal_replay_recovers_a_crash_at_every_write_step() {
         }),
         Step::Store(sized(2_000, 52)),
         Step::Delete(5),
+        Step::Erase(2),
+        Step::Erase(3),
+        Step::Store(sized(1_200, 53)),
     ];
 
     // Run the script once to capture the full WAL.
@@ -720,6 +724,10 @@ fn wal_replay_recovers_a_crash_at_every_write_step() {
                 }
                 Step::Delete(i) => {
                     engine.delete_memory(locs[i]).unwrap();
+                    live.retain(|(p, _)| *p != locs[i]);
+                }
+                Step::Erase(i) => {
+                    engine.erase_memory(locs[i]).unwrap();
                     live.retain(|(p, _)| *p != locs[i]);
                 }
             }
@@ -776,17 +784,40 @@ fn wal_replay_recovers_a_crash_at_every_write_step() {
                     for (i, op) in ops.iter().take(applied).enumerate() {
                         if data_state == 1 && i + 1 == applied {
                             // Torn: only the first half of the last write.
-                            if let RecordOp::Write {
-                                locator,
-                                id,
-                                extent,
-                                payload,
-                                ..
-                            } = op
-                            {
-                                let img = record::live_image(*locator, *id, payload, extent.blocks);
-                                record::write_at(&f, &img[..img.len() / 2], extent.offset())
+                            match op {
+                                RecordOp::Write {
+                                    locator,
+                                    id,
+                                    extent,
+                                    payload,
+                                    ..
+                                } => {
+                                    let img =
+                                        record::live_image(*locator, *id, payload, extent.blocks);
+                                    record::write_at(&f, &img[..img.len() / 2], extent.offset())
+                                        .unwrap();
+                                }
+                                // Torn erase: the free header and half the
+                                // zeros reached the file.
+                                RecordOp::Free {
+                                    extent,
+                                    scrub: true,
+                                    ..
+                                } => {
+                                    record::write_at(
+                                        &f,
+                                        &ExtentHeader::free(extent.blocks).encode(),
+                                        extent.offset(),
+                                    )
                                     .unwrap();
+                                    record::zero_range(
+                                        &f,
+                                        extent.offset() + EXTENT_HEADER_SIZE as u64,
+                                        (extent.byte_len() / 2) as u64,
+                                    )
+                                    .unwrap();
+                                }
+                                RecordOp::Free { .. } => {}
                             }
                         } else {
                             op.redo(&f).unwrap();
@@ -817,4 +848,182 @@ fn wal_replay_recovers_a_crash_at_every_write_step() {
             }
         }
     }
+}
+
+// ---- erase ----
+
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
+fn file_has(dir: &Path, name: &str, needle: &str) -> bool {
+    contains(&std::fs::read(dir.join(name)).unwrap(), needle.as_bytes())
+}
+
+/// Whether a WAL entry's decompressed payload, where record bytes would be,
+/// holds `needle`.
+fn wal_has(dir: &Path, needle: &str) -> bool {
+    Wal::read_entries(&dir.join(WAL_FILE))
+        .unwrap()
+        .iter()
+        .any(|e| contains(&e.data, needle.as_bytes()))
+}
+
+#[test]
+fn erase_zeroes_the_record_and_keeps_its_neighbours() {
+    let (dir, engine) = setup();
+    let gone = node("ERASE-MARKER-alpha-7f3a");
+    let kept_before = node("KEEP-MARKER-before-11c2");
+    let kept_after = node("KEEP-MARKER-after-95d0");
+    let pb = engine.store_memory(&kept_before).unwrap();
+    let pg = engine.store_memory(&gone).unwrap();
+    let pa = engine.store_memory(&kept_after).unwrap();
+    engine.checkpoint().unwrap();
+    assert!(file_has(dir.path(), DATA_FILE, "ERASE-MARKER-alpha-7f3a"));
+
+    engine.erase_memory(pg).unwrap();
+    assert!(engine.load_memory(pg).is_err());
+    assert!(!file_has(dir.path(), DATA_FILE, "ERASE-MARKER-alpha-7f3a"));
+    same(&engine.load_memory(pb).unwrap(), &kept_before);
+    same(&engine.load_memory(pa).unwrap(), &kept_after);
+    assert_eq!(engine.scan_all_memories().len(), 2);
+    engine.close().unwrap();
+
+    let engine = StorageEngine::open(dir.path()).unwrap();
+    assert_eq!(engine.memory_map().unwrap().len(), 2);
+    same(&engine.load_memory(pb).unwrap(), &kept_before);
+    same(&engine.load_memory(pa).unwrap(), &kept_after);
+}
+
+#[test]
+fn delete_leaves_bytes_that_the_free_space_scrub_removes() {
+    let (dir, engine) = setup();
+    let forgotten = node("FORGOTTEN-MARKER-3b1e");
+    let pf = engine.store_memory(&forgotten).unwrap();
+    // A record that grows moves to a larger extent; its old copy stays in
+    // the freed one.
+    let mut moving = node("MOVED-OLD-COPY-MARKER-c4d9");
+    let pm = engine.store_memory(&moving).unwrap();
+    let kept = node("KEEP-MARKER-scrub-6a20");
+    let pk = engine.store_memory(&kept).unwrap();
+    moving.content = format!("MOVED-NEW-MARKER-{}", "x".repeat(4_000));
+    engine.update_memory(pm, &moving).unwrap();
+    engine.delete_memory(pf).unwrap();
+    engine.checkpoint().unwrap();
+    // The gap erase closes: a plain delete and a move leave the bytes.
+    assert!(file_has(dir.path(), DATA_FILE, "FORGOTTEN-MARKER-3b1e"));
+    assert!(file_has(
+        dir.path(),
+        DATA_FILE,
+        "MOVED-OLD-COPY-MARKER-c4d9"
+    ));
+
+    let zeroed = engine.scrub_free_space().unwrap();
+    assert!(zeroed > 0);
+    assert!(!file_has(dir.path(), DATA_FILE, "FORGOTTEN-MARKER-3b1e"));
+    assert!(!file_has(
+        dir.path(),
+        DATA_FILE,
+        "MOVED-OLD-COPY-MARKER-c4d9"
+    ));
+    assert!(!wal_has(dir.path(), "MOVED-OLD-COPY-MARKER-c4d9"));
+    assert!(file_has(dir.path(), DATA_FILE, "MOVED-NEW-MARKER-"));
+    assert!(file_has(dir.path(), DATA_FILE, "KEEP-MARKER-scrub-6a20"));
+    // The chain still walks: the scrubbed regions carry coalesced headers.
+    assert_eq!(engine.scan_all_memories().len(), 2);
+    // Freed space is still reused after the scrub.
+    let reuse = node("REUSE-MARKER-0e77");
+    let pr = engine.store_memory(&reuse).unwrap();
+    engine.release_process_lock();
+    drop(engine);
+
+    // Without the record map, open rebuilds the table by walking the chain.
+    memory_map::remove_snapshot(dir.path());
+    let engine = StorageEngine::open(dir.path()).unwrap();
+    assert_eq!(engine.memory_map().unwrap().len(), 3);
+    same(&engine.load_memory(pm).unwrap(), &moving);
+    same(&engine.load_memory(pk).unwrap(), &kept);
+    same(&engine.load_memory(pr).unwrap(), &reuse);
+}
+
+#[test]
+fn erase_is_redone_by_replay_after_a_crash() {
+    let dir = tempfile::tempdir().unwrap();
+    let gone = node("CRASH-ERASE-MARKER-82f1");
+    let kept = node("CRASH-KEEP-MARKER-5c0b");
+    let (pg, pk) = {
+        let engine = StorageEngine::open(dir.path()).unwrap();
+        let pg = engine.store_memory(&gone).unwrap();
+        let pk = engine.store_memory(&kept).unwrap();
+        engine.erase_memory(pg).unwrap();
+        // Crash: nothing beyond the fsynced WAL and file writes persists.
+        engine.release_process_lock();
+        (pg, pk)
+    };
+    assert!(!file_has(dir.path(), DATA_FILE, "CRASH-ERASE-MARKER-82f1"));
+    // Put the record's bytes back, as if the process died after the WAL
+    // fsync but before the zeroing reached the file: replay must zero again.
+    {
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(dir.path().join(DATA_FILE))
+            .unwrap();
+        for e in Wal::read_entries(&dir.path().join(WAL_FILE)).unwrap() {
+            if e.entry_type == WalEntryType::RecordWrite && e.page_id == pg.0 {
+                RecordOp::decode(true, e.page_id, &e.data)
+                    .unwrap()
+                    .redo(&f)
+                    .unwrap();
+            }
+        }
+        f.sync_all().unwrap();
+    }
+    assert!(file_has(dir.path(), DATA_FILE, "CRASH-ERASE-MARKER-82f1"));
+    let engine = StorageEngine::open(dir.path()).unwrap();
+    assert!(engine.load_memory(pg).is_err());
+    same(&engine.load_memory(pk).unwrap(), &kept);
+    assert!(!file_has(dir.path(), DATA_FILE, "CRASH-ERASE-MARKER-82f1"));
+    engine.checkpoint_scrubbed().unwrap();
+    assert!(!wal_has(dir.path(), "CRASH-ERASE-MARKER-82f1"));
+    assert!(file_has(dir.path(), DATA_FILE, "CRASH-KEEP-MARKER-5c0b"));
+}
+
+#[test]
+fn scrubbed_checkpoint_clears_the_wal_of_erased_records() {
+    let (dir, engine) = setup();
+    let gone = node("WAL-ERASE-MARKER-d41c");
+    let pg = engine.store_memory(&gone).unwrap();
+    assert!(wal_has(dir.path(), "WAL-ERASE-MARKER-d41c"));
+    engine.erase_memory(pg).unwrap();
+    // Until a checkpoint, the log still carries the original write.
+    assert!(wal_has(dir.path(), "WAL-ERASE-MARKER-d41c"));
+    engine.checkpoint_scrubbed().unwrap();
+    assert!(!wal_has(dir.path(), "WAL-ERASE-MARKER-d41c"));
+    assert!(!file_has(dir.path(), WAL_FILE, "WAL-ERASE-MARKER-d41c"));
+    assert!(!file_has(dir.path(), DATA_FILE, "WAL-ERASE-MARKER-d41c"));
+}
+
+#[test]
+fn scrubbed_checkpoint_zeroes_the_replaced_log_file() {
+    use std::io::Read;
+    let (dir, engine) = setup();
+    let pg = engine.store_memory(&node("OLD-LOG-MARKER-71aa")).unwrap();
+    engine.erase_memory(pg).unwrap();
+    // A reader holding the old log open, as the unlinked file's blocks would
+    // be read after the rename.
+    let mut old = std::fs::File::open(dir.path().join(WAL_FILE)).unwrap();
+    engine.checkpoint_scrubbed().unwrap();
+    let mut bytes = Vec::new();
+    old.read_to_end(&mut bytes).unwrap();
+    assert!(!bytes.is_empty());
+    assert!(bytes.iter().all(|b| *b == 0));
+
+    // A plain checkpoint leaves the old file as it was.
+    let pg = engine.store_memory(&node("OLD-LOG-MARKER-82bb")).unwrap();
+    engine.delete_memory(pg).unwrap();
+    let mut old = std::fs::File::open(dir.path().join(WAL_FILE)).unwrap();
+    engine.checkpoint().unwrap();
+    let mut bytes = Vec::new();
+    old.read_to_end(&mut bytes).unwrap();
+    assert!(bytes.iter().any(|b| *b != 0));
 }

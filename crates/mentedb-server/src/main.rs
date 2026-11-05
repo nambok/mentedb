@@ -679,6 +679,7 @@ async fn main() -> Result<()> {
     println!("  POST   /v1/memories         store a memory");
     println!("  GET    /v1/memories/:id      get a memory by ID");
     println!("  DELETE /v1/memories/:id      forget a memory");
+    println!("  POST   /v1/memories/:id/erase verified erase with receipt");
     println!("  POST   /v1/recall           query via MQL");
     println!("  POST   /v1/search           vector similarity search");
     println!("  POST   /v1/edges            create an edge");
@@ -694,6 +695,7 @@ async fn main() -> Result<()> {
     println!("  MemoryService.Recall              query via MQL");
     println!("  MemoryService.Search              vector similarity search");
     println!("  MemoryService.Forget              forget a memory");
+    println!("  MemoryService.Erase               verified erase with receipt");
     println!("  MemoryService.Relate              create an edge");
 
     let grpc_addr = SocketAddr::from(([0, 0, 0, 0], grpc_port));

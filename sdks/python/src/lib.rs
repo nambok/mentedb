@@ -3512,6 +3512,26 @@ impl MenteDB {
         db.forget(id).map_err(to_pyerr)
     }
 
+    /// Verified erase: remove the memory, everything derived from it, and
+    /// every copy of their bytes in the database directory. Returns the
+    /// erasure receipt as a JSON string (hashes and ids, never content).
+    #[pyo3(signature = (memory_id, include_sources=false, verify=true))]
+    fn erase(&self, memory_id: &str, include_sources: bool, verify: bool) -> PyResult<String> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+
+        let id = parse_memory_id(memory_id)?;
+        let opts = mentedb::EraseOptions {
+            include_sources,
+            verify,
+            ..Default::default()
+        };
+        let receipt = db.erase(id, opts).map_err(to_pyerr)?;
+        serde_json::to_string(&receipt).map_err(to_pyerr)
+    }
+
     /// Retrieve a memory by its UUID string.
     /// Returns a dict with id, content, memory_type, tags, created_at.
     fn get_memory(&self, memory_id: &str) -> PyResult<Py<PyAny>> {

@@ -334,6 +334,58 @@ impl MemoryService for MemoryServiceImpl {
         }))
     }
 
+    async fn erase(
+        &self,
+        request: Request<pb::EraseRequest>,
+    ) -> Result<Response<pb::EraseResponse>, Status> {
+        let agent = authenticate_grpc_request(&self.state, &request, true)?;
+        let req = request.into_inner();
+        let id = MemoryId(parse_uuid_field(&req.id, "id")?);
+
+        let db = self.state.db.clone();
+        let node = db
+            .get_memory(id)
+            .map_err(|_| Status::not_found(format!("memory {id} not found")))?;
+        if let Some(a) = &agent
+            && !a.admin
+            && let Ok(Some(tid)) = a.agent()
+            && node.agent_id != tid
+        {
+            return Err(Status::permission_denied(
+                "memory belongs to a different agent",
+            ));
+        }
+        let mut opts = mentedb::EraseOptions {
+            include_sources: req.include_sources,
+            ..Default::default()
+        };
+        if let Some(v) = req.verify {
+            opts.verify = v;
+        }
+        let receipt = tokio::task::spawn_blocking(move || db.erase(id, opts))
+            .await
+            .map_err(|e| Status::internal(format!("erase task failed: {e}")))?
+            .map_err(|e| {
+                error!("gRPC erase failed: {e}");
+                Status::internal(format!("erase failed: {e}"))
+            })?;
+        let receipt_json = serde_json::to_string(&receipt)
+            .map_err(|e| Status::internal(format!("receipt encoding failed: {e}")))?;
+        Ok(Response::new(pb::EraseResponse {
+            erased_ids: receipt.erased.iter().map(|e| e.id.to_string()).collect(),
+            ancestors_kept: receipt
+                .ancestors_kept
+                .iter()
+                .map(|id| id.to_string())
+                .collect(),
+            residual_found: receipt
+                .verification
+                .as_ref()
+                .is_some_and(|v| v.residual_found),
+            receipt_json,
+        }))
+    }
+
     async fn relate(
         &self,
         request: Request<pb::RelateRequest>,
@@ -557,6 +609,56 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(forget_resp.into_inner().status, "deleted");
+    }
+
+    #[tokio::test]
+    async fn test_grpc_memory_erase() {
+        let (state, _tmp) = make_test_state();
+        let svc = MemoryServiceImpl {
+            state: state.clone(),
+        };
+        let stored_id = svc
+            .store(Request::new(pb::StoreRequest {
+                agent_id: AgentId::new().to_string(),
+                memory_type: "semantic".into(),
+                content: "a memory to erase over gRPC".into(),
+                embedding: vec![],
+                tags: vec![],
+                attributes: HashMap::new(),
+                space_id: String::new(),
+                salience: 0.5,
+                confidence: 1.0,
+                valid_from: None,
+                valid_until: None,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .id;
+
+        let resp = svc
+            .erase(Request::new(pb::EraseRequest {
+                id: stored_id.clone(),
+                include_sources: false,
+                verify: None,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(resp.erased_ids, vec![stored_id.clone()]);
+        assert!(!resp.residual_found);
+        let receipt: serde_json::Value = serde_json::from_str(&resp.receipt_json).unwrap();
+        assert_eq!(receipt["verification"]["residual_found"], false);
+        assert!(!resp.receipt_json.contains("erase over gRPC"));
+
+        let again = svc
+            .erase(Request::new(pb::EraseRequest {
+                id: stored_id,
+                include_sources: false,
+                verify: Some(false),
+            }))
+            .await;
+        assert_eq!(again.unwrap_err().code(), tonic::Code::NotFound);
     }
 
     #[tokio::test]

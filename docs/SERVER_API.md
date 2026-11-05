@@ -573,6 +573,37 @@ Forget one memory. Write.
 { "status": "deleted" }
 ```
 
+### `POST /memories/{id}/erase`
+
+Verified erase. Write. Removes the memory, every memory derived from it, and
+every copy of their bytes in the database directory, then returns the
+erasure receipt. The body is optional:
+
+```json
+{ "include_sources": false, "verify": true, "scrub_free_space": true }
+```
+
+Any field of the engine's `EraseOptions` may be set (`include_sources`,
+`verify`, `scrub_free_space`, `remove_legacy_copies`, `zero_replaced_files`,
+`max_cascade`, `text_match_min_bytes`, `verify_min_content_bytes`,
+`verify_chunk_bytes`). The response:
+
+```json
+{
+  "requested": "6f1c...",
+  "erased": [{ "id": "6f1c...", "reason": "requested", "content_sha256": "9b2e...", "embedding_sha256": "40aa..." }],
+  "ancestors_kept": [],
+  "profiles_to_review": [],
+  "erased_at_us": 1793845123000000,
+  "steps": { "records_zeroed": 1, "index_vectors_scrubbed": 1, "free_space_bytes_zeroed": 0, "wal_scrubbed": true, "snapshots_rewritten": true, "replaced_files_zeroed": 9, "legacy_files_removed": [], "cache_entries_dropped": 0 },
+  "verification": { "files_scanned": 14, "bytes_scanned": 1203456, "residual_found": false, "hits": [], "unreadable": [], "content_not_checked": [] }
+}
+```
+
+`404` when the memory does not exist, `403` when it belongs to another agent
+or the token is read only, `409` when the cascade would pass `max_cascade`
+(nothing is changed). See [FORGETTING.md](FORGETTING.md).
+
 ### `POST /edges`
 
 Create a typed, weighted edge between two memories. Write.
