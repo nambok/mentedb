@@ -957,10 +957,16 @@ impl MenteDb {
         // not only tombstoned (see `erase::finish_pending_erase`).
         let erase_pending = erase::pending(path);
         let mut retired = 0usize;
-        for id in index.vector_ids() {
+        let vector_ids = index.vector_ids();
+        let orphans: std::collections::HashSet<MemoryId> = vector_ids
+            .iter()
+            .copied()
+            .filter(|id| !page_map.contains_key(id))
+            .collect();
+        for id in vector_ids {
             if !page_map.contains_key(&id) {
                 if erase_pending {
-                    index.erase_orphan(id);
+                    index.erase_orphan(id, &orphans);
                 } else {
                     index.remove_vector_only(id);
                 }

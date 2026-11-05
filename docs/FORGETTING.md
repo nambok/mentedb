@@ -109,16 +109,21 @@ identical content (an exact duplicate) is erased, with reason `identical`.
 ## Search after an erase
 
 A tombstoned HNSW node keeps routing searches, so its vector cannot simply
-be dropped. Erase replaces it with the mean of the node's neighbours, which
-sits where the node sat in the graph and is made only from vectors that
-remain. Measured on 2,000 random 32 dimension vectors with a fifth of them
+be dropped. Erase replaces it with the mean of the node's live neighbours
+outside the erase, which sits where the node sat in the graph and is made only
+from vectors that remain. When no such neighbour exists, or the mean would be
+an exact copy of one (a single survivor, or identical survivors), the node is
+zeroed instead, because a copy would outlive that neighbour's own erase. So
+small databases get zeroed hops, and a later erase of a neighbour leaves a
+blend of it in earlier tombstones only as part of a mean of several vectors,
+never its exact bytes. Measured on 2,000 random 32 dimension vectors with a fifth of them
 removed (`erase_keeps_recall_of_the_remaining_vectors` in
 `crates/mentedb-index/src/hnsw.rs`), recall at 10 of the remaining vectors:
 
 | Removal | Recall@10 |
 |---|---|
 | Plain tombstone (original vector kept) | 0.9385 |
-| Erase (neighbour mean) | 0.9460 |
+| Erase (neighbour mean) | 0.9440 |
 | Zeroed vector (the naive scrub) | 0.8865 |
 
 `recall_of_unrelated_queries_is_unchanged_by_erase` in
