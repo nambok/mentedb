@@ -915,10 +915,26 @@ impl MenteDb {
         // usable snapshot storage scans every page once and persists the map.
         // Entries arrive in page order, so a memory id on two pages resolves
         // to the later page, as the full scan always did.
-        let mapped = storage.memory_map()?;
+        let mut mapped = storage.memory_map()?;
         let mut page_map = HashMap::with_capacity(mapped.len());
         for m in &mapped {
             page_map.insert(m.id, m.page);
+        }
+        // Engines before 0.47.1 stored a memory again under its own id as a new
+        // record and kept the old one. The later page is the memory; free the
+        // stale copies once, or a delete of the memory would bring them back.
+        let stale: Vec<PageId> = mapped
+            .iter()
+            .filter(|m| page_map.get(&m.id) != Some(&m.page))
+            .map(|m| m.page)
+            .collect();
+        if !stale.is_empty() {
+            let freed = storage.delete_memories(&stale)?;
+            mapped.retain(|m| page_map.get(&m.id) == Some(&m.page));
+            info!(
+                freed,
+                "freed stale copies of memories stored more than once"
+            );
         }
         if !page_map.is_empty() {
             info!(memories = page_map.len(), "loaded page map from storage");
@@ -1302,8 +1318,12 @@ impl MenteDb {
             return Ok(StoreOutcome::Duplicate { of });
         }
 
-        let is_new = !self.page_map.read().contains_key(&id);
-        let page_id = self.storage.store_memory(&node)?;
+        let existing = self.page_map.read().get(&id).copied();
+        let is_new = existing.is_none();
+        // Storing an existing id replaces its record in the same logged write.
+        let page_id = self
+            .storage
+            .store_memory_batch_replacing(std::slice::from_ref(&node), &[existing])?[0];
         self.note_write(id);
         self.page_map.write().insert(id, page_id);
         self.index.index_memory(&node);
@@ -1622,7 +1642,13 @@ impl MenteDb {
             }
         }
 
-        let page_ids = self.storage.store_memory_batch(&nodes)?;
+        let replaces: Vec<Option<PageId>> = {
+            let page_map = self.page_map.read();
+            nodes.iter().map(|n| page_map.get(&n.id).copied()).collect()
+        };
+        let page_ids = self
+            .storage
+            .store_memory_batch_replacing(&nodes, &replaces)?;
         for node in &nodes {
             self.note_write(node.id);
         }
