@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.1](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.47.0...mentedb-storage-v0.47.1) - 2026-11-06
+
+### Fixed
+
+- storing a memory again frees its old record, so a delete stays deleted ([#534](https://github.com/nambok/mentedb/pull/534))
+
 ## [0.46.0](https://github.com/nambok/mentedb/compare/mentedb-storage-v0.45.0...mentedb-storage-v0.46.0) - 2026-11-05
 
 ### Added

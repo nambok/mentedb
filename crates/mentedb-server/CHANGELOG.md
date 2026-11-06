@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.1](https://github.com/nambok/mentedb/compare/mentedb-server-v0.47.0...mentedb-server-v0.47.1) - 2026-11-06
+
+### Other
+
+- *(deps)* bump jsonwebtoken from 10.4.0 to 11.1.0 ([#524](https://github.com/nambok/mentedb/pull/524))
+- release v0.47.0 ([#531](https://github.com/nambok/mentedb/pull/531))
+
 ## [0.47.0](https://github.com/nambok/mentedb/compare/mentedb-server-v0.46.0...mentedb-server-v0.47.0) - 2026-11-05
 
 ### Other
