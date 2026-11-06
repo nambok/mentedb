@@ -466,6 +466,20 @@ impl StorageEngine {
 
     /// Store several [`MemoryNode`]s with a single WAL fsync.
     pub fn store_memory_batch(&self, nodes: &[MemoryNode]) -> MenteResult<Vec<PageId>> {
+        self.store_memory_batch_replacing(nodes, &[])
+    }
+
+    /// [`Self::store_memory_batch`], where `replaces[i]` (when given) is the
+    /// record that already holds `nodes[i]`'s id. Each such record is freed in
+    /// the same logged batch as the new write, so a memory never has two
+    /// records: a stale one would outlive a later delete of the new one and
+    /// become the memory again on the next open. A replaced locator that holds
+    /// another id, or nothing, is left alone. Missing entries mean no record.
+    pub fn store_memory_batch_replacing(
+        &self,
+        nodes: &[MemoryNode],
+        replaces: &[Option<PageId>],
+    ) -> MenteResult<Vec<PageId>> {
         let payloads = nodes
             .iter()
             .map(|n| self.encode(n))
@@ -489,12 +503,32 @@ impl StorageEngine {
                 freed: None,
             });
         }
+        // Frees go after every allocation, so none of the new records lands in
+        // an extent this batch frees.
+        let mut frees = Vec::new();
+        for (node, old) in nodes.iter().zip(replaces) {
+            if let Some(old) = old
+                && let Some(entry) = st.table.records.get(&old.0)
+                && entry.id == node.id
+                && !frees.iter().any(|f: &RecordOp| f.locator() == old.0)
+            {
+                frees.push(RecordOp::Free {
+                    locator: old.0,
+                    extent: entry.extent,
+                    scrub: false,
+                });
+            }
+        }
         let mut lsns = Vec::with_capacity(ops.len());
         for op in &ops {
             lsns.push(
                 st.wal
                     .append(WalEntryType::RecordWrite, op.locator(), &op.encode())?,
             );
+        }
+        for op in &frees {
+            st.wal
+                .append(WalEntryType::RecordFree, op.locator(), &op.encode())?;
         }
         st.wal.sync()?;
         st.free = free;
@@ -510,6 +544,14 @@ impl StorageEngine {
                     .insert(op.locator(), node.clone(), payload.len() as u64);
             }
             ids.push(PageId(op.locator()));
+        }
+        for op in &frees {
+            if let RecordOp::Free { extent, .. } = op {
+                st.free.insert(*extent);
+            }
+            op.redo(&self.file)?;
+            st.table.apply(op, 0);
+            self.cache.invalidate(op.locator());
         }
         st.dirty = true;
         let wal_bytes = st.wal.file_size();
@@ -618,6 +660,47 @@ impl StorageEngine {
             self.maybe_checkpoint(wal_bytes);
         }
         Ok(())
+    }
+
+    /// Free every record in `pages` with a single WAL fsync. Used to drop stale
+    /// copies of memories that an older engine left behind when a memory was
+    /// stored again under its own id. Pages that hold no record are skipped.
+    /// Returns how many records were freed.
+    pub fn delete_memories(&self, pages: &[PageId]) -> MenteResult<usize> {
+        let mut st = self.state.write();
+        let mut ops = Vec::new();
+        for page in pages {
+            if let Some(entry) = st.table.records.get(&page.0)
+                && !ops.iter().any(|o: &RecordOp| o.locator() == page.0)
+            {
+                ops.push(RecordOp::Free {
+                    locator: page.0,
+                    extent: entry.extent,
+                    scrub: false,
+                });
+            }
+        }
+        if ops.is_empty() {
+            return Ok(0);
+        }
+        for op in &ops {
+            st.wal
+                .append(WalEntryType::RecordFree, op.locator(), &op.encode())?;
+        }
+        st.wal.sync()?;
+        for op in &ops {
+            if let RecordOp::Free { extent, .. } = op {
+                st.free.insert(*extent);
+            }
+            op.redo(&self.file)?;
+            st.table.apply(op, 0);
+            self.cache.invalidate(op.locator());
+        }
+        st.dirty = true;
+        let wal_bytes = st.wal.file_size();
+        drop(st);
+        self.maybe_checkpoint(wal_bytes);
+        Ok(ops.len())
     }
 
     /// Overwrite every free extent of the record file with zeros and return
