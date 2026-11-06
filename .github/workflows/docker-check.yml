@@ -2,13 +2,18 @@ name: Docker image
 
 # Builds the release image and requires the container to report healthy with
 # TLS off and on, so a broken image or health check fails here instead of
-# after a release. Limited to changes that can affect the image.
+# after a release. Limited to changes that can affect the image, including
+# dependency bumps: the image builds with its own pinned rustc, which a new
+# dependency version can outgrow while CI on stable still passes.
 on:
   pull_request:
     branches: [main]
     paths:
       - Dockerfile
       - .dockerignore
+      - Cargo.toml
+      - Cargo.lock
+      - crates/*/Cargo.toml
       - crates/mentedb-server/**
       - .github/workflows/docker-check.yml
 

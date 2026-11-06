@@ -14,10 +14,10 @@ ARG EMSIGN_ECC_G3_DER_B64=MIICTjCCAdOgAwIBAgIKPPYHqWhwDtqLhDAKBggqhkjOPQQDAzBrMQ
 # Pin the builder to the same Debian release as the runtime stage: the
 # unsuffixed rust image moved to a newer Debian whose glibc is ahead of the
 # runtime's, and a binary linked there fails to start on bookworm.
-# Pinned by digest for reproducible builds. Tag: rust:1.94-slim-bookworm
-# (multi arch index digest, looked up 2026-10-19). Bump the tag and digest
-# together.
-FROM rust:1.94-slim-bookworm@sha256:cf9dd0ec73e75f827fe59123fff9dc65af1a1c8363c3c31ee8d7f8ad0b6a5fb2 AS builder
+# Pinned by digest for reproducible builds. Tag: rust:1.95-slim-bookworm
+# (multi arch index digest, looked up 2026-11-06). Bump the tag and digest
+# together, and when a dependency needs a newer rustc.
+FROM rust:1.95-slim-bookworm@sha256:d7482085ff5b415f84dba5647ae71606650bdef00db7aeb69f4b3d170c3e4082 AS builder
 
 RUN apt-get update && apt-get install -y pkg-config libssl-dev protobuf-compiler ca-certificates && rm -rf /var/lib/apt/lists/*
 
