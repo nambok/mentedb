@@ -571,6 +571,12 @@ fn persist(
             );
             node.user_id = scope.user_id;
             node.tags = vec![path_tag(path), SOURCE_TAG.to_string()];
+            // Where the file was first created; a later rename moves the
+            // path tag, while provenance keeps the original path.
+            node.provenance = Some(
+                crate::Provenance::new(crate::SourceKind::File, scope.agent_id)
+                    .with_source_ref(path),
+            );
             node
         }
     };

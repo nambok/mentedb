@@ -25,6 +25,7 @@ use mentedb_consolidation::FactExtractor;
 use mentedb_context::{DeltaTracker, ScoredMemory};
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::MemoryType;
+use mentedb_core::provenance::{Provenance, SourceKind};
 use mentedb_core::types::{AgentId, MemoryId, Timestamp, UserId};
 use mentedb_core::{MemoryEdge, MemoryNode};
 use tracing::{debug, info, warn};
@@ -610,9 +611,12 @@ impl MenteDb {
         if let Some(ctx) = project_context {
             node.tags.push(format!("scope:project:{}", ctx));
         }
+        let mut provenance = Provenance::new(SourceKind::Chat, agent_id);
         if let Some(session) = session_id {
             node.tags.push(format!("session:{}", session));
+            provenance = provenance.with_session(session.clone());
         }
+        node.provenance = Some(provenance);
         let id = node.id;
         self.store(node)?;
         Ok((vec![id], Some(id)))
@@ -1040,6 +1044,9 @@ impl MenteDb {
                         .with_user_id(user_id);
                 ghost_node.confidence = 0.3;
                 ghost_node.tags = vec!["ghost-memory".to_string(), "unconfirmed".to_string()];
+                // Made from this turn's stored memory, so it carries the
+                // turn's session.
+                self.stamp_derived(&mut ghost_node, stored_ids);
                 if let Some(ctx) = &input.project_context {
                     ghost_node.tags.push(format!("scope:project:{}", ctx));
                 }

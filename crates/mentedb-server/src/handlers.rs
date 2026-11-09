@@ -11,6 +11,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::{AttributeValue, MemoryType};
+use mentedb_core::provenance::{Provenance, SourceKind};
 use mentedb_core::space::Permission;
 use mentedb_core::{MemoryEdge, MemoryNode};
 use mentedb_extraction::{
@@ -133,7 +134,9 @@ pub async fn store_memory(
         valid_from: req.get("valid_from").and_then(|v| v.as_u64()),
         valid_until: req.get("valid_until").and_then(|v| v.as_u64()),
         context: None,
+        provenance: Some(parse_provenance(&req, agent_id, SourceKind::Api)?),
     };
+    let session_id = node.session_id().map(str::to_string);
 
     let handle = db.handle.clone();
     let outcome = tokio::task::spawn_blocking(move || handle.store_with_outcome(node))
@@ -165,6 +168,8 @@ pub async fn store_memory(
             content: content.clone(),
             agent_id,
             space_id,
+            origin: id,
+            session_id,
             db: db.handle.clone(),
         };
         if tx.try_send(req).is_err() {
@@ -361,7 +366,18 @@ pub async fn ingest_conversation(
         None => SpaceId::nil(),
     };
 
-    let stats = run_extraction(extraction_config, conversation, agent_id, space_id, &db).await?;
+    // Extracted from a conversation the caller sent but did not store: the
+    // memories are chat sourced, in the request's session.
+    let provenance = parse_provenance(&req, agent_id, SourceKind::Chat)?;
+    let stats = run_extraction(
+        extraction_config,
+        conversation,
+        agent_id,
+        space_id,
+        &provenance,
+        &db,
+    )
+    .await?;
 
     Ok((StatusCode::OK, Json(stats)))
 }
@@ -540,6 +556,7 @@ async fn run_extraction(
     conversation: &str,
     agent_id: AgentId,
     space_id: SpaceId,
+    provenance: &Provenance,
     db: &mentedb::MenteDb,
 ) -> Result<Value, ApiError> {
     let provider = HttpExtractionProvider::new(config.clone()).map_err(|e| {
@@ -589,6 +606,7 @@ async fn run_extraction(
             valid_from: None,
             valid_until: None,
             context: None,
+            provenance: Some(provenance.clone()),
         };
         match db.store_with_outcome(node) {
             Ok(mentedb::StoreOutcome::Stored) => stored_ids.push(id.to_string()),
@@ -819,11 +837,91 @@ pub(crate) fn memory_node_to_json_with(node: &MemoryNode, include_embedding: boo
         "valid_until": node.valid_until,
         "attributes": attrs,
         "tags": node.tags,
+        "provenance": provenance_to_json(node.provenance.as_ref()),
     });
     if include_embedding && let Value::Object(m) = &mut out {
         m.insert("embedding".into(), json!(node.embedding));
     }
     out
+}
+
+/// A memory's provenance as JSON, or null for a memory written before
+/// provenance existed.
+pub(crate) fn provenance_to_json(p: Option<&Provenance>) -> Value {
+    match p {
+        None => Value::Null,
+        Some(p) => json!({
+            "session_id": p.session_id,
+            "source": p.source.as_str(),
+            "source_ref": p.source_ref,
+            "written_by": p.written_by.to_string(),
+            "written_at": p.written_at,
+            "derived_from": p.derived_from.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+        }),
+    }
+}
+
+/// An optional string field of a JSON object; null and absent are unset,
+/// an empty string is unset, anything else but a string is an error.
+fn provenance_str(obj: &Value, field: &str, path: &str) -> Result<Option<String>, ApiError> {
+    match obj.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s.is_empty() => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(ApiError::BadRequest(format!("'{path}' must be a string"))),
+    }
+}
+
+/// The provenance a write request asks for, written now by `written_by`.
+///
+/// Read from a `provenance` object (`session_id`, `source`, `source_ref`),
+/// with a top level `session_id` accepted as a shorthand. The writer, the
+/// write time and derived origins are set by the server, never the caller.
+/// `default_source` applies when the request names none.
+pub(crate) fn parse_provenance(
+    req: &Value,
+    written_by: AgentId,
+    default_source: SourceKind,
+) -> Result<Provenance, ApiError> {
+    let obj = match req.get("provenance") {
+        None | Some(Value::Null) => Value::Object(Map::new()),
+        Some(v @ Value::Object(_)) => v.clone(),
+        Some(_) => {
+            return Err(ApiError::BadRequest(
+                "'provenance' must be an object".into(),
+            ));
+        }
+    };
+    let nested_session = provenance_str(&obj, "session_id", "provenance.session_id")?;
+    let top_session = provenance_str(req, "session_id", "session_id")?;
+    let session_id = match (nested_session, top_session) {
+        (Some(a), Some(b)) if a != b => {
+            return Err(ApiError::BadRequest(
+                "'session_id' and 'provenance.session_id' differ".into(),
+            ));
+        }
+        (a, b) => a.or(b),
+    };
+    let source = provenance_str(&obj, "source", "provenance.source")?
+        .map(|s| SourceKind::parse(&s))
+        .unwrap_or(default_source);
+    let mut p = Provenance::new(source, written_by);
+    p.session_id = session_id;
+    p.source_ref = provenance_str(&obj, "source_ref", "provenance.source_ref")?;
+    Ok(p)
+}
+
+/// A provenance filter from optional `session_id` and `source` values.
+pub(crate) fn provenance_filter(
+    session_id: Option<String>,
+    source: Option<String>,
+) -> mentedb::ProvenanceFilter {
+    mentedb::ProvenanceFilter {
+        session_id: session_id.filter(|s| !s.is_empty()),
+        source: source
+            .filter(|s| !s.is_empty())
+            .map(|s| SourceKind::parse(&s)),
+    }
 }
 
 fn parse_permission(s: &str) -> Result<Permission, ApiError> {

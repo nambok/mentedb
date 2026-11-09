@@ -3,6 +3,7 @@
 //! This crate defines the shared data model used by all MenteDB subsystems:
 //!
 //! - [`MemoryNode`]: The atomic unit of knowledge with embeddings, metadata, and tags
+//! - [`Provenance`]: Where a memory came from, recorded once at write time
 //! - [`MemoryEdge`]: Typed, weighted relationships between memories
 //! - [`MemoryTier`]: Cognitive inspired storage hierarchy
 //! - [`MenteError`]: Unified error type for the workspace
@@ -21,6 +22,7 @@ pub mod limits;
 pub mod memory;
 pub mod metrics;
 pub mod mvcc;
+pub mod provenance;
 pub mod space;
 pub mod text;
 pub mod tier;
@@ -36,5 +38,6 @@ pub use limits::{ResourceLimits, ResourceTracker};
 pub use memory::MemoryNode;
 pub use metrics::Metrics;
 pub use mvcc::{Version, VersionStore};
+pub use provenance::{Provenance, SourceKind};
 pub use space::{MemorySpace, Permission, SpaceManager};
 pub use tier::MemoryTier;

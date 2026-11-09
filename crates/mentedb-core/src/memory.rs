@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::provenance::Provenance;
 use crate::types::*;
 use crate::types::{AgentId, MemoryId, SpaceId, UserId};
 
@@ -86,6 +87,13 @@ pub struct MemoryNode {
     /// terms it never literally contains. None indexes the content as-is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    /// Where this memory came from, recorded when it was first written and
+    /// kept unchanged by every later write of the same id (see
+    /// [`Provenance`]). None for a memory written before provenance existed:
+    /// those records decode as they are, and a later write does not invent
+    /// an origin for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Provenance>,
 }
 
 impl MemoryNode {
@@ -119,6 +127,7 @@ impl MemoryNode {
             valid_from: None,
             valid_until: None,
             context: None,
+            provenance: None,
         }
     }
 
@@ -129,6 +138,18 @@ impl MemoryNode {
     pub fn with_user_id(mut self, user_id: UserId) -> Self {
         self.user_id = user_id;
         self
+    }
+
+    /// Attach the memory's provenance (builder style). Takes effect on the
+    /// first write of this id only; see [`MemoryNode::provenance`].
+    pub fn with_provenance(mut self, provenance: Provenance) -> Self {
+        self.provenance = Some(provenance);
+        self
+    }
+
+    /// The session this memory was written in, if its provenance names one.
+    pub fn session_id(&self) -> Option<&str> {
+        self.provenance.as_ref()?.session_id.as_deref()
     }
 
     /// Attach retrieval context (builder style). See [`MemoryNode::context`].

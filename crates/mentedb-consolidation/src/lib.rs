@@ -59,6 +59,7 @@ pub(crate) mod test_helpers {
             valid_from: None,
             valid_until: None,
             context: None,
+            provenance: None,
         }
     }
 }

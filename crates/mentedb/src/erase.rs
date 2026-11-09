@@ -186,6 +186,48 @@ pub struct ErasureReceipt {
     pub verification: Option<Verification>,
 }
 
+/// What [`MenteDb::erase_session`] removed: one erase over every memory
+/// written in the session, with one scrub and one verification. Hashes and
+/// ids, never content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionErasureReceipt {
+    /// The session erased.
+    pub session_id: String,
+    /// The memories written in the session (each erased with reason
+    /// `requested`).
+    pub requested: Vec<MemoryId>,
+    /// Every erased memory: the session's own and everything derived from
+    /// them, whatever session the derived ones carry.
+    pub erased: Vec<ErasedMemory>,
+    /// Sources of the session's memories that were kept (outside the
+    /// session; erase with `include_sources` to remove them).
+    pub ancestors_kept: Vec<MemoryId>,
+    /// User profiles of the erased memories' owners to review or rebuild.
+    pub profiles_to_review: Vec<MemoryId>,
+    /// When the erase finished, microseconds since the Unix epoch.
+    pub erased_at_us: u64,
+    pub steps: ScrubSteps,
+    /// Present when the erase ran with `verify` and found something to
+    /// erase.
+    pub verification: Option<Verification>,
+}
+
+/// What one erase run did, before it is shaped into a receipt.
+struct ErasedSet {
+    erased: Vec<ErasedMemory>,
+    ancestors_kept: Vec<MemoryId>,
+    profiles_to_review: Vec<MemoryId>,
+    steps: ScrubSteps,
+    verification: Option<Verification>,
+}
+
+fn now_us() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64
+}
+
 /// Lowercase hex SHA-256.
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -245,7 +287,94 @@ impl MenteDb {
         if self.page_of(id).is_none() {
             return Err(MenteError::MemoryNotFound(id));
         }
-        let plan = self.erase_plan(id, &opts)?;
+        let done = self.erase_roots(&[id], &id.to_string(), &opts)?;
+        let receipt = ErasureReceipt {
+            requested: id,
+            erased: done.erased,
+            ancestors_kept: done.ancestors_kept,
+            profiles_to_review: done.profiles_to_review,
+            erased_at_us: now_us(),
+            steps: done.steps,
+            verification: done.verification,
+        };
+        info!(
+            %id,
+            erased = receipt.erased.len(),
+            residual = receipt.verification.as_ref().map(|v| v.residual_found),
+            "erase complete"
+        );
+        Ok(receipt)
+    }
+
+    /// Erase every memory written in `session_id` (by its provenance), and
+    /// everything derived from them, in one erase: one cascade over all of
+    /// them, one scrub, one verification scan, one receipt. Derived memories
+    /// are erased even when they carry no session or another one (a
+    /// consolidation that merged this session's memory with another's).
+    ///
+    /// A session with no stored memories returns an empty receipt and
+    /// changes nothing. Memories written before provenance existed carry no
+    /// session, so they are never matched; erase those by id.
+    pub fn erase_session(
+        &self,
+        session_id: &str,
+        opts: EraseOptions,
+    ) -> MenteResult<SessionErasureReceipt> {
+        let _one_at_a_time = self.erase_serial.lock();
+        info!(
+            session_id,
+            include_sources = opts.include_sources,
+            "erasing session"
+        );
+        let mut requested: Vec<MemoryId> = self
+            .memory_ids_in_session(session_id)
+            .into_iter()
+            .filter(|id| self.page_of(*id).is_some())
+            .collect();
+        requested.sort_unstable();
+        if requested.is_empty() {
+            return Ok(SessionErasureReceipt {
+                session_id: session_id.to_string(),
+                requested,
+                erased: Vec::new(),
+                ancestors_kept: Vec::new(),
+                profiles_to_review: Vec::new(),
+                erased_at_us: now_us(),
+                steps: ScrubSteps::default(),
+                verification: None,
+            });
+        }
+        let label = format!("session {session_id}");
+        let done = self.erase_roots(&requested, &label, &opts)?;
+        let receipt = SessionErasureReceipt {
+            session_id: session_id.to_string(),
+            requested,
+            erased: done.erased,
+            ancestors_kept: done.ancestors_kept,
+            profiles_to_review: done.profiles_to_review,
+            erased_at_us: now_us(),
+            steps: done.steps,
+            verification: done.verification,
+        };
+        info!(
+            session_id,
+            erased = receipt.erased.len(),
+            residual = receipt.verification.as_ref().map(|v| v.residual_found),
+            "session erase complete"
+        );
+        Ok(receipt)
+    }
+
+    /// The erase itself, for one or more requested memories that all exist.
+    /// The caller holds `erase_serial`. `label` names the request in errors.
+    fn erase_roots(
+        &self,
+        roots: &[MemoryId],
+        label: &str,
+        opts: &EraseOptions,
+    ) -> MenteResult<ErasedSet> {
+        let opts = opts.clone();
+        let plan = self.erase_plan(roots, label, &opts)?;
 
         // Old inodes of files about to be replaced, captured before any of
         // them is rewritten.
@@ -325,36 +454,38 @@ impl MenteDb {
         if let Some(v) = &verification
             && v.residual_found
         {
-            warn!(%id, hits = v.hits.len(), "erase verification found residual bytes");
+            warn!(
+                label,
+                hits = v.hits.len(),
+                "erase verification found residual bytes"
+            );
         }
-        let receipt = ErasureReceipt {
-            requested: id,
+        Ok(ErasedSet {
             erased,
             ancestors_kept: plan.ancestors_kept,
             profiles_to_review,
-            erased_at_us: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_micros() as u64,
             steps,
             verification,
-        };
-        info!(
-            %id,
-            erased = receipt.erased.len(),
-            residual = receipt.verification.as_ref().map(|v| v.residual_found),
-            "erase complete"
-        );
-        Ok(receipt)
+        })
     }
 
     /// Decide what to erase, before anything changes. Reads the graph under
     /// its read lock only (never with the page map held), then loads each
     /// memory.
-    fn erase_plan(&self, id: MemoryId, opts: &EraseOptions) -> MenteResult<ErasePlan> {
-        let mut order: Vec<(MemoryId, EraseReason)> = vec![(id, EraseReason::Requested)];
-        let mut chosen: HashSet<MemoryId> = HashSet::from([id]);
-        let ancestors: Vec<MemoryId>;
+    fn erase_plan(
+        &self,
+        roots: &[MemoryId],
+        label: &str,
+        opts: &EraseOptions,
+    ) -> MenteResult<ErasePlan> {
+        let mut order: Vec<(MemoryId, EraseReason)> = Vec::with_capacity(roots.len());
+        let mut chosen: HashSet<MemoryId> = HashSet::with_capacity(roots.len());
+        for r in roots {
+            if chosen.insert(*r) {
+                order.push((*r, EraseReason::Requested));
+            }
+        }
+        let mut ancestors: Vec<MemoryId> = Vec::new();
         {
             let graph = self.graph.graph();
             let derived_from = |m: MemoryId| -> Vec<MemoryId> {
@@ -374,10 +505,18 @@ impl MenteDb {
                     .collect()
             };
 
-            // Ancestors: only up from the requested memory, never up from
+            // Ancestors: only up from the requested memories, never up from
             // the descendants the cascade pulls in (an entity node's other
-            // members are not this memory's sources).
-            ancestors = bfs(id, &derived_from);
+            // members are not this memory's sources). A requested memory is
+            // never its sibling's ancestor here.
+            let mut seen: HashSet<MemoryId> = chosen.clone();
+            for r in roots {
+                for a in bfs(*r, &derived_from) {
+                    if seen.insert(a) {
+                        ancestors.push(a);
+                    }
+                }
+            }
             if opts.include_sources {
                 for a in &ancestors {
                     if chosen.insert(*a) {
@@ -395,7 +534,7 @@ impl MenteDb {
             }
             if order.len() > opts.max_cascade {
                 return Err(MenteError::CapacityExceeded(format!(
-                    "erase of {id} would remove {} memories (max_cascade {})",
+                    "erase of {label} would remove {} memories (max_cascade {})",
                     order.len(),
                     opts.max_cascade
                 )));
@@ -452,7 +591,7 @@ impl MenteDb {
         }
         if order.len() > opts.max_cascade {
             return Err(MenteError::CapacityExceeded(format!(
-                "erase of {id} would remove {} memories (max_cascade {})",
+                "erase of {label} would remove {} memories (max_cascade {})",
                 order.len(),
                 opts.max_cascade
             )));

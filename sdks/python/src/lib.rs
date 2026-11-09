@@ -50,6 +50,36 @@ fn parse_memory_id(s: &str) -> PyResult<MemoryId> {
     Ok(MemoryId(parse_uuid(s)?))
 }
 
+/// A provenance filter from optional session and source names.
+fn provenance_filter(
+    session_id: Option<String>,
+    source: Option<String>,
+) -> mentedb::ProvenanceFilter {
+    mentedb::ProvenanceFilter {
+        session_id: session_id.filter(|s| !s.is_empty()),
+        source: source
+            .filter(|s| !s.is_empty())
+            .map(|s| mentedb::SourceKind::parse(&s)),
+    }
+}
+
+/// A memory's provenance as a Python dict, or None for a memory written
+/// before provenance existed.
+fn provenance_to_py(py: Python<'_>, p: Option<&mentedb::Provenance>) -> PyResult<Py<PyAny>> {
+    let Some(p) = p else {
+        return Ok(py.None());
+    };
+    let dict = pyo3::types::PyDict::new(py);
+    dict.set_item("session_id", p.session_id.as_deref())?;
+    dict.set_item("source", p.source.as_str())?;
+    dict.set_item("source_ref", p.source_ref.as_deref())?;
+    dict.set_item("written_by", p.written_by.to_string())?;
+    dict.set_item("written_at", p.written_at)?;
+    let origins: Vec<String> = p.derived_from.iter().map(|id| id.to_string()).collect();
+    dict.set_item("derived_from", origins)?;
+    Ok(dict.into_any().unbind())
+}
+
 /// Format a microsecond timestamp as "YYYY-MM-DD" for human-readable evidence.
 fn format_timestamp_date(us: u64) -> Option<String> {
     if us == 0 {
@@ -237,8 +267,7 @@ impl MenteDB {
                 }
             }
         }
-        let mut db =
-            MenteDb::open_with_config(Path::new(data_dir), config).map_err(to_pyerr)?;
+        let mut db = MenteDb::open_with_config(Path::new(data_dir), config).map_err(to_pyerr)?;
         // An explicit `dimension` lets callers bring their own embeddings at an
         // arbitrary size (for example a 4096-dim external embedder), overriding
         // the provider-derived or default 384 vector dimension.
@@ -266,7 +295,12 @@ impl MenteDB {
     }
 
     /// Store a memory and return its UUID string.
-    #[pyo3(signature = (content, memory_type, embedding=None, agent_id=None, tags=None, created_at=None))]
+    ///
+    /// `session_id`, `source` (chat, file, api, mcp, import, or another
+    /// name; default api) and `source_ref` are recorded as the memory's
+    /// provenance, once, on its first write.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (content, memory_type, embedding=None, agent_id=None, tags=None, created_at=None, session_id=None, source=None, source_ref=None))]
     fn store(
         &self,
         content: &str,
@@ -275,6 +309,9 @@ impl MenteDB {
         agent_id: Option<&str>,
         tags: Option<Vec<String>>,
         created_at: Option<u64>,
+        session_id: Option<String>,
+        source: Option<String>,
+        source_ref: Option<String>,
     ) -> PyResult<String> {
         let db = self
             .db
@@ -308,6 +345,15 @@ impl MenteDB {
             node.accessed_at = ts;
             node.valid_from = Some(ts);
         }
+        let kind = source
+            .filter(|s| !s.is_empty())
+            .map(|s| mentedb::SourceKind::parse(&s))
+            .unwrap_or(mentedb::SourceKind::Api);
+        node.provenance = Some(
+            mentedb::Provenance::new(kind, aid)
+                .with_session(session_id.unwrap_or_default())
+                .with_source_ref(source_ref.unwrap_or_default()),
+        );
 
         let id = node.id;
         db.store(node).map_err(to_pyerr)?;
@@ -399,7 +445,10 @@ impl MenteDB {
             dict.set_item("trigger_tagged", report.trigger_tagged)?;
             dict.set_item("sections", report.sections)?;
             dict.set_item("file_token_estimate", report.file_token_estimate)?;
-            dict.set_item("avg_memory_token_estimate", report.avg_memory_token_estimate)?;
+            dict.set_item(
+                "avg_memory_token_estimate",
+                report.avg_memory_token_estimate,
+            )?;
             dict.set_item("parsed_by", report.parsed_by)?;
             dict.set_item("llm_chunks", report.llm_chunks)?;
             dict.set_item("triggers", report.triggers.clone())?;
@@ -545,7 +594,11 @@ impl MenteDB {
 
     /// Text-based similarity search using the configured embedding provider.
     /// Uses OpenAI/Cohere/Voyage if configured, falls back to hash embedding.
-    #[pyo3(signature = (query, k=10, tags=None, after=None, before=None))]
+    ///
+    /// `session_id` and `source` narrow the search to memories with that
+    /// provenance, through the index, before the search runs.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (query, k=10, tags=None, after=None, before=None, session_id=None, source=None))]
     fn search_text(
         &self,
         query: &str,
@@ -553,6 +606,8 @@ impl MenteDB {
         tags: Option<Vec<String>>,
         after: Option<u64>,
         before: Option<u64>,
+        session_id: Option<String>,
+        source: Option<String>,
     ) -> PyResult<Vec<SearchResult>> {
         let db = self
             .db
@@ -574,9 +629,32 @@ impl MenteDB {
             _ => None,
         };
 
-        let hits = db
-            .recall_similar_filtered(&embedding, k, tag_refs, time_range)
-            .map_err(to_pyerr)?;
+        let filter = provenance_filter(session_id, source);
+        let hits = if filter.is_empty() {
+            db.recall_similar_filtered(&embedding, k, tag_refs, time_range)
+        } else {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64;
+            db.recall_hybrid_scoped_with(
+                &embedding,
+                None,
+                k,
+                now,
+                tag_refs,
+                false,
+                time_range,
+                None,
+                None,
+                None,
+                &mentedb::HybridOptions {
+                    provenance: Some(&filter),
+                    ..Default::default()
+                },
+            )
+        }
+        .map_err(to_pyerr)?;
         Ok(hits
             .into_iter()
             .map(|(id, score)| SearchResult {
@@ -584,6 +662,43 @@ impl MenteDB {
                 score,
             })
             .collect())
+    }
+
+    /// Ids of every memory written in `session_id` (by provenance), from
+    /// the index.
+    fn memory_ids_in_session(&self, session_id: &str) -> PyResult<Vec<String>> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        Ok(db
+            .memory_ids_in_session(session_id)
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect())
+    }
+
+    /// Verified erase of every memory written in `session_id` and
+    /// everything derived from them, in one erase. Returns the combined
+    /// receipt as a JSON string (hashes and ids, never content).
+    #[pyo3(signature = (session_id, include_sources=false, verify=true))]
+    fn erase_session(
+        &self,
+        session_id: &str,
+        include_sources: bool,
+        verify: bool,
+    ) -> PyResult<String> {
+        let db = self
+            .db
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("database is closed"))?;
+        let opts = mentedb::EraseOptions {
+            include_sources,
+            verify,
+            ..Default::default()
+        };
+        let receipt = db.erase_session(session_id, opts).map_err(to_pyerr)?;
+        serde_json::to_string(&receipt).map_err(to_pyerr)
     }
 
     /// Multi-query search with Reciprocal Rank Fusion.
@@ -3533,7 +3648,8 @@ impl MenteDB {
     }
 
     /// Retrieve a memory by its UUID string.
-    /// Returns a dict with id, content, memory_type, tags, created_at.
+    /// Returns a dict with id, content, memory_type, tags, created_at and
+    /// provenance (a dict, or None for a memory written before provenance).
     fn get_memory(&self, memory_id: &str) -> PyResult<Py<PyAny>> {
         let db = self
             .db
@@ -3550,6 +3666,10 @@ impl MenteDB {
             let tags: Vec<&str> = node.tags.iter().map(|s| s.as_str()).collect();
             dict.set_item("tags", tags)?;
             dict.set_item("created_at", node.created_at)?;
+            dict.set_item(
+                "provenance",
+                provenance_to_py(py, node.provenance.as_ref())?,
+            )?;
             Ok(dict.into())
         })
     }

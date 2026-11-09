@@ -22,6 +22,11 @@ pub struct ExtractionRequest {
     pub content: String,
     pub agent_id: AgentId,
     pub space_id: SpaceId,
+    /// The stored memory the content came from: every extracted memory is
+    /// derived from it.
+    pub origin: mentedb_core::types::MemoryId,
+    /// The origin's session, inherited by what is extracted from it.
+    pub session_id: Option<String>,
     pub db: Arc<mentedb::MenteDb>,
 }
 
@@ -58,6 +63,17 @@ async fn worker_loop(mut rx: ExtractionReceiver) {
     tracing::info!("extraction worker drained");
 }
 
+/// Provenance of a memory extracted from `req.origin`: derived from it, in
+/// its session. Taken from the request rather than reloaded, so an origin
+/// forgotten while extraction ran still yields the right lineage.
+fn derived_provenance(req: &ExtractionRequest) -> mentedb_core::provenance::Provenance {
+    mentedb_core::provenance::Provenance::derived(
+        req.agent_id,
+        &[req.origin],
+        [req.session_id.as_deref()],
+    )
+}
+
 async fn process_extraction(req: ExtractionRequest) -> Result<(), String> {
     use mentedb_core::MemoryNode;
     use mentedb_core::types::MemoryId;
@@ -65,6 +81,7 @@ async fn process_extraction(req: ExtractionRequest) -> Result<(), String> {
 
     let provider = HttpExtractionProvider::new(req.config.clone())
         .map_err(|e| format!("extraction provider init: {e}"))?;
+    let provenance = derived_provenance(&req);
     let pipeline = ExtractionPipeline::new(provider, req.config);
 
     let all_memories = pipeline
@@ -102,6 +119,7 @@ async fn process_extraction(req: ExtractionRequest) -> Result<(), String> {
             valid_from: None,
             valid_until: None,
             context: None,
+            provenance: Some(provenance.clone()),
         };
         match req.db.store_with_outcome(node) {
             Ok(mentedb::StoreOutcome::Stored) => stored += 1,

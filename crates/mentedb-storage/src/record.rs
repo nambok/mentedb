@@ -767,6 +767,67 @@ mod tests {
         }
     }
 
+    /// A record payload byte for byte as the 0.47 release wrote it: the
+    /// version byte, the dimension, the raw vector, then the node JSON with
+    /// no `provenance` key (the field did not exist).
+    fn release_0_47_payload(json: &str, embedding: &[f32]) -> Vec<u8> {
+        let mut p = vec![PAYLOAD_V1];
+        p.extend_from_slice(&(embedding.len() as u32).to_le_bytes());
+        for v in embedding {
+            p.extend_from_slice(&v.to_le_bytes());
+        }
+        p.extend_from_slice(json.as_bytes());
+        p
+    }
+
+    const RELEASE_0_47_JSON: &str = r#"{"id":"00000000-0000-0000-0000-000000000100","agent_id":"00000000-0000-0000-0000-00000000000a","user_id":"00000000-0000-0000-0000-00000000000b","memory_type":"Semantic","embedding":[],"content":"The deploy pipeline runs on every merge to main","created_at":1700000000000000,"accessed_at":1700000000000000,"access_count":0,"salience":1.0,"confidence":1.0,"space_id":"00000000-0000-0000-0000-000000000000","attributes":{"origin_note":{"String":"fixture 0"}},"tags":["session:legacy-1","topic:ci"]}"#;
+
+    #[test]
+    fn payload_from_the_previous_release_decodes_without_provenance() {
+        let p = release_0_47_payload(RELEASE_0_47_JSON, &[1.0, 0.5, 0.0, 0.125]);
+        let node = decode_node(&p).unwrap();
+        assert_eq!(
+            node.content,
+            "The deploy pipeline runs on every merge to main"
+        );
+        assert_eq!(node.embedding, vec![1.0, 0.5, 0.0, 0.125]);
+        assert_eq!(node.tags, vec!["session:legacy-1", "topic:ci"]);
+        assert!(node.provenance.is_none());
+        // Re-encoding a node that has no provenance writes no provenance
+        // key, so an old release can still read what this one writes for it.
+        let again = encode_node(&node).unwrap();
+        assert!(!String::from_utf8_lossy(&again).contains("provenance"));
+        assert_eq!(decode_node(&again).unwrap().content, node.content);
+    }
+
+    #[test]
+    fn payload_with_provenance_roundtrips_and_tolerates_newer_kinds() {
+        use mentedb_core::provenance::{Provenance, SourceKind};
+        let origin = MemoryId::new();
+        let mut node = MemoryNode::new(
+            AgentId::new(),
+            MemoryType::Semantic,
+            "derived".into(),
+            vec![0.25; 8],
+        );
+        let mut p = Provenance::new(SourceKind::Derived, node.agent_id)
+            .with_session("s1")
+            .with_source_ref("doc.md");
+        p.derived_from = vec![origin];
+        node.provenance = Some(p.clone());
+        let back = decode_node(&encode_node(&node).unwrap()).unwrap();
+        assert_eq!(back.provenance, Some(p));
+
+        // A source kind a later release adds still decodes here.
+        let json = RELEASE_0_47_JSON.trim_end_matches('}').to_string()
+            + r#","provenance":{"source":"webhook","written_by":"00000000-0000-0000-0000-00000000000a","written_at":5}}"#;
+        let node = decode_node(&release_0_47_payload(&json, &[1.0])).unwrap();
+        let p = node.provenance.unwrap();
+        assert_eq!(p.source, SourceKind::Other("webhook".into()));
+        assert_eq!(p.written_at, 5);
+        assert_eq!(p.session_id, None);
+    }
+
     #[test]
     fn op_roundtrip() {
         let op = RecordOp::Write {

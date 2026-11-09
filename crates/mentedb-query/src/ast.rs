@@ -92,6 +92,11 @@ pub enum Field {
     /// were valid at timestamp `t` (valid_from <= t < valid_until), so a query can
     /// see what was true at a past moment, including facts later superseded.
     ValidAt,
+    /// The session a memory was written in (its provenance): `session = "s1"`.
+    Session,
+    /// The kind of source a memory came from (its provenance):
+    /// `source = chat`.
+    Source,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

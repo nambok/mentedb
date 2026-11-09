@@ -22,9 +22,10 @@ use crate::error::ApiError;
 use crate::handlers::{
     check_body_agent, check_owner, embed_query, memory_id_param, memory_node_to_json,
     parse_attributes, parse_edge_type, parse_embedding, parse_memory_type, parse_optional_uuid,
-    parse_uuid,
+    parse_provenance, parse_uuid, provenance_filter,
 };
 use crate::state::AppState;
+use mentedb_core::provenance::SourceKind;
 
 /// Tag the injection path treats as pinned: always injected, never ranked out.
 const PIN_TAG: &str = "scope:always";
@@ -97,6 +98,7 @@ pub fn routes_with_limits(limits: MemoryApiLimits) -> Router<Arc<AppState>> {
         .route("/memories/batch", post(store_batch))
         .route("/memories/{id}/history", get(history))
         .route("/memories/{id}/erase", post(erase))
+        .route("/sessions/{session_id}/erase", post(erase_session))
         .route("/memories/{id}/neighbors", get(neighbors))
         .route("/memories/{id}/pin", post(pin).delete(unpin))
         .route("/pins", get(list_pins))
@@ -172,6 +174,9 @@ async fn search_hybrid(
     };
     let rerank = body_bool(&req, "rerank")?;
     let relevance_first = body_bool(&req, "relevance_first")?;
+    // Provenance filter: only memories written in this session, from this
+    // kind of source.
+    let by_provenance = provenance_filter(body_str(&req, "session_id"), body_str(&req, "source"));
 
     let handle = db.handle.clone();
     let results = tokio::task::spawn_blocking(move || {
@@ -182,6 +187,7 @@ async fn search_hybrid(
             reranker: rerank.then_some(&lexical as &dyn mentedb::reranker::Reranker),
             relevance_first,
             record_access: true,
+            provenance: (!by_provenance.is_empty()).then_some(&by_provenance),
         };
         let hits = handle.recall_hybrid_scoped_with(
             &embedding,
@@ -309,6 +315,49 @@ async fn erase(
             MenteError::MemoryNotFound(_) => ApiError::NotFound(format!("memory {id} not found")),
             MenteError::CapacityExceeded(msg) => ApiError::Conflict(msg),
             e => engine_error("erase", e),
+        })?;
+    Ok(Json(receipt))
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1/sessions/{session_id}/erase
+// ---------------------------------------------------------------------------
+
+/// Verified erase of every memory written in a session (by provenance) and
+/// everything derived from them, in one erase with one receipt
+/// ([`mentedb::SessionErasureReceipt`]). The body is optional and holds
+/// [`mentedb::EraseOptions`] fields. A caller bound to an agent may erase a
+/// session only when every memory in it is its own; otherwise nothing is
+/// erased. A write: read only tokens are refused before this runs.
+async fn erase_session(
+    agent: Caller,
+    db: Db,
+    Path(params): Path<HashMap<String, String>>,
+    body: Option<Json<mentedb::EraseOptions>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session_id = params
+        .get("session_id")
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .ok_or_else(|| ApiError::BadRequest("missing session id".into()))?;
+    let opts = body.map(|Json(o)| o).unwrap_or_default();
+    for id in db.memory_ids_in_session(&session_id) {
+        if let Ok(node) = db.get_memory(id) {
+            check_owner(&agent, &node).map_err(|_| {
+                ApiError::Forbidden(format!(
+                    "session {session_id} holds memories of another agent"
+                ))
+            })?;
+        }
+    }
+    let handle = db.handle.clone();
+    let sid = session_id.clone();
+    let receipt = tokio::task::spawn_blocking(move || handle.erase_session(&sid, opts))
+        .await
+        .map_err(task_failed)?
+        .map_err(|e| match e {
+            MenteError::CapacityExceeded(msg) => ApiError::Conflict(msg),
+            e => engine_error("session erase", e),
         })?;
     Ok(Json(receipt))
 }
@@ -841,6 +890,7 @@ fn parse_node(agent: &Caller, req: &Value, now: u64) -> Result<MemoryNode, ApiEr
         valid_from: optional_u64("valid_from")?,
         valid_until: optional_u64("valid_until")?,
         context: None,
+        provenance: Some(parse_provenance(req, agent_id, SourceKind::Api)?),
     })
 }
 
