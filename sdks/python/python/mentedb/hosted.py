@@ -206,6 +206,27 @@ class MenteDBClient:
             args["scope"] = scope
         return self._call_tool("store_memory_multimodal", args)
 
+    def memory_tool(
+        self,
+        agent_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ):
+        """A :class:`mentedb.MemoryTool` backed by this account.
+
+        Use it as the backend of the client side memory tool
+        (``memory_20250818``): ``tool.results(response.content)`` turns the
+        model's memory calls into ``tool_result`` blocks.
+        """
+        from mentedb.memory_tool import MemoryTool
+
+        return MemoryTool(
+            self.base_url,
+            self.api_key,
+            agent_id=agent_id,
+            user_id=user_id,
+            timeout=self.timeout,
+        )
+
     def forget(self, memory_id: str, reason: Optional[str] = None):
         """Delete a memory by id."""
         args: dict[str, Any] = {"id": memory_id}

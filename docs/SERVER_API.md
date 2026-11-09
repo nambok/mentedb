@@ -19,6 +19,7 @@ on every `POST`.
 - [Turns and extraction](#turns-and-extraction)
 - [Graph, history and conflicts](#graph-history-and-conflicts)
 - [Pins, profile, entities and recent](#pins-profile-entities-and-recent)
+- [Memory tool](#memory-tool)
 - [Documents](#documents)
 - [Maintenance and enrichment](#maintenance-and-enrichment)
 - [Backups](#backups)
@@ -982,6 +983,30 @@ The newest memories.
 ```json
 { "memories": [ { ... } ] }
 ```
+
+## Memory tool
+
+### `POST /memory_tool`
+
+The backend for the client side memory tool (`memory_20250818`): one
+`view`, `create`, `str_replace`, `insert`, `delete` or `rename` command over a
+`/memories` file tree, with the same contract as MenteDB Cloud. The body is
+the model's `tool_use` input, plus optional `agent_id` and `user_id`
+choosing whose files to use (a token bound to an agent always uses its own).
+
+```json
+{ "command": "view", "path": "/memories" }
+```
+
+```json
+{ "content": "Here're the files and directories up to 2 levels deep in /memories, excluding hidden items and node_modules:\n0B\t/memories", "is_error": false }
+```
+
+Command failures the model can fix (missing file, bad range, invalid path)
+are `200` with `is_error: true`. `400` when the body is not a memory tool
+call. Read only tokens may `view`; every other command needs write access,
+else `403`. Commands, path rules and scoping are in
+[Memory tool backend](./MEMORY_TOOL.md).
 
 ---
 

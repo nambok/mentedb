@@ -9,3 +9,5 @@ tsconfig.json
 npm/client.ts
 npm/index.ts
 npm/types.ts
+npm/memoryTool.ts
+examples/

@@ -9,11 +9,16 @@ except ImportError:
 # engine: self-host embedded uses MenteDB, the managed API uses MenteDBClient.
 from mentedb.hosted import MenteDBClient, MenteDBError
 
+# Memory tool backend (memory_20250818) over a self-hosted server or the cloud.
+from mentedb.memory_tool import MEMORY_TOOL_DEFINITION, MemoryTool
+
 __version__ = "0.3.1"
 __all__ = [
     "MenteDB",
     "MenteDBClient",
     "MenteDBError",
+    "MemoryTool",
+    "MEMORY_TOOL_DEFINITION",
     "MemoryType",
     "EdgeType",
     "RecallResult",

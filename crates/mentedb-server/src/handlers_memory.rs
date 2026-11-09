@@ -998,7 +998,10 @@ fn token_agent(agent: &Caller) -> Result<Option<AgentId>, ApiError> {
 
 /// The agent a read is scoped to: the requested one (which must match a
 /// token bound to an agent), else the token's agent, else none.
-fn scope_agent(agent: &Caller, requested: Option<Uuid>) -> Result<Option<AgentId>, ApiError> {
+pub(crate) fn scope_agent(
+    agent: &Caller,
+    requested: Option<Uuid>,
+) -> Result<Option<AgentId>, ApiError> {
     match requested {
         Some(id) => {
             check_body_agent(agent, AgentId(id))?;
