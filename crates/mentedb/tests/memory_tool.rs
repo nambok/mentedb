@@ -450,3 +450,38 @@ fn files_survive_a_crash_and_reopen() {
     );
     assert!(memory_tool::find_file(&db, &s, "/memories/notes/f2.md").is_none());
 }
+
+/// A file records where it was created, and neither an edit nor a rename
+/// changes that.
+#[test]
+fn files_carry_provenance_that_edits_and_renames_keep() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = open(dir.path());
+    let agent = AgentId::new();
+    let s = scope(agent);
+    ok(
+        &db,
+        &s,
+        json!({"command": "create", "path": "/memories/a.md", "file_text": "one\n"}),
+    );
+    let check = |path: &str| {
+        let file = memory_tool::find_file(&db, &s, path).expect("file exists");
+        let p = file.node.provenance.expect("provenance set");
+        assert_eq!(p.source, mentedb::SourceKind::File);
+        assert_eq!(p.source_ref.as_deref(), Some("/memories/a.md"));
+        assert_eq!(p.written_by, agent);
+    };
+    check("/memories/a.md");
+    ok(
+        &db,
+        &s,
+        json!({"command": "str_replace", "path": "/memories/a.md", "old_str": "one", "new_str": "two"}),
+    );
+    check("/memories/a.md");
+    ok(
+        &db,
+        &s,
+        json!({"command": "rename", "old_path": "/memories/a.md", "new_path": "/memories/b.md"}),
+    );
+    check("/memories/b.md");
+}

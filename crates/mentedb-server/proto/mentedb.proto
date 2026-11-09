@@ -81,7 +81,28 @@ service MemoryService {
     // Verified erase: the memory, everything derived from it, and every copy
     // of their bytes; see docs/FORGETTING.md.
     rpc Erase(EraseRequest) returns (EraseResponse);
+    // Verified erase of every memory written in a session and everything
+    // derived from them, in one erase; see docs/PROVENANCE.md.
+    rpc EraseSession(EraseSessionRequest) returns (EraseSessionResponse);
     rpc Relate(RelateRequest) returns (RelateResponse);
+    // Where a memory came from, recorded when it was first written.
+    rpc GetProvenance(GetProvenanceRequest) returns (GetProvenanceResponse);
+}
+
+// Write time provenance. Set once when a memory is first written and never
+// changed afterwards.
+message Provenance {
+    // Empty when the writer named no session.
+    string session_id = 1;
+    // chat, file, api, mcp, import, derived, unspecified, or another name.
+    string source = 2;
+    // A file path, URL or message id; empty when none was given.
+    string source_ref = 3;
+    string written_by = 4;
+    // Microseconds since the Unix epoch.
+    uint64 written_at = 5;
+    // For a derived memory, the memories it was made from.
+    repeated string derived_from = 6;
 }
 
 // Store
@@ -98,6 +119,11 @@ message StoreRequest {
     float confidence = 9;
     optional uint64 valid_from = 10;
     optional uint64 valid_until = 11;
+    // Provenance of the write. Empty strings mean unset; an empty source
+    // means api. The writer and write time are set by the server.
+    string session_id = 12;
+    string source = 13;
+    string source_ref = 14;
 }
 
 message StoreResponse {
@@ -122,11 +148,17 @@ message RecallResponse {
 message SearchRequest {
     repeated float embedding = 1;
     uint32 k = 2;
+    // Only memories written in this session (empty: any).
+    string session_id = 3;
+    // Only memories from this kind of source (empty: any).
+    string source = 4;
 }
 
 message SearchResult {
     string id = 1;
     float score = 2;
+    // Unset for a memory written before provenance existed.
+    optional Provenance provenance = 3;
 }
 
 message SearchResponse {
@@ -160,6 +192,39 @@ message EraseResponse {
     bool residual_found = 3;
     // The full receipt as JSON (hashes and ids, never content).
     string receipt_json = 4;
+}
+
+// EraseSession
+
+message EraseSessionRequest {
+    string session_id = 1;
+    // Also erase the memories the session's memories were derived from.
+    bool include_sources = 2;
+    // Scan the database directory afterwards (default true).
+    optional bool verify = 3;
+}
+
+message EraseSessionResponse {
+    // The memories written in the session.
+    repeated string requested_ids = 1;
+    // Everything erased: the session's memories and what was derived from them.
+    repeated string erased_ids = 2;
+    repeated string ancestors_kept = 3;
+    // Set only when the erase verified.
+    bool residual_found = 4;
+    // The full receipt as JSON (hashes and ids, never content).
+    string receipt_json = 5;
+}
+
+// GetProvenance
+
+message GetProvenanceRequest {
+    string id = 1;
+}
+
+message GetProvenanceResponse {
+    // Unset for a memory written before provenance existed.
+    optional Provenance provenance = 1;
 }
 
 // Relate (create edge)

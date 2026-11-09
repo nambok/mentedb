@@ -15,6 +15,7 @@ use mentedb_core::types::{AgentId, MemoryId, Timestamp};
 use mentedb_core::{MemoryEdge, MemoryNode, MenteError};
 use tracing::warn;
 
+use crate::provenance::ProvenanceFilter;
 use crate::reranker::Reranker;
 use crate::{MenteDb, StoreOutcome};
 
@@ -44,6 +45,10 @@ pub struct HybridOptions<'a> {
     /// is on. Set by callers serving a user's search; internal recalls leave it
     /// off.
     pub record_access: bool,
+    /// Only recall memories whose provenance matches (a session, a source
+    /// kind). Resolved through the bitmap index before the search, so a
+    /// narrow filter searches only its own memories.
+    pub provenance: Option<&'a ProvenanceFilter>,
 }
 
 /// Changes applied by [`MenteDb::update_memory_fields`]. Unset fields are
@@ -293,8 +298,39 @@ impl MenteDb {
         offset: usize,
         limit: usize,
     ) -> MemoryPage {
+        self.list_memories_page_by(
+            tag,
+            agent,
+            &ProvenanceFilter::default(),
+            include_inactive,
+            at,
+            offset,
+            limit,
+        )
+    }
+
+    /// [`Self::list_memories_page`] narrowed by provenance as well: the
+    /// session and source keys of the bitmap index are intersected with the
+    /// tag and agent sets before anything is loaded.
+    #[allow(clippy::too_many_arguments)]
+    pub fn list_memories_page_by(
+        &self,
+        tag: Option<&str>,
+        agent: Option<AgentId>,
+        provenance: &ProvenanceFilter,
+        include_inactive: bool,
+        at: Timestamp,
+        offset: usize,
+        limit: usize,
+    ) -> MemoryPage {
         let mut allowed: Option<HashSet<MemoryId>> =
             tag.map(|t| self.index.bitmap.query_tag(t).into_iter().collect());
+        if let Some(by_provenance) = self.memory_ids_matching(provenance) {
+            allowed = Some(match allowed {
+                Some(prev) => prev.intersection(&by_provenance).copied().collect(),
+                None => by_provenance,
+            });
+        }
         if let Some(a) = agent {
             let keys = [
                 mentedb_index::manager::agent_index_key(a),

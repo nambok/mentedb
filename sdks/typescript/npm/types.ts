@@ -35,6 +35,45 @@ export interface StoreOptions {
   embedding?: number[];
   agentId?: string;
   tags?: string[];
+  /** The session the memory is written in (its provenance). */
+  sessionId?: string;
+  /** chat, file, api, mcp, import, or another name. Defaults to api. */
+  source?: string;
+  /** A file path, URL or message id within the source. */
+  sourceRef?: string;
+}
+
+/**
+ * Where a memory came from, recorded when it was first written and never
+ * changed afterwards. See docs/PROVENANCE.md.
+ */
+export interface Provenance {
+  sessionId?: string | null;
+  source: string;
+  sourceRef?: string | null;
+  writtenBy: string;
+  /** Microseconds since the Unix epoch. */
+  writtenAt: number;
+  /** For a derived memory, the memories it was made from. */
+  derivedFrom: string[];
+}
+
+/** One stored memory, as `getMemory` returns it. */
+export interface Memory {
+  id: string;
+  content: string;
+  memoryType: string;
+  agentId: string;
+  tags: string[];
+  createdAt: number;
+  /** Absent for a memory written before provenance existed. */
+  provenance?: Provenance | null;
+}
+
+/** Narrow a search to memories by provenance. */
+export interface ProvenanceFilter {
+  sessionId?: string;
+  source?: string;
 }
 
 /** A single memory selected for the working-context window. */
@@ -116,8 +155,22 @@ export interface ResidualHit {
 }
 
 /** Result of `MenteDB.erase`. Carries ids and hashes, never content. */
-export interface ErasureReceipt {
+export interface ErasureReceipt extends ErasureOutcome {
   requested: string;
+}
+
+/**
+ * Result of `MenteDB.eraseSession`: one erase over every memory written in
+ * the session and everything derived from them.
+ */
+export interface SessionErasureReceipt extends ErasureOutcome {
+  session_id: string;
+  /** The memories written in the session. */
+  requested: string[];
+}
+
+/** What every erase receipt carries. */
+export interface ErasureOutcome {
   erased: ErasedMemory[];
   ancestors_kept: string[];
   profiles_to_review: string[];

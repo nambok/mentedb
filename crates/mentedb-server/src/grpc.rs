@@ -10,6 +10,7 @@ use std::sync::Arc;
 use mentedb_cognitive::stream::{CognitionStream, StreamAlert};
 use mentedb_core::edge::EdgeType;
 use mentedb_core::memory::{AttributeValue, MemoryType};
+use mentedb_core::provenance::{Provenance, SourceKind};
 use mentedb_core::{MemoryEdge, MemoryNode};
 use tokio::sync::mpsc;
 use tokio_stream::{Stream, StreamExt, wrappers::ReceiverStream};
@@ -228,6 +229,15 @@ impl MemoryService for MemoryServiceImpl {
             .map(|(k, v)| (k, AttributeValue::String(v)))
             .collect::<HashMap<String, AttributeValue>>();
 
+        let source = if req.source.is_empty() {
+            SourceKind::Api
+        } else {
+            SourceKind::parse(&req.source)
+        };
+        let provenance = Provenance::new(source, agent_id)
+            .with_session(req.session_id)
+            .with_source_ref(req.source_ref);
+
         let node = MemoryNode {
             id,
             agent_id,
@@ -246,6 +256,7 @@ impl MemoryService for MemoryServiceImpl {
             valid_from: req.valid_from,
             valid_until: req.valid_until,
             context: None,
+            provenance: Some(provenance),
         };
 
         let db = &*self.state.db;
@@ -299,7 +310,35 @@ impl MemoryService for MemoryServiceImpl {
         }
 
         let db = &*self.state.db;
-        let results = db.recall_similar(&req.embedding, k).map_err(|e| {
+        let filter = mentedb::ProvenanceFilter {
+            session_id: (!req.session_id.is_empty()).then(|| req.session_id.clone()),
+            source: (!req.source.is_empty()).then(|| SourceKind::parse(&req.source)),
+        };
+        let results = if filter.is_empty() {
+            db.recall_similar(&req.embedding, k)
+        } else {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64;
+            db.recall_hybrid_scoped_with(
+                &req.embedding,
+                None,
+                k,
+                now,
+                None,
+                false,
+                None,
+                None,
+                None,
+                None,
+                &mentedb::HybridOptions {
+                    provenance: Some(&filter),
+                    ..Default::default()
+                },
+            )
+        }
+        .map_err(|e| {
             error!("gRPC search failed: {e}");
             Status::internal(format!("search failed: {e}"))
         })?;
@@ -309,6 +348,10 @@ impl MemoryService for MemoryServiceImpl {
             .map(|(id, score)| pb::SearchResult {
                 id: id.to_string(),
                 score: *score,
+                provenance: db
+                    .get_memory(*id)
+                    .ok()
+                    .and_then(|n| n.provenance.as_ref().map(provenance_to_proto)),
             })
             .collect();
 
@@ -383,6 +426,89 @@ impl MemoryService for MemoryServiceImpl {
                 .as_ref()
                 .is_some_and(|v| v.residual_found),
             receipt_json,
+        }))
+    }
+
+    async fn erase_session(
+        &self,
+        request: Request<pb::EraseSessionRequest>,
+    ) -> Result<Response<pb::EraseSessionResponse>, Status> {
+        let agent = authenticate_grpc_request(&self.state, &request, true)?;
+        let req = request.into_inner();
+        if req.session_id.is_empty() {
+            return Err(Status::invalid_argument("missing session_id"));
+        }
+        let db = self.state.db.clone();
+        // A caller bound to an agent may erase only a session that holds
+        // nothing but its own memories.
+        if let Some(a) = &agent
+            && !a.admin
+            && let Ok(Some(tid)) = a.agent()
+        {
+            let foreign = db
+                .memory_ids_in_session(&req.session_id)
+                .into_iter()
+                .filter_map(|id| db.get_memory(id).ok())
+                .any(|n| n.agent_id != tid);
+            if foreign {
+                return Err(Status::permission_denied(
+                    "session holds memories of another agent",
+                ));
+            }
+        }
+        let mut opts = mentedb::EraseOptions {
+            include_sources: req.include_sources,
+            ..Default::default()
+        };
+        if let Some(v) = req.verify {
+            opts.verify = v;
+        }
+        let session_id = req.session_id;
+        let receipt = tokio::task::spawn_blocking(move || db.erase_session(&session_id, opts))
+            .await
+            .map_err(|e| Status::internal(format!("erase task failed: {e}")))?
+            .map_err(|e| {
+                error!("gRPC session erase failed: {e}");
+                Status::internal(format!("session erase failed: {e}"))
+            })?;
+        let receipt_json = serde_json::to_string(&receipt)
+            .map_err(|e| Status::internal(format!("receipt encoding failed: {e}")))?;
+        let ids = |v: &[MemoryId]| v.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+        Ok(Response::new(pb::EraseSessionResponse {
+            requested_ids: ids(&receipt.requested),
+            erased_ids: receipt.erased.iter().map(|e| e.id.to_string()).collect(),
+            ancestors_kept: ids(&receipt.ancestors_kept),
+            residual_found: receipt
+                .verification
+                .as_ref()
+                .is_some_and(|v| v.residual_found),
+            receipt_json,
+        }))
+    }
+
+    async fn get_provenance(
+        &self,
+        request: Request<pb::GetProvenanceRequest>,
+    ) -> Result<Response<pb::GetProvenanceResponse>, Status> {
+        let agent = authenticate_grpc_request(&self.state, &request, false)?;
+        let req = request.into_inner();
+        let id = MemoryId(parse_uuid_field(&req.id, "id")?);
+        let node = self
+            .state
+            .db
+            .get_memory(id)
+            .map_err(|_| Status::not_found(format!("memory {id} not found")))?;
+        if let Some(a) = &agent
+            && !a.admin
+            && let Ok(Some(tid)) = a.agent()
+            && node.agent_id != tid
+        {
+            return Err(Status::permission_denied(
+                "memory belongs to a different agent",
+            ));
+        }
+        Ok(Response::new(pb::GetProvenanceResponse {
+            provenance: node.provenance.as_ref().map(provenance_to_proto),
         }))
     }
 
@@ -464,6 +590,17 @@ fn authenticate_grpc_streaming(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+fn provenance_to_proto(p: &Provenance) -> pb::Provenance {
+    pb::Provenance {
+        session_id: p.session_id.clone().unwrap_or_default(),
+        source: p.source.as_str().to_string(),
+        source_ref: p.source_ref.clone().unwrap_or_default(),
+        written_by: p.written_by.to_string(),
+        written_at: p.written_at,
+        derived_from: p.derived_from.iter().map(|id| id.to_string()).collect(),
+    }
+}
 
 #[allow(clippy::result_large_err)]
 fn parse_uuid_field(s: &str, field: &str) -> Result<Uuid, Status> {
@@ -559,6 +696,7 @@ mod tests {
             confidence: 1.0,
             valid_from: None,
             valid_until: None,
+            ..Default::default()
         });
 
         let resp = svc.store(store_req).await.unwrap();
@@ -597,6 +735,7 @@ mod tests {
                 confidence: 1.0,
                 valid_from: None,
                 valid_until: None,
+                ..Default::default()
             }))
             .await
             .unwrap();
@@ -609,6 +748,108 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(forget_resp.into_inner().status, "deleted");
+    }
+
+    #[tokio::test]
+    async fn test_grpc_provenance_search_and_session_erase() {
+        let (state, _tmp) = make_test_state();
+        let svc = MemoryServiceImpl {
+            state: state.clone(),
+        };
+        let agent = AgentId::new().to_string();
+        let store = |content: &str, session: &str, source: &str, emb: Vec<f32>| {
+            Request::new(pb::StoreRequest {
+                agent_id: agent.clone(),
+                memory_type: "semantic".into(),
+                content: content.into(),
+                embedding: emb,
+                session_id: session.into(),
+                source: source.into(),
+                source_ref: "ref-1".into(),
+                ..Default::default()
+            })
+        };
+        let a = svc
+            .store(store(
+                "first memory of session one",
+                "s1",
+                "mcp",
+                vec![1.0, 0.0, 0.0],
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .id;
+        let b = svc
+            .store(store(
+                "only memory of session two",
+                "s2",
+                "",
+                vec![0.0, 1.0, 0.0],
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .id;
+
+        let p = svc
+            .get_provenance(Request::new(pb::GetProvenanceRequest { id: a.clone() }))
+            .await
+            .unwrap()
+            .into_inner()
+            .provenance
+            .unwrap();
+        assert_eq!(p.session_id, "s1");
+        assert_eq!(p.source, "mcp");
+        assert_eq!(p.source_ref, "ref-1");
+        assert_eq!(p.written_by, agent);
+        let p = svc
+            .get_provenance(Request::new(pb::GetProvenanceRequest { id: b.clone() }))
+            .await
+            .unwrap()
+            .into_inner()
+            .provenance
+            .unwrap();
+        assert_eq!(p.source, "api", "an empty source means api");
+
+        // Query with b's own vector, filtered to s1: only a comes back.
+        let hits = svc
+            .search(Request::new(pb::SearchRequest {
+                embedding: vec![0.0, 1.0, 0.0],
+                k: 5,
+                session_id: "s1".into(),
+                source: String::new(),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .results;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, a);
+        assert_eq!(hits[0].provenance.as_ref().unwrap().session_id, "s1");
+
+        let resp = svc
+            .erase_session(Request::new(pb::EraseSessionRequest {
+                session_id: "s1".into(),
+                include_sources: false,
+                verify: None,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(resp.requested_ids, vec![a.clone()]);
+        assert_eq!(resp.erased_ids, vec![a.clone()]);
+        assert!(!resp.residual_found);
+        assert!(!resp.receipt_json.contains("session one"));
+        let gone = svc
+            .get_provenance(Request::new(pb::GetProvenanceRequest { id: a }))
+            .await;
+        assert_eq!(gone.unwrap_err().code(), tonic::Code::NotFound);
+        assert!(
+            svc.get_provenance(Request::new(pb::GetProvenanceRequest { id: b }))
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -630,6 +871,7 @@ mod tests {
                 confidence: 1.0,
                 valid_from: None,
                 valid_until: None,
+                ..Default::default()
             }))
             .await
             .unwrap()
@@ -682,6 +924,7 @@ mod tests {
                 confidence: 1.0,
                 valid_from: None,
                 valid_until: None,
+                ..Default::default()
             }))
             .await
             .unwrap()
@@ -701,6 +944,7 @@ mod tests {
                 confidence: 1.0,
                 valid_from: None,
                 valid_until: None,
+                ..Default::default()
             }))
             .await
             .unwrap()
@@ -833,6 +1077,7 @@ mod tests {
                 confidence: 1.0,
                 valid_from: None,
                 valid_until: None,
+                ..Default::default()
             }))
             .await;
 
@@ -859,6 +1104,7 @@ mod tests {
                 confidence: 1.0,
                 valid_from: None,
                 valid_until: None,
+                ..Default::default()
             }))
             .await;
 
@@ -876,6 +1122,7 @@ mod tests {
             .search(Request::new(pb::SearchRequest {
                 embedding: vec![],
                 k: 10,
+                ..Default::default()
             }))
             .await;
 
@@ -942,6 +1189,7 @@ mod tests {
             confidence: 1.0,
             valid_from: None,
             valid_until: None,
+            ..Default::default()
         });
         r.metadata_mut()
             .insert("authorization", format!("Bearer {tok}").parse().unwrap());
@@ -966,6 +1214,7 @@ mod tests {
             confidence: 1.0,
             valid_from: None,
             valid_until: None,
+            ..Default::default()
         });
         r.metadata_mut()
             .insert("authorization", format!("Bearer {tok}").parse().unwrap());
@@ -987,6 +1236,7 @@ mod tests {
             confidence: 1.0,
             valid_from: None,
             valid_until: None,
+            ..Default::default()
         });
         r.metadata_mut()
             .insert("authorization", format!("Bearer {token}").parse().unwrap());

@@ -292,6 +292,8 @@ impl MenteDb {
                 )
                 .with_user_id(user);
                 merged.tags = merged_tags(&sources);
+                let origins: Vec<MemoryId> = sources.iter().map(|n| n.id).collect();
+                self.stamp_derived(&mut merged, &origins);
                 let merged_id = merged.id;
                 if self.store(merged).is_err() {
                     return false;

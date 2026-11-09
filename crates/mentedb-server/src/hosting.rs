@@ -362,14 +362,17 @@ pub async fn list_memories(
     let offset = query_usize(&q, "offset")?.unwrap_or(0);
     let include_inactive = query_bool(&q, "include_inactive")?;
     let tag = q.get("tag").filter(|t| !t.is_empty()).cloned();
+    let by_provenance =
+        crate::handlers::provenance_filter(q.get("session_id").cloned(), q.get("source").cloned());
     let owner = token_agent(&agent)?;
     let embedding = wants_embedding(&q);
     check_deadline(&deadline)?;
     let handle = db.handle.clone();
     let page = blocking("list memories", move || {
-        Ok(handle.list_memories_page(
+        Ok(handle.list_memories_page_by(
             tag.as_deref(),
             owner,
+            &by_provenance,
             include_inactive,
             now_micros(),
             offset,

@@ -96,15 +96,27 @@ class MenteDB:
         agent_id: str | None = None,
         tags: list[str] | None = None,
         created_at: int | None = None,
+        session_id: str | None = None,
+        source: str | None = None,
+        source_ref: str | None = None,
     ) -> str:
         """Store a memory and return its UUID.
 
         Optionally set created_at (microsecond timestamp) to place the memory
         at a specific point in time for temporal filtering.
+
+        ``session_id``, ``source`` (``chat``, ``file``, ``api``, ``mcp``,
+        ``import``, or another name; default ``api``) and ``source_ref`` (a
+        file path, URL or message id) are recorded as the memory's provenance
+        when it is first written, and never change afterwards. See
+        docs/PROVENANCE.md.
         """
         if isinstance(memory_type, MemoryType):
             memory_type = memory_type.value
-        return self._db.store(content, memory_type, embedding, agent_id, tags, created_at)
+        return self._db.store(
+            content, memory_type, embedding, agent_id, tags, created_at,
+            session_id, source, source_ref,
+        )
 
     def recall(self, query: str):
         """Recall memories using an MQL query string."""
@@ -176,12 +188,15 @@ class MenteDB:
         return self._db.search(embedding, k)
 
     def search_text(self, query: str, k: int = 10, tags: list[str] | None = None,
-                    after: int | None = None, before: int | None = None):
+                    after: int | None = None, before: int | None = None,
+                    session_id: str | None = None, source: str | None = None):
         """Text-based similarity search using the configured embedding provider.
 
-        Optionally filter by tags (AND) and/or time range (microsecond timestamps).
+        Optionally filter by tags (AND) and/or time range (microsecond timestamps),
+        and by provenance: only memories written in ``session_id`` and/or from
+        ``source``.
         """
-        return self._db.search_text(query, k, tags, after, before)
+        return self._db.search_text(query, k, tags, after, before, session_id, source)
 
     def search_multi(self, queries: list[str], k: int = 10, tags: list[str] | None = None,
                      before: int | None = None):
@@ -206,8 +221,17 @@ class MenteDB:
         return self._db.search_expanded(query, k, provider, tags, tags_or, before)
 
     def get_memory(self, memory_id: str):
-        """Retrieve a single memory by its UUID."""
+        """Retrieve a single memory by its UUID.
+
+        The dict includes ``provenance``: ``session_id``, ``source``,
+        ``source_ref``, ``written_by``, ``written_at`` and ``derived_from``, or
+        None for a memory written before provenance existed.
+        """
         return self._db.get_memory(memory_id)
+
+    def memory_ids_in_session(self, session_id: str) -> list[str]:
+        """Ids of every memory written in ``session_id``."""
+        return self._db.memory_ids_in_session(session_id)
 
     def relate(
         self,
@@ -244,6 +268,19 @@ class MenteDB:
         ``residual_found``), never the content. See docs/FORGETTING.md.
         """
         return json.loads(self._db.erase(memory_id, include_sources, verify))
+
+    def erase_session(
+        self, session_id: str, include_sources: bool = False, verify: bool = True
+    ) -> dict:
+        """Verified erase of every memory written in ``session_id`` and
+        everything derived from them, in one erase.
+
+        Returns one combined receipt: ``requested`` (the session's memories),
+        ``erased`` (with derived ones), the scrub steps, and the scan result
+        with ``residual_found``. A session with no memories returns an empty
+        receipt. See docs/PROVENANCE.md.
+        """
+        return json.loads(self._db.erase_session(session_id, include_sources, verify))
 
     def ingest(
         self,

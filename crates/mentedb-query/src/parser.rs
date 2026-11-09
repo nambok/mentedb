@@ -341,6 +341,10 @@ impl<'a> Parser<'a> {
             TokenKind::Identifier if tok.lexeme.eq_ignore_ascii_case("content") => {
                 Ok(Field::Content)
             }
+            TokenKind::Identifier if tok.lexeme.eq_ignore_ascii_case("session") => {
+                Ok(Field::Session)
+            }
+            TokenKind::Identifier if tok.lexeme.eq_ignore_ascii_case("source") => Ok(Field::Source),
             TokenKind::Type => Ok(Field::Type),
             TokenKind::Tag => Ok(Field::Tag),
             TokenKind::Agent => Ok(Field::Agent),
@@ -398,6 +402,11 @@ impl<'a> Parser<'a> {
         if *field == Field::Type {
             return self.parse_memory_type_value();
         }
+        // Session ids and source kinds are names, kept verbatim: a session id
+        // that happens to look like a UUID still compares as written.
+        if matches!(field, Field::Session | Field::Source) {
+            return self.parse_name_value();
+        }
 
         let tok = self.advance();
         match tok.kind {
@@ -447,6 +456,23 @@ impl<'a> Parser<'a> {
             }
             _ => Err(MenteError::Query(format!(
                 "expected value, found '{}' at position {}",
+                tok.lexeme, tok.position
+            ))),
+        }
+    }
+
+    /// A quoted string or a bare word, as text.
+    fn parse_name_value(&mut self) -> MenteResult<Value> {
+        let tok = self.advance();
+        match tok.kind {
+            TokenKind::StringLit => {
+                Ok(Value::Text(tok.lexeme[1..tok.lexeme.len() - 1].to_string()))
+            }
+            TokenKind::Identifier | TokenKind::UuidLit | TokenKind::IntegerLit => {
+                Ok(Value::Text(tok.lexeme.clone()))
+            }
+            _ => Err(MenteError::Query(format!(
+                "expected a name, found '{}' at position {}",
                 tok.lexeme, tok.position
             ))),
         }

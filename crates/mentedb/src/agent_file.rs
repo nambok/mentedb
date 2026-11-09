@@ -505,6 +505,13 @@ impl MenteDb {
             node.user_id = opts.user_id;
             node.tags = atom.tags.clone();
             node.tags.push(opts.source_tag.clone());
+            node.provenance = Some(
+                mentedb_core::provenance::Provenance::new(
+                    mentedb_core::provenance::SourceKind::File,
+                    opts.agent_id,
+                )
+                .with_source_ref(opts.source_tag.clone()),
+            );
             self.store(node)?;
             if !atom.section.is_empty() {
                 sections.insert(atom.section.clone());

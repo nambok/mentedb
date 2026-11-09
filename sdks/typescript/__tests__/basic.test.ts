@@ -78,4 +78,47 @@ describe('MenteDB TypeScript SDK', () => {
 
     db.close();
   });
+
+  it('should record provenance, filter by session, and erase a session', () => {
+    const db = new MenteDB(TEST_DIR);
+    // Distinct, non degenerate vectors: the erase scan looks for the erased
+    // vector's bytes, which long zero runs in one hot vectors can fake.
+    const vec = (seed: number) => Array.from({ length: 128 }, (_, i) => Math.sin((i + 1) * (seed + 1.37)));
+    const near = vec(0);
+    const far = vec(1);
+
+    const inSession = db.store({
+      content: 'Written during the planning session',
+      memoryType: MemoryType.Semantic,
+      embedding: far,
+      sessionId: 'plan-1',
+      source: 'chat',
+      sourceRef: 'msg-9',
+    });
+    const outside = db.store({
+      content: 'Written somewhere else entirely',
+      memoryType: MemoryType.Semantic,
+      embedding: near,
+    });
+
+    const memory = db.getMemory(inSession);
+    expect(memory.provenance?.sessionId).toBe('plan-1');
+    expect(memory.provenance?.source).toBe('chat');
+    expect(memory.provenance?.sourceRef).toBe('msg-9');
+    expect(db.getMemory(outside).provenance?.source).toBe('api');
+    expect(db.memoryIdsInSession('plan-1')).toEqual([inSession]);
+
+    const hits = db.search(near, 5, { sessionId: 'plan-1' });
+    expect(hits.map((h) => h.id)).toEqual([inSession]);
+
+    const receipt = db.eraseSession('plan-1');
+    expect(receipt.session_id).toBe('plan-1');
+    expect(receipt.requested).toEqual([inSession]);
+    expect(receipt.verification?.residual_found).toBe(false);
+    expect(db.memoryIdsInSession('plan-1')).toEqual([]);
+    expect(() => db.getMemory(inSession)).toThrow();
+    expect(db.getMemory(outside).content).toBe('Written somewhere else entirely');
+
+    db.close();
+  });
 });

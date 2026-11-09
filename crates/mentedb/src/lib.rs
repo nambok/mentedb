@@ -139,12 +139,20 @@ pub mod agent_file;
 /// Verified erase: cascade over derived memories, on disk scrub, receipt.
 pub mod erase;
 pub use erase::{
-    EraseOptions, EraseReason, ErasedMemory, ErasureReceipt, ScrubSteps, Verification,
+    EraseOptions, EraseReason, ErasedMemory, ErasureReceipt, ScrubSteps, SessionErasureReceipt,
+    Verification,
 };
 
 /// Backend for the client side memory tool: `/memories` file commands mapped
 /// onto memories, scoped per agent and user.
 pub mod memory_tool;
+
+/// Write time provenance: stamping it on first write, keeping it on every
+/// later one, deriving it for engine made memories, and finding memories by
+/// session and source through the bitmap index.
+pub mod provenance;
+pub use mentedb_core::provenance::{Provenance, SourceKind};
+pub use provenance::ProvenanceFilter;
 
 /// Lease-based elastic sharding: places each account on exactly one node and
 /// coordinates ownership so a fleet can scale horizontally. The engine owns the
@@ -1237,8 +1245,19 @@ impl MenteDb {
 
     /// Persist an updated memory. Every in place update goes through here so
     /// derived in memory state (the mode activation probes) stays current.
+    ///
+    /// The stored provenance always wins: an update whose node carries a
+    /// different one is written with the stored one instead, so no update
+    /// path can change where a memory came from.
     fn update_node(&self, page_id: PageId, node: &MemoryNode) -> MenteResult<()> {
-        self.storage.update_memory(page_id, node)?;
+        match self.stored_provenance_differs(page_id, node)? {
+            Some(stored) => {
+                let mut kept = node.clone();
+                kept.provenance = stored;
+                self.storage.update_memory(page_id, &kept)?;
+            }
+            None => self.storage.update_memory(page_id, node)?,
+        }
         self.note_write(node.id);
         Ok(())
     }
@@ -1324,6 +1343,9 @@ impl MenteDb {
 
         let existing = self.page_map.read().get(&id).copied();
         let is_new = existing.is_none();
+        // First write of an id stamps its provenance; a re-store keeps the
+        // stored one, whatever the node carries.
+        self.settle_provenance(&mut node, existing)?;
         // Storing an existing id replaces its record in the same logged write.
         let page_id = self
             .storage
@@ -1650,6 +1672,9 @@ impl MenteDb {
             let page_map = self.page_map.read();
             nodes.iter().map(|n| page_map.get(&n.id).copied()).collect()
         };
+        for (node, existing) in nodes.iter_mut().zip(&replaces) {
+            self.settle_provenance(node, *existing)?;
+        }
         let page_ids = self
             .storage
             .store_memory_batch_replacing(&nodes, &replaces)?;
@@ -2081,8 +2106,15 @@ impl MenteDb {
         } else {
             k * 3
         };
-        let results = self.index.hybrid_search_with_query_mode(
-            embedding, query_text, tags, tags_or, time_range, fetch_k,
+        let restrict = opts.provenance.and_then(|f| self.memory_ids_matching(f));
+        let results = self.index.hybrid_search_restricted(
+            embedding,
+            query_text,
+            tags,
+            tags_or,
+            time_range,
+            restrict.as_ref(),
+            fetch_k,
         );
         let contradicts_hides = self.cognitive_config.inference_config.contradiction_policy
             == ContradictionPolicy::Supersede;
@@ -3578,6 +3610,7 @@ impl MenteDb {
         )
         .with_user_id(user_id);
         consolidated.confidence = result.combined_confidence;
+        self.stamp_derived(&mut consolidated, &result.source_memories);
 
         let consolidated_id = consolidated.id;
         self.store(consolidated)?;
@@ -4049,6 +4082,12 @@ impl MenteDb {
                 (Field::Agent, Value::Uuid(u)) => {
                     Some(mentedb_index::manager::agent_index_key(AgentId::from(*u)))
                 }
+                (Field::Session, Value::Text(s)) => {
+                    Some(mentedb_index::manager::session_index_key(s))
+                }
+                (Field::Source, Value::Text(s)) => Some(mentedb_index::manager::source_index_key(
+                    SourceKind::parse(s).as_str(),
+                )),
                 _ => None,
             }
         }
@@ -4228,6 +4267,16 @@ impl MenteDb {
                 f.op,
             ),
             (Field::Agent | Field::Space, _) => false,
+            (Field::Session, Value::Text(s)) => {
+                Self::id_cmp(node.session_id() == Some(s.as_str()), f.op)
+            }
+            (Field::Source, Value::Text(s)) => Self::id_cmp(
+                node.provenance
+                    .as_ref()
+                    .is_some_and(|p| p.source == SourceKind::parse(s)),
+                f.op,
+            ),
+            (Field::Session | Field::Source, _) => false,
             (Field::Salience, v) => Self::score_cmp(self.decayed_salience_at(node, now), f.op, v),
             (Field::Confidence, v) => Self::score_cmp(node.confidence, f.op, v),
             // AS OF <t>: keep only memories whose validity window contains t.
@@ -4892,6 +4941,7 @@ impl MenteDb {
                 hosting::DerivedKind::Fact
             };
             hosting::mark_derived(&mut mem, kind, &inherited);
+            self.stamp_derived(&mut mem, source_ids);
             // Cap confidence
             if mem.confidence > max_conf {
                 mem.confidence = max_conf;
@@ -5442,6 +5492,7 @@ impl MenteDb {
             ];
             node.confidence = 0.7;
             hosting::mark_derived(&mut node, hosting::DerivedKind::Community, &inherited);
+            self.stamp_derived(&mut node, &member_sources);
             let id = node.id;
             self.store(node)?;
             id
@@ -5583,6 +5634,9 @@ impl MenteDb {
         ];
         node.confidence = 0.8;
         hosting::mark_derived(&mut node, hosting::DerivedKind::Profile, &HashMap::new());
+        // Written across all of the owner's memories with no link to each,
+        // so it names no origins and no session.
+        self.stamp_derived(&mut node, &[]);
         let node_id = node.id;
         self.store(node)?;
 

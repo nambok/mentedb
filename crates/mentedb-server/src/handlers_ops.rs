@@ -512,6 +512,18 @@ async fn store_document(
         )));
     }
 
+    // Every chunk records the document it came from: source `file` unless
+    // the request names another, and the document's `source` as the
+    // reference when no `provenance.source_ref` is given.
+    let mut provenance = crate::handlers::parse_provenance(
+        &req,
+        agent_id,
+        mentedb_core::provenance::SourceKind::File,
+    )?;
+    if provenance.source_ref.is_none() {
+        provenance.source_ref = source.clone();
+    }
+
     let document_id = Uuid::new_v4();
     let doc_tag = document_tag(&document_id);
     if !tags.contains(&doc_tag) {
@@ -566,6 +578,7 @@ async fn store_document(
                     valid_from: None,
                     valid_until: None,
                     context: None,
+                    provenance: Some(provenance.clone()),
                 }
             })
             .collect();

@@ -81,6 +81,59 @@ pub struct SearchResult {
 }
 
 // ---------------------------------------------------------------------------
+// Provenance
+// ---------------------------------------------------------------------------
+
+/// Where a memory came from, recorded when it was first written.
+#[napi(object)]
+pub struct JsProvenance {
+    pub session_id: Option<String>,
+    pub source: String,
+    pub source_ref: Option<String>,
+    pub written_by: String,
+    /// Microseconds since the Unix epoch.
+    pub written_at: f64,
+    pub derived_from: Vec<String>,
+}
+
+/// One stored memory.
+#[napi(object)]
+pub struct JsMemory {
+    pub id: String,
+    pub content: String,
+    pub memory_type: String,
+    pub agent_id: String,
+    pub tags: Vec<String>,
+    /// Microseconds since the Unix epoch.
+    pub created_at: f64,
+    /// None for a memory written before provenance existed.
+    pub provenance: Option<JsProvenance>,
+}
+
+fn provenance_to_js(p: &mentedb::Provenance) -> JsProvenance {
+    JsProvenance {
+        session_id: p.session_id.clone(),
+        source: p.source.as_str().to_string(),
+        source_ref: p.source_ref.clone(),
+        written_by: p.written_by.to_string(),
+        written_at: p.written_at as f64,
+        derived_from: p.derived_from.iter().map(|id| id.to_string()).collect(),
+    }
+}
+
+fn provenance_filter(
+    session_id: Option<String>,
+    source: Option<String>,
+) -> mentedb::ProvenanceFilter {
+    mentedb::ProvenanceFilter {
+        session_id: session_id.filter(|s| !s.is_empty()),
+        source: source
+            .filter(|s| !s.is_empty())
+            .map(|s| mentedb::SourceKind::parse(&s)),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // IngestResult
 // ---------------------------------------------------------------------------
 
@@ -177,8 +230,11 @@ impl MenteDB {
         })
     }
 
-    /// Store a memory and return its UUID.
+    /// Store a memory and return its UUID. `session_id`, `source` (chat,
+    /// file, api, mcp, import, or another name; default api) and
+    /// `source_ref` are recorded as its provenance on the first write.
     #[napi]
+    #[allow(clippy::too_many_arguments)]
     pub fn store(
         &self,
         content: String,
@@ -186,6 +242,9 @@ impl MenteDB {
         embedding: Vec<f64>,
         agent_id: Option<String>,
         tags: Option<Vec<String>>,
+        session_id: Option<String>,
+        source: Option<String>,
+        source_ref: Option<String>,
     ) -> Result<String> {
         let mt = parse_memory_type(&memory_type)?;
         let emb: Vec<f32> = embedding.iter().map(|&v| v as f32).collect();
@@ -199,10 +258,67 @@ impl MenteDB {
         if let Some(t) = tags {
             node.tags = t;
         }
+        let kind = source
+            .filter(|s| !s.is_empty())
+            .map(|s| mentedb::SourceKind::parse(&s))
+            .unwrap_or(mentedb::SourceKind::Api);
+        node.provenance = Some(
+            mentedb::Provenance::new(kind, aid)
+                .with_session(session_id.unwrap_or_default())
+                .with_source_ref(source_ref.unwrap_or_default()),
+        );
         let id = node.id;
 
         self.inner.store(node).map_err(mente_err)?;
         Ok(id.to_string())
+    }
+
+    /// One stored memory, with its provenance.
+    #[napi]
+    pub fn get_memory(&self, memory_id: String) -> Result<JsMemory> {
+        let id = MemoryId(parse_uuid(&memory_id)?);
+        let node = self.inner.get_memory(id).map_err(mente_err)?;
+        Ok(JsMemory {
+            id: node.id.to_string(),
+            content: node.content.clone(),
+            memory_type: format!("{:?}", node.memory_type).to_lowercase(),
+            agent_id: node.agent_id.to_string(),
+            tags: node.tags.clone(),
+            created_at: node.created_at as f64,
+            provenance: node.provenance.as_ref().map(provenance_to_js),
+        })
+    }
+
+    /// Ids of every memory written in `session_id`, from the index.
+    #[napi]
+    pub fn memory_ids_in_session(&self, session_id: String) -> Vec<String> {
+        self.inner
+            .memory_ids_in_session(&session_id)
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect()
+    }
+
+    /// Verified erase of every memory written in `session_id` and everything
+    /// derived from them, in one erase. Returns the combined receipt as a
+    /// JSON string (hashes and ids, never content).
+    #[napi]
+    pub fn erase_session(
+        &self,
+        session_id: String,
+        include_sources: Option<bool>,
+        verify: Option<bool>,
+    ) -> Result<String> {
+        let opts = mentedb::EraseOptions {
+            include_sources: include_sources.unwrap_or(false),
+            verify: verify.unwrap_or(true),
+            ..Default::default()
+        };
+        let receipt = self
+            .inner
+            .erase_session(&session_id, opts)
+            .map_err(mente_err)?;
+        serde_json::to_string(&receipt).map_err(|e| Error::from_reason(e.to_string()))
     }
 
     /// Recall memories using an MQL query string.
@@ -225,14 +341,43 @@ impl MenteDB {
         })
     }
 
-    /// Vector similarity search returning the top-k results.
+    /// Vector similarity search returning the top-k results, optionally
+    /// narrowed to memories written in `session_id` and/or from `source`.
     #[napi]
-    pub fn search(&self, embedding: Vec<f64>, k: u32) -> Result<Vec<SearchResult>> {
+    pub fn search(
+        &self,
+        embedding: Vec<f64>,
+        k: u32,
+        session_id: Option<String>,
+        source: Option<String>,
+    ) -> Result<Vec<SearchResult>> {
         let emb: Vec<f32> = embedding.iter().map(|&v| v as f32).collect();
-        let hits = self
-            .inner
-            .recall_similar(&emb, k as usize)
-            .map_err(mente_err)?;
+        let filter = provenance_filter(session_id, source);
+        let hits = if filter.is_empty() {
+            self.inner.recall_similar(&emb, k as usize)
+        } else {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64;
+            self.inner.recall_hybrid_scoped_with(
+                &emb,
+                None,
+                k as usize,
+                now,
+                None,
+                false,
+                None,
+                None,
+                None,
+                None,
+                &mentedb::HybridOptions {
+                    provenance: Some(&filter),
+                    ..Default::default()
+                },
+            )
+        }
+        .map_err(mente_err)?;
         Ok(hits
             .into_iter()
             .map(|(id, score)| SearchResult {

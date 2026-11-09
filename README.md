@@ -777,6 +777,34 @@ Python and TypeScript SDKs. [docs/FORGETTING.md](docs/FORGETTING.md) covers
 what it removes, what it cannot reach (backups, copies outside the
 directory, file system snapshots), and how to verify it.
 
+### Provenance and erase by session
+
+Every memory records where it came from when it is first written: the
+session, the kind of source (`chat`, `file`, `api`, `mcp`, `import`,
+`derived`), a reference into it (a file path, a URL, a message id), the
+writing agent, the write time, and for a derived memory the memories it was
+made from. No later write or update can change it. Session and source are
+indexed, so filtering by them costs O(matches).
+
+```rust
+let node = MemoryNode::new(agent, MemoryType::Semantic, text, embedding)
+    .with_provenance(Provenance::new(SourceKind::Chat, agent).with_session("conv-7"));
+db.store(node)?;
+let ids = db.memory_ids_in_session("conv-7");
+let receipt = db.erase_session("conv-7", EraseOptions::default())?;
+```
+
+```bash
+curl "localhost:6677/v1/memories?session_id=conv-7" -H "Authorization: Bearer $TOKEN"
+curl -X POST localhost:6677/v1/sessions/conv-7/erase -H "Authorization: Bearer $TOKEN"
+```
+
+MQL takes `WHERE session = "conv-7"` and `WHERE source = file`. Erase by
+session runs one verified erase over the session's memories and everything
+derived from them, with one receipt. Databases written before provenance
+open unchanged, their memories with none. See
+[docs/PROVENANCE.md](docs/PROVENANCE.md).
+
 ## LLM Extraction Configuration
 
 Configure the server's extraction pipeline (used by `POST /v1/ingest` and by auto extraction) via environment variables or the matching `--llm-*` flags:

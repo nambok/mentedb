@@ -241,6 +241,9 @@ pub fn validate_condition(c: &Condition) -> MenteResult<()> {
 ///
 /// Other fields keep their existing handling.
 pub fn validate_filter(f: &Filter) -> MenteResult<()> {
+    if let Field::Session | Field::Source = f.field {
+        return validate_name_filter(f);
+    }
     let (name, id_field) = match f.field {
         Field::Agent => ("agent", true),
         Field::Space => ("space", true),
@@ -290,6 +293,34 @@ pub fn validate_filter(f: &Filter) -> MenteResult<()> {
         let expected = if id_field { "a UUID" } else { "a number" };
         Err(MenteError::Query(format!(
             "{name} must be compared with {expected}, found {:?}",
+            f.value
+        )))
+    }
+}
+
+/// `session` and `source` compare a name with `=`, `!=` or `IN [...]`.
+fn validate_name_filter(f: &Filter) -> MenteResult<()> {
+    let name = if f.field == Field::Session {
+        "session"
+    } else {
+        "source"
+    };
+    if !matches!(f.op, Operator::Eq | Operator::Neq | Operator::In) {
+        return Err(MenteError::Query(format!(
+            "{name} supports only =, != or IN, found {:?}",
+            f.op
+        )));
+    }
+    let text = |v: &Value| matches!(v, Value::Text(_));
+    let ok = match &f.value {
+        Value::List(items) => f.op == Operator::In && items.iter().all(text),
+        v => f.op != Operator::In && text(v),
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(MenteError::Query(format!(
+            "{name} must be compared with a name, found {:?}",
             f.value
         )))
     }

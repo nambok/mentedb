@@ -7,6 +7,9 @@ import {
   type ProcessTurnResult,
   type IngestResult,
   type ErasureReceipt,
+  type SessionErasureReceipt,
+  type Memory,
+  type ProvenanceFilter,
 } from './types';
 
 import * as os from 'os';
@@ -99,7 +102,10 @@ export class MenteDB {
     return this.native.ingest(conversation, provider ?? null, agentId ?? null);
   }
 
-  /** Store a memory and return its UUID. */
+  /**
+   * Store a memory and return its UUID. `sessionId`, `source` and
+   * `sourceRef` are recorded as its provenance on the first write.
+   */
   store(options: StoreOptions): string {
     const {
       content,
@@ -107,8 +113,30 @@ export class MenteDB {
       embedding = [],
       agentId,
       tags,
+      sessionId,
+      source,
+      sourceRef,
     } = options;
-    return this.native.store(content, memoryType, embedding, agentId, tags);
+    return this.native.store(
+      content,
+      memoryType,
+      embedding,
+      agentId,
+      tags,
+      sessionId ?? null,
+      source ?? null,
+      sourceRef ?? null,
+    );
+  }
+
+  /** One stored memory with its provenance. Throws when the id is unknown. */
+  getMemory(memoryId: string): Memory {
+    return this.native.getMemory(memoryId);
+  }
+
+  /** Ids of every memory written in `sessionId`. */
+  memoryIdsInSession(sessionId: string): string[] {
+    return this.native.memoryIdsInSession(sessionId);
   }
 
   /** Recall memories using an MQL query string. */
@@ -116,9 +144,12 @@ export class MenteDB {
     return this.native.recall(query);
   }
 
-  /** Vector similarity search returning top-k results. */
-  search(embedding: number[], k: number = 10): SearchResult[] {
-    return this.native.search(embedding, k);
+  /**
+   * Vector similarity search returning top-k results, optionally narrowed to
+   * memories written in a session and/or from a kind of source.
+   */
+  search(embedding: number[], k: number = 10, filter: ProvenanceFilter = {}): SearchResult[] {
+    return this.native.search(embedding, k, filter.sessionId ?? null, filter.source ?? null);
   }
 
   /** Create a typed, weighted edge between two memories. */
@@ -149,6 +180,19 @@ export class MenteDB {
   ): ErasureReceipt {
     const json = this.native.erase(memoryId, options.includeSources, options.verify);
     return JSON.parse(json) as ErasureReceipt;
+  }
+
+  /**
+   * Verified erase of every memory written in `sessionId` and everything
+   * derived from them, in one erase with one receipt. A session with no
+   * memories returns an empty receipt. See docs/PROVENANCE.md.
+   */
+  eraseSession(
+    sessionId: string,
+    options: { includeSources?: boolean; verify?: boolean } = {},
+  ): SessionErasureReceipt {
+    const json = this.native.eraseSession(sessionId, options.includeSources, options.verify);
+    return JSON.parse(json) as SessionErasureReceipt;
   }
 
   /** Flush all data and close the database. */

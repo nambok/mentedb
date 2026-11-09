@@ -46,6 +46,17 @@ pub fn agent_index_key(agent: AgentId) -> String {
     format!("\0agent:{agent}")
 }
 
+/// Reserved bitmap key for a provenance session id.
+pub fn session_index_key(session_id: &str) -> String {
+    format!("\0session:{session_id}")
+}
+
+/// Reserved bitmap key for a provenance source kind, given its stored name
+/// (see `SourceKind::as_str`).
+pub fn source_index_key(source: &str) -> String {
+    format!("\0source:{source}")
+}
+
 /// How the hybrid-search legs (vector, keyword) are fused into one ranking.
 #[derive(Debug, Clone)]
 pub struct FusionConfig {
@@ -188,6 +199,16 @@ impl IndexManager {
         self.bitmap.add_tag(node.id, &user_index_key(node.user_id));
         self.bitmap
             .add_tag(node.id, &agent_index_key(node.agent_id));
+        // Provenance (session and source kind) the same way, so a session's
+        // memories are found, listed and erased in O(matches). A memory
+        // written before provenance existed carries neither key.
+        if let Some(p) = &node.provenance {
+            if let Some(session) = &p.session_id {
+                self.bitmap.add_tag(node.id, &session_index_key(session));
+            }
+            self.bitmap
+                .add_tag(node.id, &source_index_key(p.source.as_str()));
+        }
     }
 
     /// Index a memory node across all indexes.
@@ -332,6 +353,33 @@ impl IndexManager {
         time_range: Option<(Timestamp, Timestamp)>,
         k: usize,
     ) -> Vec<(MemoryId, f32)> {
+        self.hybrid_search_restricted(
+            query_embedding,
+            query_text,
+            tags,
+            tags_or,
+            time_range,
+            None,
+            k,
+        )
+    }
+
+    /// [`Self::hybrid_search_with_query_mode`] limited to the ids in
+    /// `restrict` as well (when set), intersected with the tag and time
+    /// filters before the search, so a narrow restriction (one session's
+    /// memories) is searched directly instead of filtered out of a global
+    /// top k.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hybrid_search_restricted(
+        &self,
+        query_embedding: &[f32],
+        query_text: Option<&str>,
+        tags: Option<&[&str]>,
+        tags_or: bool,
+        time_range: Option<(Timestamp, Timestamp)>,
+        restrict: Option<&HashSet<MemoryId>>,
+        k: usize,
+    ) -> Vec<(MemoryId, f32)> {
         if k == 0 {
             return Vec::new();
         }
@@ -357,6 +405,11 @@ impl IndexManager {
             (Some(tf), None) => Some(tf.clone()),
             (None, Some(trf)) => Some(trf.clone()),
             (None, None) => None,
+        };
+        let candidate_set: Option<HashSet<MemoryId>> = match (candidate_set, restrict) {
+            (Some(cs), Some(r)) => Some(cs.intersection(r).copied().collect()),
+            (None, Some(r)) => Some(r.clone()),
+            (cs, None) => cs,
         };
 
         // Pre-filtered path: when we have a candidate set and it's reasonably sized,
@@ -407,6 +460,11 @@ impl IndexManager {
             }
             if let Some(ref trf) = time_filter
                 && !trf.contains(id)
+            {
+                return false;
+            }
+            if let Some(r) = restrict
+                && !r.contains(id)
             {
                 return false;
             }

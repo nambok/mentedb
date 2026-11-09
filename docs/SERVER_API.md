@@ -605,6 +605,44 @@ Any field of the engine's `EraseOptions` may be set (`include_sources`,
 or the token is read only, `409` when the cascade would pass `max_cascade`
 (nothing is changed). See [FORGETTING.md](FORGETTING.md).
 
+### `POST /sessions/{session_id}/erase`
+
+Verified erase of every memory written in a session (by provenance) and
+everything derived from them, as one erase with one receipt. Write. The body
+is optional and takes the same `EraseOptions` fields as the memory erase.
+The response is the memory erase receipt with `session_id` added and
+`requested` listing the session's memories:
+
+```json
+{
+  "session_id": "conv-7",
+  "requested": ["6f1c...", "a3d0..."],
+  "erased": [{ "id": "6f1c...", "reason": "requested", "content_sha256": "9b2e...", "embedding_sha256": "40aa..." }],
+  "ancestors_kept": [],
+  "profiles_to_review": [],
+  "erased_at_us": 1793845123000000,
+  "steps": { "records_zeroed": 2, "wal_scrubbed": true, "snapshots_rewritten": true },
+  "verification": { "files_scanned": 14, "residual_found": false, "hits": [] }
+}
+```
+
+A session with no memories returns an empty receipt. `403` when a token bound
+to an agent names a session holding another agent's memories (nothing is
+erased), `409` when the cascade would pass `max_cascade`. See
+[PROVENANCE.md](PROVENANCE.md).
+
+### Provenance on memories
+
+`POST /memories` and each item of `POST /memories/batch` accept a
+`provenance` object, `{"session_id": "...", "source": "chat", "source_ref":
+"msg-42"}`, all optional; a top level `session_id` is a shorthand. `source`
+defaults to `api`. It is recorded on the first write and never changed. Every
+memory read returns `"provenance": {"session_id", "source", "source_ref",
+"written_by", "written_at", "derived_from"}`, or null for a memory written
+before provenance existed. `GET /memories` takes `session_id` and `source`
+query parameters, and `POST /search/hybrid` takes `session_id` and `source`
+body fields, both resolved through the index. See [PROVENANCE.md](PROVENANCE.md).
+
 ### `POST /edges`
 
 Create a typed, weighted edge between two memories. Write.
