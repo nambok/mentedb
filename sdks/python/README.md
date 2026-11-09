@@ -105,6 +105,23 @@ for memory in result.context:
 `https://api.mentedb.com`. `process_turn` uses the REST endpoint, while `store`,
 `search`, `store_multimodal`, and `forget` use the hosted MCP tools.
 
+## Claude memory tool backend
+
+`MemoryTool` backs Claude's client side memory tool (`memory_20250818`) with a
+`mentedb-server` (or MenteDB Cloud, through `MenteDBClient.memory_tool()`).
+Each `/memories` file is a memory scoped to the agent. Standard library only:
+
+```python
+from mentedb import MemoryTool
+
+memory = MemoryTool("http://localhost:6677", token, agent_id="...")
+# tools=[MemoryTool.TOOL] on the Messages API request, then each turn:
+messages.append({"role": "user", "content": memory.results(response.content)})
+```
+
+See [the memory tool guide](../../docs/MEMORY_TOOL.md) and
+[`examples/memory_tool_agent.py`](examples/memory_tool_agent.py).
+
 ## Cognitive features
 
 The SDK also exposes MenteDB cognitive subsystems for real time stream

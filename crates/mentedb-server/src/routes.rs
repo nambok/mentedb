@@ -36,6 +36,10 @@ fn database_routes() -> Router<Arc<AppState>> {
             delete(handlers::admin_delete_memory),
         )
         .route("/admin/mql", post(handlers::admin_run_mql))
+        .route(
+            "/memory_tool",
+            post(crate::handlers_memory_tool::memory_tool),
+        )
         .merge(crate::handlers_memory::routes())
         .merge(crate::handlers_ops::routes())
         .merge(hosting::routes())

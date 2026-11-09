@@ -109,6 +109,23 @@ profile) is not exposed by the Node.js package; use the Python SDK or the
 server for it. `ingest` calls an LLM and needs `MENTEDB_LLM_PROVIDER`
 (`openai`, `anthropic` or `ollama`) and `MENTEDB_LLM_API_KEY`.
 
+## Claude memory tool backend
+
+`MemoryTool` backs Claude's client side memory tool (`memory_20250818`) with a
+`mentedb-server` or MenteDB Cloud over `fetch`. Each `/memories` file is a
+memory scoped to the agent:
+
+```typescript
+import { MemoryTool } from 'mentedb';
+
+const memory = new MemoryTool({ baseUrl: 'http://localhost:6677', token, agentId: '...' });
+// tools: [MemoryTool.TOOL] on the Messages API request, then each turn:
+messages.push({ role: 'user', content: await memory.results(response.content) });
+```
+
+See [the memory tool guide](../../docs/MEMORY_TOOL.md) and
+[`examples/memory_tool_agent.ts`](examples/memory_tool_agent.ts).
+
 ## API reference
 
 ### `MenteDB`

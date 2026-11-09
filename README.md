@@ -329,6 +329,10 @@ Every route also works per database under `/v1/db/{name}/...`. The full list of
 endpoints, fields, auth rules and error codes is in the
 [server API reference](docs/SERVER_API.md).
 
+### Claude memory tool backend
+
+The server backs Claude's client side memory tool (`memory_20250818`) at `POST /v1/memory_tool`, with the same contract as MenteDB Cloud. Each `/memories` file is a memory, scoped per agent, and the Python and TypeScript SDKs ship a `MemoryTool` helper that turns the model's `tool_use` blocks into `tool_result` blocks. See [Memory tool backend](docs/MEMORY_TOOL.md).
+
 ### 5. gRPC
 
 Served on port 6678 (`--grpc-port`): unary Store, Recall, Search, Forget, and Relate calls, plus a bidirectional stream for live cognition alerts, on the default database with the same token, database and scope checks as REST. `--grpc-port 0` or `MENTEDB_GRPC=off` turns it off. Proto file at `crates/mentedb-server/proto/mentedb.proto`.

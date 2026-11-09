@@ -5,6 +5,7 @@
 //! - [`auth`]: JWT token creation, validation, and middleware
 //! - [`extraction_queue`]: Background extraction queue with bounded concurrency
 //! - [`handlers`]: Axum request handlers for memory CRUD and search
+//! - [`handlers_memory_tool`]: Backend for the client side memory tool
 //! - [`routes`]: Router construction with middleware stack
 //! - [`state`]: Shared application state (database handle, config)
 //! - [`websocket`]: Real time memory event streaming
@@ -29,6 +30,8 @@ pub mod grpc;
 pub mod handlers;
 /// Memory feature endpoints.
 pub mod handlers_memory;
+/// Memory tool endpoint: `/memories` file commands for the client side memory tool.
+pub mod handlers_memory_tool;
 /// Operations endpoints.
 pub mod handlers_ops;
 /// Hosting endpoints and middleware: paged lists, in place updates, scoped

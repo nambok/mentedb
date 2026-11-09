@@ -142,6 +142,10 @@ pub use erase::{
     EraseOptions, EraseReason, ErasedMemory, ErasureReceipt, ScrubSteps, Verification,
 };
 
+/// Backend for the client side memory tool: `/memories` file commands mapped
+/// onto memories, scoped per agent and user.
+pub mod memory_tool;
+
 /// Lease-based elastic sharding: places each account on exactly one node and
 /// coordinates ownership so a fleet can scale horizontally. The engine owns the
 /// placement and coordination logic; the embedder supplies the lease and

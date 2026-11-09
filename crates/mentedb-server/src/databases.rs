@@ -359,6 +359,9 @@ const READ_ONLY_POSTS: &[&str] = &[
     "/context",
     "/query",
     "/recall_for_action",
+    // Admitted for read only tokens so they can `view`; the handler asks for
+    // write access before any other memory tool command.
+    "/memory_tool",
 ];
 
 /// The database a request targets: `{db}` in `/v1/db/{db}/...`, otherwise the
