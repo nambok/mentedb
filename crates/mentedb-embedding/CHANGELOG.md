@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.0](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.47.1...mentedb-embedding-v0.48.0) - 2026-11-09
+
+### Added
+
+- write-time provenance with session erase ([#541](https://github.com/nambok/mentedb/pull/541))
+- memory tool endpoint in mentedb-server and SDKs ([#540](https://github.com/nambok/mentedb/pull/540))
+
+### Other
+
+- *(deps)* bump tokenizers from 0.21.4 to 0.23.2 ([#538](https://github.com/nambok/mentedb/pull/538))
+
 ## [0.46.0](https://github.com/nambok/mentedb/compare/mentedb-embedding-v0.45.0...mentedb-embedding-v0.46.0) - 2026-11-05
 
 ### Added
