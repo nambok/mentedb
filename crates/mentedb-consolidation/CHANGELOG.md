@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.0](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.47.1...mentedb-consolidation-v0.48.0) - 2026-11-09
+
+### Added
+
+- write-time provenance with session erase ([#541](https://github.com/nambok/mentedb/pull/541))
+- memory tool endpoint in mentedb-server and SDKs ([#540](https://github.com/nambok/mentedb/pull/540))
+
 ## [0.47.1](https://github.com/nambok/mentedb/compare/mentedb-consolidation-v0.47.0...mentedb-consolidation-v0.47.1) - 2026-11-06
 
 ### Other
