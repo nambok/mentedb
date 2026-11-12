@@ -10,7 +10,8 @@ use std::io::Cursor;
 use openraft::errors::{RPCError, ReplicationClosed, StreamingError, Unreachable};
 use openraft::network::{RPCOption, RaftNetworkFactory, RaftNetworkV2};
 use openraft::raft::{
-    AppendEntriesRequest, AppendEntriesResponse, SnapshotResponse, VoteRequest, VoteResponse,
+    AppendEntriesRequest, AppendEntriesResponse, AppendResult, SnapshotResponse, VoteRequest,
+    VoteResponse,
 };
 use openraft::{BasicNode, OptionalSend};
 use serde::{Deserialize, Serialize};
@@ -94,8 +95,12 @@ impl RaftNetworkV2<TypeConfig> for MenteNetwork {
         &mut self,
         req: AppendEntriesRequest<TypeConfig>,
         _option: RPCOption,
-    ) -> Result<AppendEntriesResponse<TypeConfig>, MenteRPCError> {
-        self.post("/raft/append-entries", &req).await
+    ) -> Result<AppendResult<TypeConfig>, MenteRPCError> {
+        let prev_log_id = req.prev_log_id;
+        let last_log_id = req.last_log_id();
+        let resp: AppendEntriesResponse<TypeConfig> =
+            self.post("/raft/append-entries", &req).await?;
+        Ok(resp.into_append_result(prev_log_id, last_log_id))
     }
 
     async fn full_snapshot(
